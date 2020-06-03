@@ -1,0 +1,8 @@
+database_type = "postgres"
+
+database_name = "env:PGDATABASE"
+database_user = "env:PGUSER"
+database_password = "env:PGPASSWORD"
+database_host = "env:PGHOST"
+
+migration_location = "migrations"

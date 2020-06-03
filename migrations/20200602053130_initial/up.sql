@@ -1,0 +1,27 @@
+CREATE TABLE person (
+	id BIGSERIAL PRIMARY KEY,
+	username TEXT NOT NULL,
+	local BOOLEAN NOT NULL,
+	created_local TIMESTAMPTZ NOT NULL,
+	ap_id TEXT,
+	ap_inbox TEXT
+);
+
+CREATE TABLE community (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	local BOOLEAN NOT NULL,
+	ap_id TEXT,
+	ap_inbox TEXT
+);
+
+CREATE TABLE post (
+	id BIGSERIAL PRIMARY KEY,
+	author BIGINT REFERENCES person ON DELETE CASCADE,
+	href TEXT NOT NULL,
+	title TEXT NOT NULL,
+	created TIMESTAMPTZ NOT NULL,
+	community BIGINT REFERENCES community ON DELETE CASCADE,
+	local BOOLEAN NOT NULL,
+	ap_id TEXT
+);
