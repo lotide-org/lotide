@@ -8,6 +8,7 @@ type DbPool = deadpool_postgres::Pool;
 pub struct RouteContext {
     db_pool: DbPool,
     host_url_apub: String,
+    http_client: hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>,
 }
 
 pub type RouteNode<P> = trout::Node<
@@ -59,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = Arc::new(RouteContext {
         db_pool,
         host_url_apub,
+        http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
     });
 
     let server = hyper::Server::bind(&(std::net::Ipv6Addr::UNSPECIFIED, port).into()).serve(

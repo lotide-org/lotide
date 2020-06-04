@@ -59,6 +59,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "53d1ccbaf7d9ec9537465a97bf19edc1a4e158ecb49fc16178202238c569cc42"
 
 [[package]]
+name = "bcrypt"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41b70db86f3c560199b0dada79a22b9a924622384abb2a756a9707ffcce077f2"
+dependencies = [
+ "base64",
+ "blowfish",
+ "byteorder",
+ "getrandom",
+]
+
+[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -77,12 +89,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-cipher-trait"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c924d49bd09e7c06003acda26cd9742e796e34282ec6c1189404dee0c1f4774"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "block-padding"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa79dedbb091f449f1f39e53edf88d5dbe95f895dae6135a8d7b881fb5af73f5"
 dependencies = [
  "byte-tools",
+]
+
+[[package]]
+name = "blowfish"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6aeb80d00f2688459b8542068abd974cfb101e7a82182414a99b5026c0d85cc3"
+dependencies = [
+ "block-cipher-trait",
+ "byteorder",
+ "opaque-debug",
 ]
 
 [[package]]
@@ -591,13 +623,18 @@ name = "lotide"
 version = "0.1.0"
 dependencies = [
  "activitystreams",
+ "bcrypt",
  "deadpool-postgres",
+ "futures",
  "hyper",
  "hyper-tls",
+ "serde",
+ "serde_derive",
  "serde_json",
  "tokio",
  "tokio-postgres",
  "trout",
+ "uuid",
 ]
 
 [[package]]
@@ -899,6 +936,7 @@ dependencies = [
  "bytes",
  "fallible-iterator",
  "postgres-protocol",
+ "uuid",
 ]
 
 [[package]]
@@ -1297,11 +1335,10 @@ checksum = "e987b6bf443f4b5b3b6f38704195592cca41c5bb7aedd3c3693c7081f8289860"
 
 [[package]]
 name = "trout"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97ed60cc6988f3a6acf7c32a49c258a3b41049cab7b9eef409a5871b567b4679"
+version = "0.2.0"
 dependencies = [
  "hyper",
+ "percent-encoding",
 ]
 
 [[package]]
@@ -1349,6 +1386,15 @@ dependencies = [
  "idna",
  "matches",
  "percent-encoding",
+]
+
+[[package]]
+name = "uuid"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9fde2f6a4bea1d6e007c4ad38c6839fa71cbb63b6dbf5b595aa38dc9b1093c11"
+dependencies = [
+ "rand",
 ]
 
 [[package]]
