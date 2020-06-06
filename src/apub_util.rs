@@ -10,11 +10,20 @@ pub fn get_local_community_apub_id(community: i64, host_url_apub: &str) -> Strin
     format!("{}/communities/{}", host_url_apub, community)
 }
 
-pub async fn send_community_follow(community: i64, local_follower: i64, ctx: Arc<crate::RouteContext>) -> Result<(), crate::Error> {
+pub async fn send_community_follow(
+    community: i64,
+    local_follower: i64,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
     let (community_ap_id, community_inbox): (String, String) = {
         let db = ctx.db_pool.get().await?;
 
-        let row = db.query_one("SELECT local, ap_id, ap_inbox FROM community WHERE id=$1", &[&community]).await?;
+        let row = db
+            .query_one(
+                "SELECT local, ap_id, ap_inbox FROM community WHERE id=$1",
+                &[&community],
+            )
+            .await?;
         let local = row.get(0);
         if local {
             // no need to send follows to ourself
@@ -32,7 +41,9 @@ pub async fn send_community_follow(community: i64, local_follower: i64, ctx: Arc
             } else {
                 None
             })
-                .ok_or_else(|| crate::Error::InternalStr(format!("Missing apub info for community {}", community)))?
+            .ok_or_else(|| {
+                crate::Error::InternalStr(format!("Missing apub info for community {}", community))
+            })?
         }
     };
 
@@ -42,7 +53,9 @@ pub async fn send_community_follow(community: i64, local_follower: i64, ctx: Arc
 
     follow.follow_props.set_actor_xsd_any_uri(person_ap_id)?;
 
-    follow.follow_props.set_object_xsd_any_uri(community_ap_id.as_ref())?;
+    follow
+        .follow_props
+        .set_object_xsd_any_uri(community_ap_id.as_ref())?;
     follow.object_props.set_to_xsd_any_uri(community_ap_id)?;
 
     println!("{:?}", follow);

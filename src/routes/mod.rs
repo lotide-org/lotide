@@ -1,5 +1,5 @@
-mod apub;
 mod api;
+mod apub;
 
 pub fn route_root() -> crate::RouteNode<()> {
     crate::RouteNode::new()

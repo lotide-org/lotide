@@ -36,22 +36,33 @@ impl<T: 'static + std::error::Error + Send> From<T> for Error {
     }
 }
 
-pub fn simple_response(code: hyper::StatusCode, text: impl Into<hyper::Body>) -> hyper::Response<hyper::Body> {
+pub fn simple_response(
+    code: hyper::StatusCode,
+    text: impl Into<hyper::Body>,
+) -> hyper::Response<hyper::Body> {
     let mut res = hyper::Response::new(text.into());
     *res.status_mut() = code;
     res
 }
 
-pub async fn res_to_error(res: hyper::Response<hyper::Body>) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+pub async fn res_to_error(
+    res: hyper::Response<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     if res.status().is_success() {
         Ok(res)
     } else {
         let bytes = hyper::body::to_bytes(res.into_body()).await?;
-        Err(crate::Error::InternalStr(format!("Error in remote response: {}", String::from_utf8_lossy(&bytes))))
+        Err(crate::Error::InternalStr(format!(
+            "Error in remote response: {}",
+            String::from_utf8_lossy(&bytes)
+        )))
     }
 }
 
-pub async fn authenticate(req: &hyper::Request<hyper::Body>, db: &tokio_postgres::Client) -> Result<Option<i64>, Error> {
+pub async fn authenticate(
+    req: &hyper::Request<hyper::Body>,
+    db: &tokio_postgres::Client,
+) -> Result<Option<i64>, Error> {
     use headers::Header;
 
     let value = match req.headers().get(hyper::header::AUTHORIZATION) {
@@ -71,7 +82,9 @@ pub async fn authenticate(req: &hyper::Request<hyper::Body>, db: &tokio_postgres
         Err(_) => return Ok(None),
     };
 
-    let row = db.query_opt("SELECT person FROM login WHERE token=$1", &[&token]).await?;
+    let row = db
+        .query_opt("SELECT person FROM login WHERE token=$1", &[&token])
+        .await?;
 
     match row {
         Some(row) => Ok(Some(row.get(0))),
@@ -79,28 +92,36 @@ pub async fn authenticate(req: &hyper::Request<hyper::Body>, db: &tokio_postgres
     }
 }
 
-pub async fn require_login(req: &hyper::Request<hyper::Body>, db: &tokio_postgres::Client) -> Result<i64, Error> {
-    authenticate(req, db).await?
-        .ok_or_else(|| Error::UserError(simple_response(hyper::StatusCode::UNAUTHORIZED, "Login Required")))
+pub async fn require_login(
+    req: &hyper::Request<hyper::Body>,
+    db: &tokio_postgres::Client,
+) -> Result<i64, Error> {
+    authenticate(req, db).await?.ok_or_else(|| {
+        Error::UserError(simple_response(
+            hyper::StatusCode::UNAUTHORIZED,
+            "Login Required",
+        ))
+    })
 }
 
 pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 'static>(task: F) {
     use futures::future::TryFutureExt;
-    tokio::spawn(
-        task
-            .map_err(|err| {
-                eprintln!("Error in task: {:?}", err);
-            })
-    );
+    tokio::spawn(task.map_err(|err| {
+        eprintln!("Error in task: {:?}", err);
+    }));
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let host_url_apub = std::env::var("HOST_URL_ACTIVITYPUB").expect("Missing HOST_URL_ACTIVITYPUB");
+    let host_url_apub =
+        std::env::var("HOST_URL_ACTIVITYPUB").expect("Missing HOST_URL_ACTIVITYPUB");
 
     let db_pool = deadpool_postgres::Pool::new(
         deadpool_postgres::Manager::new(
-            std::env::var("DATABASE_URL").expect("Missing DATABASE_URL").parse().unwrap(),
+            std::env::var("DATABASE_URL")
+                .expect("Missing DATABASE_URL")
+                .parse()
+                .unwrap(),
             tokio_postgres::NoTls,
         ),
         16,
@@ -138,12 +159,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Err(Error::Internal(err)) => {
                                 eprintln!("Error: {:?}", err);
 
-                                simple_response(hyper::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
-                            },
+                                simple_response(
+                                    hyper::StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Internal Server Error",
+                                )
+                            }
                             Err(Error::InternalStr(err)) => {
                                 eprintln!("Error: {}", err);
 
-                                simple_response(hyper::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                                simple_response(
+                                    hyper::StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Internal Server Error",
+                                )
                             }
                         })
                     }
