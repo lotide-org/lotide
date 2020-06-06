@@ -661,6 +661,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "trout",
+ "url",
  "uuid",
 ]
 

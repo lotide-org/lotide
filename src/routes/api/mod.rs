@@ -1,5 +1,44 @@
-use serde_derive::Deserialize;
+use serde_derive::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::sync::Arc;
+
+#[derive(Serialize)]
+struct RespMinimalAuthorInfo<'a> {
+    id: i64,
+    username: &'a str,
+    local: bool,
+    host: Cow<'a, str>,
+}
+
+#[derive(Serialize)]
+struct RespMinimalCommunityInfo<'a> {
+    id: i64,
+    name: &'a str,
+    local: bool,
+    host: Cow<'a, str>,
+}
+
+#[derive(Serialize)]
+struct RespPostListPost<'a> {
+    id: i64,
+    title: &'a str,
+    href: &'a str,
+    author: Option<&'a RespMinimalAuthorInfo<'a>>,
+    created: &'a str,
+    community: &'a RespMinimalCommunityInfo<'a>,
+}
+
+fn hostname(url: &str) -> Option<String> {
+    url::Url::parse(url).ok().and_then(|url| {
+        url.host_str()
+            .map(|host| {
+                match url.port() {
+                    Some(port) => format!("{}:{}", host, port),
+                    None => host.to_owned(),
+                }
+            })
+    })
+}
 
 pub fn route_api() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child(
@@ -28,6 +67,18 @@ pub fn route_api() -> crate::RouteNode<()> {
             .with_child(
                 "posts",
                 crate::RouteNode::new().with_handler_async("POST", route_unstable_posts_create),
+            )
+            .with_child(
+                "users",
+                crate::RouteNode::new()
+                .with_child(
+                    "me",
+                    crate::RouteNode::new()
+                    .with_child(
+                        "following:posts",
+                        crate::RouteNode::new().with_handler_async("GET", route_unstable_users_me_following_posts_list),
+                    ),
+                ),
             ),
     )
 }
@@ -206,4 +257,89 @@ async fn route_unstable_posts_create(
     });
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+}
+
+async fn route_unstable_users_me_following_posts_list(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    use futures::stream::TryStreamExt;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let limit: i64 = 10; // TODO make configurable
+
+    let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&user, &limit];
+
+    let stream = db.query_raw(
+        "SELECT post.id, post.author, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND community.id IN (SELECT community FROM community_follow WHERE follower=$1) ORDER BY created DESC LIMIT $2",
+        values.iter().map(|s| *s as _)
+    ).await?;
+
+    let local_hostname = hostname(&ctx.host_url_apub).unwrap();
+
+    let posts: Vec<serde_json::Value> = stream.map_err(crate::Error::from).and_then(|row| {
+        let id: i64 = row.get(0);
+        let author_id: Option<i64> = row.get(1);
+        let href: &str = row.get(2);
+        let title: &str = row.get(3);
+        let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
+        let community_id: i64 = row.get(5);
+        let community_name: &str = row.get(6);
+        let community_local: bool = row.get(7);
+        let community_ap_id: Option<&str> = row.get(8);
+
+        let author = author_id.map(|id| {
+            let author_name: &str = row.get(9);
+            let author_local: bool = row.get(10);
+            let author_ap_id: Option<&str> = row.get(11);
+            RespMinimalAuthorInfo {
+                id,
+                username: author_name,
+                local: author_local,
+                host: if author_local {
+                    (&local_hostname).into()
+                } else {
+                    match author_ap_id.and_then(hostname) {
+                        Some(host) => host.into(),
+                        None => "[unknown]".into(),
+                    }
+                },
+            }
+        });
+
+        let community = RespMinimalCommunityInfo {
+            id: community_id,
+            name: community_name,
+            local: community_local,
+            host: if community_local {
+                (&local_hostname).into()
+            } else {
+                match community_ap_id.and_then(hostname) {
+                    Some(host) => host.into(),
+                    None => "[unknown]".into(),
+                }
+            },
+        };
+
+        let post = RespPostListPost {
+            id,
+            title,
+            href,
+            author: author.as_ref(),
+            created: &created.to_rfc3339(),
+            community: &community,
+        };
+
+        futures::future::ready(serde_json::to_value(&post).map_err(Into::into))
+    }).try_collect().await?;
+
+    let body = serde_json::to_vec(&posts)?;
+
+    Ok(hyper::Response::builder()
+       .header(hyper::header::CONTENT_TYPE, "application/json")
+       .body(body.into())?)
 }
