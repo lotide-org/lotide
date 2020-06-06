@@ -30,7 +30,7 @@ async fn handler_users_get(params: (i64,), ctx: Arc<crate::RouteContext>, _req: 
             let mut info = activitystreams::actor::Person::new();
             info
                 .as_mut()
-                .set_id(format!("{}/users/{}", ctx.host_url_apub, user_id))?
+                .set_id(crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub))?
                 .set_name_xsd_string(username)?;
 
             let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
