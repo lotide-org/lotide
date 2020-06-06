@@ -24,6 +24,10 @@ pub fn route_api() -> crate::RouteNode<()> {
                             .with_handler_async("POST", route_unstable_communities_follow),
                     ),
                 ),
+            )
+            .with_child(
+                "posts",
+                crate::RouteNode::new().with_handler_async("POST", route_unstable_posts_create),
             ),
     )
 }
@@ -154,6 +158,36 @@ async fn route_unstable_communities_follow(
             community, user, ctx,
         ));
     }
+
+    Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+}
+
+async fn route_unstable_posts_create(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+
+    #[derive(Deserialize)]
+    struct PostsCreateBody<'a> {
+        community: i64,
+        href: &'a str,
+        title: &'a str,
+    }
+
+    let body: PostsCreateBody<'_> = serde_json::from_slice(&body)?;
+
+    // TODO validate permissions to post
+
+    db.execute(
+        "INSERT INTO post (author, href, title, created, community, local) VALUES ($1, $2, $3, localtimestamp, $4, TRUE)",
+        &[&user, &body.href, &body.title, &body.community],
+    ).await?;
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
 }
