@@ -36,6 +36,15 @@ impl<T: 'static + std::error::Error + Send> From<T> for Error {
     }
 }
 
+pub struct PostInfo<'a> {
+    id: i64,
+    author: Option<i64>,
+    href: &'a str,
+    title: &'a str,
+    created: &'a chrono::DateTime<chrono::FixedOffset>,
+    community: i64,
+}
+
 pub fn simple_response(
     code: hyper::StatusCode,
     text: impl Into<hyper::Body>,

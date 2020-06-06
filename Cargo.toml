@@ -10,7 +10,7 @@ license = "AGPL-3.0-or-later"
 [dependencies]
 hyper = "0.13.5"
 hyper-tls = "0.4.1"
-tokio-postgres = { version = "0.5.3", features = ["with-uuid-0_8"] }
+tokio-postgres = { version = "0.5.3", features = ["with-uuid-0_8", "with-chrono-0_4"] }
 tokio = { version = "0.2.18", features = ["macros"] }
 activitystreams = "0.6.2"
 trout = { path = "../trout" }
@@ -22,3 +22,4 @@ serde_derive = "1.0.111"
 serde = "1.0.111"
 uuid = { version = "0.8.1", features = ["v4"] }
 headers = "0.3.2"
+chrono = "0.4.11"

@@ -125,7 +125,7 @@ async fn route_unstable_logins_create(
     if correct {
         let token = uuid::Uuid::new_v4();
         db.execute(
-            "INSERT INTO login (token, person, created) VALUES ($1, $2, localtimestamp)",
+            "INSERT INTO login (token, person, created) VALUES ($1, $2, current_timestamp)",
             &[&token, &id],
         )
         .await?;
@@ -174,20 +174,36 @@ async fn route_unstable_posts_create(
     let body = hyper::body::to_bytes(req.into_body()).await?;
 
     #[derive(Deserialize)]
-    struct PostsCreateBody<'a> {
+    struct PostsCreateBody {
         community: i64,
-        href: &'a str,
-        title: &'a str,
+        href: String,
+        title: String,
     }
 
-    let body: PostsCreateBody<'_> = serde_json::from_slice(&body)?;
+    let body: PostsCreateBody = serde_json::from_slice(&body)?;
 
     // TODO validate permissions to post
 
-    db.execute(
-        "INSERT INTO post (author, href, title, created, community, local) VALUES ($1, $2, $3, localtimestamp, $4, TRUE)",
+    let res_row = db.query_one(
+        "INSERT INTO post (author, href, title, created, community, local) VALUES ($1, $2, $3, current_timestamp, $4, TRUE) RETURNING id, created",
         &[&user, &body.href, &body.title, &body.community],
     ).await?;
+
+    tokio::spawn(async move {
+        let id = res_row.get(0);
+        let created = res_row.get(1);
+
+        let post = crate::PostInfo {
+            id,
+            author: Some(user),
+            href: &body.href,
+            title: &body.title,
+            created: &created,
+            community: body.community,
+        };
+
+        crate::apub_util::send_post_to_community(post, ctx).await
+    });
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
 }
