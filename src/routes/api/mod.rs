@@ -52,7 +52,13 @@ pub fn route_api() -> crate::RouteNode<()> {
             )
             .with_child(
                 "logins",
-                crate::RouteNode::new().with_handler_async("POST", route_unstable_logins_create),
+                crate::RouteNode::new()
+                    .with_handler_async("POST", route_unstable_logins_create)
+                    .with_child(
+                        "~current",
+                        crate::RouteNode::new()
+                            .with_handler_async("GET", route_unstable_logins_current_get)
+                    )
             )
             .with_child(
                 "communities",
@@ -197,6 +203,18 @@ async fn route_unstable_logins_create(
             "Incorrect password",
         ))
     }
+}
+
+async fn route_unstable_logins_current_get(_: (), ctx: Arc<crate::RouteContext>, req: hyper::Request<hyper::Body>) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let body = serde_json::to_vec(&serde_json::json!({"user": {"id": user}}))?.into();
+
+    Ok(hyper::Response::builder()
+       .header(hyper::header::CONTENT_TYPE, "application/json")
+       .body(body)?)
 }
 
 async fn route_unstable_communities_get(
