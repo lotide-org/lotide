@@ -6,6 +6,10 @@ pub fn get_local_person_apub_id(person: i64, host_url_apub: &str) -> String {
     format!("{}/users/{}", host_url_apub, person)
 }
 
+pub fn get_local_community_apub_id(community: i64, host_url_apub: &str) -> String {
+    format!("{}/communities/{}", host_url_apub, community)
+}
+
 pub async fn send_community_follow(community: i64, local_follower: i64, ctx: Arc<crate::RouteContext>) -> Result<(), crate::Error> {
     let (community_ap_id, community_inbox): (String, String) = {
         let db = ctx.db_pool.get().await?;
