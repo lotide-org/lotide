@@ -15,6 +15,13 @@ pub fn route_apub() -> crate::RouteNode<()> {
                 crate::RouteNode::new()
                     .with_handler_async("GET", handler_communities_get)
                     .with_child(
+                        "followers",
+                        crate::RouteNode::new().with_child_parse::<i64, _>(
+                            crate::RouteNode::new()
+                                .with_handler_async("GET", handler_communities_followers_get),
+                        ),
+                    )
+                    .with_child(
                         "inbox",
                         crate::RouteNode::new()
                             .with_handler_async("POST", handler_communities_inbox_post),
@@ -142,6 +149,72 @@ async fn handler_communities_get(
     }
 }
 
+async fn handler_communities_followers_get(
+    params: (i64, i64),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, user_id) = params;
+    let db = ctx.db_pool.get().await?;
+
+    let row = db.query_opt(
+        "SELECT person.local, community.local, community.ap_id FROM community_follow, community, person WHERE community.id=$1 AND community.id = community_follow.community AND person.id = community_follow.follower AND person.id = $2",
+        &[&community_id, &user_id],
+    ).await?;
+    match row {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such follow",
+        )),
+        Some(row) => {
+            let follower_local: bool = row.get(0);
+            if !follower_local {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested follow is not owned by this instance",
+                )));
+            }
+
+            let community_local: bool = row.get(1);
+
+            let community_ap_id = if community_local {
+                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub)
+            } else {
+                let community_ap_id: Option<String> = row.get(2);
+                community_ap_id.ok_or_else(|| {
+                    crate::Error::InternalStr(format!(
+                        "Missing ap_id for community {}",
+                        community_id
+                    ))
+                })?
+            };
+
+            let mut follow = activitystreams::activity::Follow::new();
+
+            follow.object_props.set_id(format!(
+                "{}/communities/{}/followers/{}",
+                ctx.host_url_apub, community_id, user_id
+            ))?;
+
+            let person_ap_id =
+                crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
+
+            follow.follow_props.set_actor_xsd_any_uri(person_ap_id)?;
+
+            follow
+                .follow_props
+                .set_object_xsd_any_uri(community_ap_id.as_ref())?;
+            follow.object_props.set_to_xsd_any_uri(community_ap_id)?;
+
+            let body = serde_json::to_vec(&follow)?.into();
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                .body(body)?)
+        }
+    }
+}
+
 async fn handler_communities_inbox_post(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
@@ -222,6 +295,80 @@ async fn handler_communities_inbox_post(
                         "INSERT INTO post (author, href, title, created, community, local, ap_id) VALUES ($1, $2, $3, COALESCE($4, current_timestamp), $5, FALSE, $6)",
                         &[&author, &href, &title, &created, &community_id, &obj_id.as_str()],
                     ).await?;
+                }
+            }
+        }
+        Some("Follow") => {
+            let req_follow = req_activity
+                .into_concrete::<activitystreams::activity::Follow>()
+                .unwrap();
+
+            let activity_id = req_follow.object_props.id.ok_or_else(|| {
+                crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Missing id in object",
+                ))
+            })?;
+
+            let res = crate::res_to_error(
+                ctx.http_client
+                    .request(
+                        hyper::Request::get(activity_id.as_str())
+                            .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
+                            .body(Default::default())?,
+                    )
+                    .await?,
+            )
+            .await?;
+
+            let body = hyper::body::to_bytes(res.into_body()).await?;
+
+            let follow: activitystreams::activity::Follow = serde_json::from_slice(&body)?;
+
+            let follower_ap_id = follow.follow_props.get_actor_xsd_any_uri();
+            let target_community = follow.follow_props.get_object_xsd_any_uri();
+
+            if let Some(follower_ap_id) = follower_ap_id {
+                let follower_local_id = crate::apub_util::get_or_fetch_user_local_id(
+                    follower_ap_id.as_str(),
+                    &db,
+                    &ctx.host_url_apub,
+                    &ctx.http_client,
+                )
+                .await?;
+
+                if let Some(target_community) = target_community {
+                    if target_community.as_str()
+                        == crate::apub_util::get_local_community_apub_id(
+                            community_id,
+                            &ctx.host_url_apub,
+                        )
+                    {
+                        let row = db
+                            .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
+                            .await?;
+                        if let Some(row) = row {
+                            let local: bool = row.get(0);
+                            if local {
+                                let row_count = db.execute("INSERT INTO community_follow (community, follower) VALUES ($1, $2)", &[&community_id, &follower_local_id]).await?;
+
+                                if row_count > 0 {
+                                    crate::spawn_task(
+                                        crate::apub_util::send_community_follow_accept(
+                                            community_id,
+                                            follower_local_id,
+                                            follow,
+                                            ctx,
+                                        ),
+                                    );
+                                }
+                            }
+                        } else {
+                            eprintln!("Warning: recieved follow for unknown community");
+                        }
+                    } else {
+                        eprintln!("Warning: recieved follow for wrong community");
+                    }
                 }
             }
         }

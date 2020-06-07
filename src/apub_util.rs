@@ -112,6 +112,10 @@ pub async fn send_community_follow(
     };
 
     let mut follow = activitystreams::activity::Follow::new();
+    follow.object_props.set_id(format!(
+        "{}/communities/{}/followers/{}",
+        ctx.host_url_apub, community, local_follower
+    ))?;
 
     let person_ap_id = get_local_person_apub_id(local_follower, &ctx.host_url_apub);
 
@@ -127,6 +131,57 @@ pub async fn send_community_follow(
     let body = serde_json::to_vec(&follow)?.into();
 
     let req = hyper::Request::post(community_inbox)
+        .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
+        .body(body)?;
+
+    let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
+
+    println!("{:?}", res);
+
+    Ok(())
+}
+
+pub async fn send_community_follow_accept(
+    local_community: i64,
+    follower: i64,
+    follow: activitystreams::activity::Follow,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    let community_ap_id = get_local_community_apub_id(local_community, &ctx.host_url_apub);
+
+    let follower_inbox = {
+        let db = ctx.db_pool.get().await?;
+
+        let row = db
+            .query_one(
+                "SELECT local, ap_inbox FROM person WHERE id=$1",
+                &[&follower],
+            )
+            .await?;
+
+        let local = row.get(0);
+        if local {
+            // Shouldn't happen, but fine to ignore it
+            return Ok(());
+        } else {
+            let ap_inbox: Option<String> = row.get(1);
+
+            ap_inbox.ok_or_else(|| {
+                crate::Error::InternalStr(format!("Missing apub info for user {}", follower))
+            })?
+        }
+    };
+
+    let mut accept = activitystreams::activity::Accept::new();
+
+    accept.accept_props.set_actor_xsd_any_uri(community_ap_id)?;
+    accept.accept_props.set_object_base_box(follow)?;
+
+    println!("{:?}", accept);
+
+    let body = serde_json::to_vec(&accept)?.into();
+
+    let req = hyper::Request::post(follower_inbox)
         .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
         .body(body)?;
 
