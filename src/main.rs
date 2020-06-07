@@ -47,16 +47,12 @@ pub struct PostInfo<'a> {
 
 pub fn get_url_host(url: &str) -> Option<String> {
     url::Url::parse(url).ok().and_then(|url| {
-        url.host_str()
-            .map(|host| {
-                match url.port() {
-                    Some(port) => format!("{}:{}", host, port),
-                    None => host.to_owned(),
-                }
-            })
+        url.host_str().map(|host| match url.port() {
+            Some(port) => format!("{}:{}", host, port),
+            None => host.to_owned(),
+        })
     })
 }
-
 
 pub fn simple_response(
     code: hyper::StatusCode,

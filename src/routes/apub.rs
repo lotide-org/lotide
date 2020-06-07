@@ -12,10 +12,12 @@ pub fn route_apub() -> crate::RouteNode<()> {
         .with_child(
             "communities",
             crate::RouteNode::new().with_child_parse::<i64, _>(
-                crate::RouteNode::new().with_handler_async("GET", handler_communities_get)
+                crate::RouteNode::new()
+                    .with_handler_async("GET", handler_communities_get)
                     .with_child(
                         "inbox",
-                        crate::RouteNode::new().with_handler_async("POST", handler_communities_inbox_post),
+                        crate::RouteNode::new()
+                            .with_handler_async("POST", handler_communities_inbox_post),
                     ),
             ),
         )
@@ -156,9 +158,14 @@ async fn handler_communities_inbox_post(
 
     match req_activity.kind() {
         Some("Create") => {
-            let req_activity = req_activity.into_concrete::<activitystreams::activity::Create>().unwrap();
+            let req_activity = req_activity
+                .into_concrete::<activitystreams::activity::Create>()
+                .unwrap();
             let req_obj = req_activity.create_props.object;
-            if let activitystreams::activity::properties::ActorAndObjectPropertiesObjectEnum::Term(req_obj) = req_obj {
+            if let activitystreams::activity::properties::ActorAndObjectPropertiesObjectEnum::Term(
+                req_obj,
+            ) = req_obj
+            {
                 let obj_id = match req_obj {
                     activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::XsdAnyUri(id) => Some(id),
                     activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::BaseBox(req_obj) => {
@@ -173,19 +180,24 @@ async fn handler_communities_inbox_post(
                     }
                 };
                 if let Some(obj_id) = obj_id {
-                    let res = ctx.http_client
+                    let res = ctx
+                        .http_client
                         .request(
                             hyper::Request::get(obj_id.as_str())
-                            .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
-                            .body(Default::default())?,
-                            )
+                                .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
+                                .body(Default::default())?,
+                        )
                         .await?;
 
                     let body = hyper::body::to_bytes(res.into_body()).await?;
 
                     let obj: activitystreams::object::Page = serde_json::from_slice(&body)?;
 
-                    let title = obj.as_ref().get_summary_xsd_string().map(|x| x.as_str()).unwrap_or("");
+                    let title = obj
+                        .as_ref()
+                        .get_summary_xsd_string()
+                        .map(|x| x.as_str())
+                        .unwrap_or("");
                     let href = obj.as_ref().get_url_xsd_any_uri().map(|x| x.as_str());
                     let created = obj.as_ref().get_published().map(|x| x.as_datetime());
                     // TODO support objects here?
@@ -194,7 +206,15 @@ async fn handler_communities_inbox_post(
                     // TODO verify this post actually came from the specified author
 
                     let author = match author {
-                        Some(author) => Some(crate::apub_util::get_or_fetch_user_local_id(author.as_str(), &db, &ctx.host_url_apub, &ctx.http_client).await?),
+                        Some(author) => Some(
+                            crate::apub_util::get_or_fetch_user_local_id(
+                                author.as_str(),
+                                &db,
+                                &ctx.host_url_apub,
+                                &ctx.http_client,
+                            )
+                            .await?,
+                        ),
                         None => None,
                     };
 
@@ -204,8 +224,8 @@ async fn handler_communities_inbox_post(
                     ).await?;
                 }
             }
-        },
-        _ => {},
+        }
+        _ => {}
     }
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))

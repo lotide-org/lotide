@@ -14,39 +14,62 @@ pub fn get_local_community_apub_id(community: i64, host_url_apub: &str) -> Strin
     format!("{}/communities/{}", host_url_apub, community)
 }
 
-pub async fn get_or_fetch_user_local_id(ap_id: &str, db: &tokio_postgres::Client, host_url_apub: &str, http_client: &crate::HttpClient) -> Result<i64, crate::Error> {
+pub async fn get_or_fetch_user_local_id(
+    ap_id: &str,
+    db: &tokio_postgres::Client,
+    host_url_apub: &str,
+    http_client: &crate::HttpClient,
+) -> Result<i64, crate::Error> {
     if ap_id.starts_with(host_url_apub) {
         if ap_id[host_url_apub.len()..].starts_with("/users/") {
             Ok(ap_id[(host_url_apub.len() + 7)..].parse()?)
         } else {
-            Err(crate::Error::InternalStr(format!("Unrecognized local AP ID: {:?}", ap_id)))
+            Err(crate::Error::InternalStr(format!(
+                "Unrecognized local AP ID: {:?}",
+                ap_id
+            )))
         }
     } else {
-        match db.query_opt("SELECT id FROM person WHERE ap_id=$1", &[&ap_id]).await? {
+        match db
+            .query_opt("SELECT id FROM person WHERE ap_id=$1", &[&ap_id])
+            .await?
+        {
             Some(row) => Ok(row.get(0)),
             None => {
                 // Not known yet, time to fetch
 
-                let res = crate::res_to_error(http_client.request(
-                    hyper::Request::get(ap_id)
-                    .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
-                    .body(Default::default())?,
-                ).await?).await?;
+                let res = crate::res_to_error(
+                    http_client
+                        .request(
+                            hyper::Request::get(ap_id)
+                                .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
+                                .body(Default::default())?,
+                        )
+                        .await?,
+                )
+                .await?;
 
                 println!("{:?}", res);
 
                 let body = hyper::body::to_bytes(res.into_body()).await?;
 
-                let person: activitystreams::ext::Ext<activitystreams::actor::Person, activitystreams::actor::properties::ApActorProperties> = serde_json::from_slice(&body)?;
+                let person: activitystreams::ext::Ext<
+                    activitystreams::actor::Person,
+                    activitystreams::actor::properties::ApActorProperties,
+                > = serde_json::from_slice(&body)?;
 
-                let username = person.as_ref().get_name_xsd_string().map(|x| x.as_str()).unwrap_or("");
+                let username = person
+                    .as_ref()
+                    .get_name_xsd_string()
+                    .map(|x| x.as_str())
+                    .unwrap_or("");
                 let inbox = person.extension.inbox.as_str();
 
                 Ok(db.query_one(
                     "INSERT INTO person (username, local, created_local, ap_id, ap_inbox) VALUES ($1, FALSE, localtimestamp, $2, $3) RETURNING id",
                     &[&username, &ap_id, &inbox],
                 ).await?.get(0))
-            },
+            }
         }
     }
 }
@@ -114,12 +137,20 @@ pub async fn send_community_follow(
     Ok(())
 }
 
-pub fn post_to_ap(post: &crate::PostInfo<'_>, community_ap_id: &str, host_url_apub: &str) -> Result<activitystreams::object::Page, crate::Error> {
+pub fn post_to_ap(
+    post: &crate::PostInfo<'_>,
+    community_ap_id: &str,
+    host_url_apub: &str,
+) -> Result<activitystreams::object::Page, crate::Error> {
     let mut post_ap = activitystreams::object::Page::new();
 
-    post_ap.as_mut()
+    post_ap
+        .as_mut()
         .set_id(get_local_post_apub_id(post.id, &host_url_apub))?
-        .set_attributed_to_xsd_any_uri(get_local_person_apub_id(post.author.unwrap(), &host_url_apub))?
+        .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
+            post.author.unwrap(),
+            &host_url_apub,
+        ))?
         .set_url_xsd_any_uri(post.href)?
         .set_summary_xsd_string(post.title)?
         .set_published(post.created.clone())?
@@ -159,7 +190,10 @@ pub async fn send_post_to_community(
                 None
             })
             .ok_or_else(|| {
-                crate::Error::InternalStr(format!("Missing apub info for community {}", post.community))
+                crate::Error::InternalStr(format!(
+                    "Missing apub info for community {}",
+                    post.community
+                ))
             })?
         }
     };
@@ -168,7 +202,12 @@ pub async fn send_post_to_community(
 
     let mut create = activitystreams::activity::Create::new();
     create.create_props.set_object_base_box(post_ap)?;
-    create.create_props.set_actor_xsd_any_uri(get_local_person_apub_id(post.author.unwrap(), &ctx.host_url_apub))?;
+    create
+        .create_props
+        .set_actor_xsd_any_uri(get_local_person_apub_id(
+            post.author.unwrap(),
+            &ctx.host_url_apub,
+        ))?;
 
     let body = serde_json::to_vec(&create)?.into();
 

@@ -9,17 +9,18 @@ async fn route_unstable_communities_get(
     let (community_id,) = params;
     let db = ctx.db_pool.get().await?;
 
-    let row = db.query_opt(
-        "SELECT name, local, ap_id FROM community WHERE id=$1",
-        &[&community_id]
-    ).await?.ok_or_else(|| {
-        crate::Error::UserError(
-            crate::simple_response(
-                hyper::StatusCode::NOT_FOUND,
-                "No such community"
-            )
+    let row = db
+        .query_opt(
+            "SELECT name, local, ap_id FROM community WHERE id=$1",
+            &[&community_id],
         )
-    })?;
+        .await?
+        .ok_or_else(|| {
+            crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::NOT_FOUND,
+                "No such community",
+            ))
+        })?;
 
     let community_local = row.get(1);
 
@@ -40,8 +41,8 @@ async fn route_unstable_communities_get(
     let body = serde_json::to_vec(&info)?;
 
     Ok(hyper::Response::builder()
-       .header(hyper::header::CONTENT_TYPE, "application/json")
-       .body(body.into())?)
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body.into())?)
 }
 
 async fn route_unstable_communities_follow(
@@ -78,17 +79,18 @@ async fn route_unstable_communities_posts_list(
 
     let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
 
-    let community_row = db.query_opt(
-        "SELECT name, local, ap_id FROM community WHERE id=$1",
-        &[&community_id]
-    ).await?.ok_or_else(|| {
-        crate::Error::UserError(
-            crate::simple_response(
-                hyper::StatusCode::NOT_FOUND,
-                "No such community"
-            )
+    let community_row = db
+        .query_opt(
+            "SELECT name, local, ap_id FROM community WHERE id=$1",
+            &[&community_id],
         )
-    })?;
+        .await?
+        .ok_or_else(|| {
+            crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::NOT_FOUND,
+                "No such community",
+            ))
+        })?;
 
     let community = {
         let row = &community_row;
@@ -120,65 +122,68 @@ async fn route_unstable_communities_posts_list(
 
     let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
 
-    let posts: Vec<serde_json::Value> = stream.map_err(crate::Error::from).and_then(|row| {
-        let id: i64 = row.get(0);
-        let author_id: Option<i64> = row.get(1);
-        let href: &str = row.get(2);
-        let title: &str = row.get(3);
-        let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
+    let posts: Vec<serde_json::Value> = stream
+        .map_err(crate::Error::from)
+        .and_then(|row| {
+            let id: i64 = row.get(0);
+            let author_id: Option<i64> = row.get(1);
+            let href: &str = row.get(2);
+            let title: &str = row.get(3);
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
 
-        let author = author_id.map(|id| {
-            let author_name: &str = row.get(5);
-            let author_local: bool = row.get(6);
-            let author_ap_id: Option<&str> = row.get(7);
-            RespMinimalAuthorInfo {
+            let author = author_id.map(|id| {
+                let author_name: &str = row.get(5);
+                let author_local: bool = row.get(6);
+                let author_ap_id: Option<&str> = row.get(7);
+                RespMinimalAuthorInfo {
+                    id,
+                    username: author_name,
+                    local: author_local,
+                    host: if author_local {
+                        (&local_hostname).into()
+                    } else {
+                        match author_ap_id.and_then(crate::get_url_host) {
+                            Some(host) => host.into(),
+                            None => "[unknown]".into(),
+                        }
+                    },
+                }
+            });
+
+            let post = RespPostListPost {
                 id,
-                username: author_name,
-                local: author_local,
-                host: if author_local {
-                    (&local_hostname).into()
-                } else {
-                    match author_ap_id.and_then(crate::get_url_host) {
-                        Some(host) => host.into(),
-                        None => "[unknown]".into(),
-                    }
-                },
-            }
-        });
+                title,
+                href,
+                author: author.as_ref(),
+                created: &created.to_rfc3339(),
+                community: &community,
+            };
 
-
-        let post = RespPostListPost {
-            id,
-            title,
-            href,
-            author: author.as_ref(),
-            created: &created.to_rfc3339(),
-            community: &community,
-        };
-
-        futures::future::ready(serde_json::to_value(&post).map_err(Into::into))
-    }).try_collect().await?;
+            futures::future::ready(serde_json::to_value(&post).map_err(Into::into))
+        })
+        .try_collect()
+        .await?;
 
     let body = serde_json::to_vec(&posts)?;
 
     Ok(hyper::Response::builder()
-       .header(hyper::header::CONTENT_TYPE, "application/json")
-       .body(body.into())?)
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body.into())?)
 }
 
 pub fn route_communities() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child_parse::<i64, _>(
         crate::RouteNode::new()
-        .with_handler_async("GET", route_unstable_communities_get)
-        .with_child(
-            "follow",
-            crate::RouteNode::new()
-                .with_handler_async("POST", route_unstable_communities_follow),
-        )
-        .with_child(
-            "posts",
-            crate::RouteNode::new()
-                .with_handler_async("GET", route_unstable_communities_posts_list),
-        )
+            .with_handler_async("GET", route_unstable_communities_get)
+            .with_child(
+                "follow",
+                crate::RouteNode::new()
+                    .with_handler_async("POST", route_unstable_communities_follow),
+            )
+            .with_child(
+                "posts",
+                crate::RouteNode::new()
+                    .with_handler_async("GET", route_unstable_communities_posts_list),
+            ),
     )
 }
