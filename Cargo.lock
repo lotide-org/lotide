@@ -1378,6 +1378,8 @@ checksum = "e987b6bf443f4b5b3b6f38704195592cca41c5bb7aedd3c3693c7081f8289860"
 [[package]]
 name = "trout"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c525ebdc306faebb8a191ad8be3fa914d7aaf8e7d724ab0471d1f9d380c4e4e2"
 dependencies = [
  "hyper",
  "percent-encoding",
