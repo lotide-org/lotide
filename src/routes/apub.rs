@@ -6,7 +6,13 @@ pub fn route_apub() -> crate::RouteNode<()> {
         .with_child(
             "users",
             crate::RouteNode::new().with_child_parse::<i64, _>(
-                crate::RouteNode::new().with_handler_async("GET", handler_users_get),
+                crate::RouteNode::new()
+                    .with_handler_async("GET", handler_users_get)
+                    .with_child(
+                        "inbox",
+                        crate::RouteNode::new()
+                            .with_handler_async("POST", handler_users_inbox_post),
+                    ),
             ),
         )
         .with_child(
@@ -25,6 +31,18 @@ pub fn route_apub() -> crate::RouteNode<()> {
                         "inbox",
                         crate::RouteNode::new()
                             .with_handler_async("POST", handler_communities_inbox_post),
+                    )
+                    .with_child(
+                        "posts",
+                        crate::RouteNode::new().with_child_parse::<i64, _>(
+                            crate::RouteNode::new().with_child(
+                                "announce",
+                                crate::RouteNode::new().with_handler_async(
+                                    "GET",
+                                    handler_communities_posts_announce_get,
+                                ),
+                            ),
+                        ),
                     ),
             ),
         )
@@ -89,6 +107,149 @@ async fn handler_users_get(
             Ok(resp)
         }
     }
+}
+
+async fn handler_users_inbox_post(
+    _: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let req_activity: activitystreams::activity::ActivityBox = {
+        let body = hyper::body::to_bytes(req.into_body()).await?;
+
+        serde_json::from_slice(&body)?
+    };
+
+    match req_activity.kind() {
+        Some("Announce") => {
+            let req_activity = req_activity
+                .into_concrete::<activitystreams::activity::Announce>()
+                .unwrap();
+
+            let activity_id = req_activity.object_props.id.ok_or_else(|| {
+                crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Missing id in object",
+                ))
+            })?;
+
+            let activity = {
+                let res = crate::res_to_error(
+                    ctx.http_client
+                        .request(
+                            hyper::Request::get(activity_id.as_str())
+                                .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
+                                .body(Default::default())?,
+                        )
+                        .await?,
+                )
+                .await?;
+
+                let body = hyper::body::to_bytes(res.into_body()).await?;
+                let body: activitystreams::activity::Announce = serde_json::from_slice(&body)?;
+                body
+            };
+
+            let community_ap_id = activity.announce_props.get_actor_xsd_any_uri();
+
+            // TODO verify that this announce is actually from the community
+
+            let community_local_id: Option<i64> = {
+                match community_ap_id {
+                    None => None,
+                    Some(community_ap_id) => db
+                        .query_opt(
+                            "SELECT id FROM community WHERE ap_id=$1",
+                            &[&community_ap_id.as_str()],
+                        )
+                        .await?
+                        .map(|row| row.get(0)),
+                }
+            };
+
+            if let Some(community_local_id) = community_local_id {
+                let object_id = {
+                    if let activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectEnum::Term(
+                        req_obj,
+                    ) = activity.announce_props.object
+                    {
+                        match req_obj {
+                            activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectTermEnum::XsdAnyUri(id) => Some(id),
+                            activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectTermEnum::BaseBox(req_obj) => {
+                                match req_obj.kind() {
+                                    Some("Page") => {
+                                        let req_obj = req_obj.into_concrete::<activitystreams::object::Page>().unwrap();
+
+                                        Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
+                                    },
+                                    _ => None,
+                                }
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some(object_id) = object_id {
+                    let res = crate::res_to_error(
+                        ctx.http_client
+                            .request(
+                                hyper::Request::get(object_id.as_str())
+                                    .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
+                                    .body(Default::default())?,
+                            )
+                            .await?,
+                    )
+                    .await?;
+
+                    let body = hyper::body::to_bytes(res.into_body()).await?;
+                    let obj: activitystreams::object::ObjectBox = serde_json::from_slice(&body)?;
+
+                    match obj.kind() {
+                        Some("Page") => {
+                            let obj: activitystreams::object::Page = obj.into_concrete().unwrap();
+                            let title = obj
+                                .as_ref()
+                                .get_summary_xsd_string()
+                                .map(|x| x.as_str())
+                                .unwrap_or("");
+                            let href = obj.as_ref().get_url_xsd_any_uri().map(|x| x.as_str());
+                            let created = obj.as_ref().get_published().map(|x| x.as_datetime());
+                            // TODO support objects here?
+                            let author = obj.as_ref().get_attributed_to_xsd_any_uri();
+                            // TODO verify that this post is intended to go to this community
+                            // TODO verify this post actually came from the specified author
+
+                            let author = match author {
+                                Some(author) => Some(
+                                    crate::apub_util::get_or_fetch_user_local_id(
+                                        author.as_str(),
+                                        &db,
+                                        &ctx.host_url_apub,
+                                        &ctx.http_client,
+                                    )
+                                    .await?,
+                                ),
+                                None => None,
+                            };
+
+                            db.execute(
+                                "INSERT INTO post (author, href, title, created, community, local, ap_id) VALUES ($1, $2, $3, COALESCE($4, current_timestamp), $5, FALSE, $6)",
+                                &[&author, &href, &title, &created, &community_local_id, &object_id.as_str()],
+                                ).await?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
 }
 
 async fn handler_communities_get(
@@ -376,6 +537,61 @@ async fn handler_communities_inbox_post(
     }
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+}
+
+async fn handler_communities_posts_announce_get(
+    params: (i64, i64),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, post_id) = params;
+    let db = ctx.db_pool.get().await?;
+
+    match db.query_opt(
+        "SELECT author, href, title, created, local, (SELECT local FROM community WHERE id=post.community) FROM post WHERE id=$1 AND community=$2",
+        &[&post_id, &community_id],
+    ).await? {
+        None => {
+            Ok(crate::simple_response(
+                    hyper::StatusCode::NOT_FOUND,
+                    "No such publish",
+            ))
+        },
+        Some(row) => {
+            let community_local: Option<bool> = row.get(5);
+            match community_local {
+                None => Ok(crate::simple_response(
+                        hyper::StatusCode::NOT_FOUND,
+                        "No such community",
+                        )),
+                Some(false) => Ok(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        "Requested community is not owned by this instance",
+                    )),
+                Some(true) => {
+                    let post = crate::PostInfo {
+                        author: row.get(0),
+                        href: row.get(1),
+                        title: row.get(2),
+                        created: &row.get(3),
+
+                        id: post_id,
+                        community: community_id,
+                    };
+
+                    let body = crate::apub_util::local_community_post_to_announce_ap(
+                        &post,
+                        &ctx.host_url_apub,
+                    )?;
+                    let body = serde_json::to_vec(&body)?;
+
+                    Ok(hyper::Response::builder()
+                       .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                       .body(body.into())?)
+                }
+            }
+        },
+    }
 }
 
 async fn handler_posts_get(

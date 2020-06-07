@@ -129,6 +129,11 @@ pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 's
     }));
 }
 
+pub fn on_community_add_post<'a>(post: &'a PostInfo<'a>, ctx: Arc<crate::RouteContext>) {
+    println!("on_community_add_post");
+    crate::apub_util::spawn_announce_community_post(post, ctx);
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host_url_apub =

@@ -219,13 +219,14 @@ async fn route_unstable_posts_create(
     // TODO validate permissions to post
 
     let res_row = db.query_one(
-        "INSERT INTO post (author, href, title, created, community, local) VALUES ($1, $2, $3, current_timestamp, $4, TRUE) RETURNING id, created",
+        "INSERT INTO post (author, href, title, created, community, local) VALUES ($1, $2, $3, current_timestamp, $4, TRUE) RETURNING id, created, (SELECT local FROM community WHERE id=post.community)",
         &[&user, &body.href, &body.title, &body.community],
     ).await?;
 
-    tokio::spawn(async move {
+    crate::spawn_task(async move {
         let id = res_row.get(0);
         let created = res_row.get(1);
+        let community_local: Option<bool> = res_row.get(2);
 
         let post = crate::PostInfo {
             id,
@@ -236,7 +237,15 @@ async fn route_unstable_posts_create(
             community: body.community,
         };
 
-        crate::apub_util::send_post_to_community(post, ctx).await
+        if let Some(community_local) = community_local {
+            if community_local {
+                crate::on_community_add_post(&post, ctx);
+            } else {
+                crate::apub_util::send_post_to_community(post, ctx).await?;
+            }
+        }
+
+        Ok(())
     });
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))

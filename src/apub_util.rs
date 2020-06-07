@@ -141,6 +141,19 @@ pub async fn send_community_follow(
     Ok(())
 }
 
+pub fn spawn_announce_community_post(post: &crate::PostInfo<'_>, ctx: Arc<crate::RouteContext>) {
+    // since post is borrowed, we can't move it
+    // so we convert it to AP form before spawning
+    match local_community_post_to_announce_ap(post, &ctx.host_url_apub) {
+        Err(err) => {
+            eprintln!("Failed to create Announce: {:?}", err);
+        }
+        Ok(announce) => {
+            crate::spawn_task(send_to_community_followers(post.community, announce, ctx));
+        }
+    }
+}
+
 pub async fn send_community_follow_accept(
     local_community: i64,
     follower: i64,
@@ -214,6 +227,28 @@ pub fn post_to_ap(
     Ok(post_ap)
 }
 
+pub fn local_community_post_to_announce_ap(
+    post: &crate::PostInfo<'_>,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Announce, crate::Error> {
+    let community_ap_id = get_local_community_apub_id(post.community, host_url_apub);
+    let post_ap = post_to_ap(post, &community_ap_id, host_url_apub)?;
+
+    let mut announce = activitystreams::activity::Announce::new();
+
+    announce.object_props.set_id(format!(
+        "{}/communities/{}/posts/{}/announce",
+        host_url_apub, post.community, post.id
+    ))?;
+
+    announce
+        .announce_props
+        .set_actor_xsd_any_uri(community_ap_id)?;
+    announce.announce_props.set_object_base_box(post_ap)?;
+
+    Ok(announce)
+}
+
 pub async fn send_post_to_community(
     post: crate::PostInfo<'_>,
     ctx: Arc<crate::RouteContext>,
@@ -273,6 +308,58 @@ pub async fn send_post_to_community(
     let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
 
     println!("{:?}", res);
+
+    Ok(())
+}
+
+async fn send_to_community_followers(
+    community_id: i64,
+    announce: activitystreams::activity::Announce,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    use futures::future::{FutureExt, TryFutureExt};
+    use futures::stream::{StreamExt, TryStreamExt};
+
+    let db = ctx.db_pool.get().await?;
+
+    let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id];
+
+    let stream = db.query_raw(
+        "SELECT ap_inbox FROM community_follow, person WHERE person.id = community_follow.follower AND person.local = FALSE AND community = $1",
+        values.iter().map(|s| *s as _)
+    ).await?;
+
+    let inboxes: std::collections::HashSet<String> =
+        stream.map_ok(|row| row.get(0)).try_collect().await?;
+
+    let body: bytes::Bytes = serde_json::to_vec(&announce)?.into();
+
+    let requests: futures::stream::FuturesUnordered<_> = inboxes
+        .into_iter()
+        .filter_map(
+            |inbox| match hyper::Request::post(inbox).body(body.clone().into()) {
+                Err(err) => {
+                    eprintln!("Failed to construct inbox post: {:?}", err);
+
+                    None
+                }
+                Ok(req) => Some(req),
+            },
+        )
+        .map(|req| {
+            ctx.http_client
+                .request(req)
+                .map_err(crate::Error::from)
+                .and_then(crate::res_to_error)
+                .map(|res| {
+                    if let Err(err) = res {
+                        eprintln!("Delivery failed: {:?}", err);
+                    }
+                })
+        })
+        .collect();
+
+    requests.collect::<()>().await;
 
     Ok(())
 }

@@ -24,3 +24,4 @@ uuid = { version = "0.8.1", features = ["v4"] }
 headers = "0.3.2"
 chrono = "0.4.11"
 url = "2.1.1"
+bytes = "0.5.4"
