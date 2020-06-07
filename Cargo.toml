@@ -13,7 +13,7 @@ hyper-tls = "0.4.1"
 tokio-postgres = { version = "0.5.3", features = ["with-uuid-0_8", "with-chrono-0_4"] }
 tokio = { version = "0.2.18", features = ["macros"] }
 activitystreams = "0.6.2"
-trout = { path = "../trout" }
+trout = "0.2.0"
 deadpool-postgres = "0.5.5"
 serde_json = "1.0.53"
 futures = "0.3.5"
