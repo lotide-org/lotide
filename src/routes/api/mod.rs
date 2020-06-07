@@ -53,7 +53,9 @@ pub fn route_api() -> crate::RouteNode<()> {
             .with_child("communities", communities::route_communities())
             .with_child(
                 "posts",
-                crate::RouteNode::new().with_handler_async("POST", route_unstable_posts_create),
+                crate::RouteNode::new()
+                    .with_handler_async("GET", route_unstable_posts_list)
+                    .with_handler_async("POST", route_unstable_posts_create),
             )
             .with_child(
                 "users",
@@ -196,6 +198,29 @@ async fn route_unstable_logins_current_get(
         .body(body)?)
 }
 
+async fn route_unstable_posts_list(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let limit: i64 = 10;
+
+    let stream = db.query_raw(
+        "SELECT post.id, post.author, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id ORDER BY created DESC LIMIT $1",
+        ([limit]).iter().map(|x| x as _),
+    ).await?;
+
+    let posts = handle_common_posts_list(stream, &ctx.host_url_apub).await?;
+
+    let body = serde_json::to_vec(&posts)?;
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body.into())?)
+}
+
 async fn route_unstable_posts_create(
     _: (),
     ctx: Arc<crate::RouteContext>,
@@ -256,8 +281,6 @@ async fn route_unstable_users_me_following_posts_list(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    use futures::stream::TryStreamExt;
-
     let db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -271,7 +294,23 @@ async fn route_unstable_users_me_following_posts_list(
         values.iter().map(|s| *s as _)
     ).await?;
 
-    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
+    let posts = handle_common_posts_list(stream, &ctx.host_url_apub).await?;
+
+    let body = serde_json::to_vec(&posts)?;
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body.into())?)
+}
+
+async fn handle_common_posts_list(
+    stream: impl futures::stream::TryStream<Ok = tokio_postgres::Row, Error = tokio_postgres::Error>
+        + Send,
+    host_url_apub: &str,
+) -> Result<Vec<serde_json::Value>, crate::Error> {
+    use futures::stream::TryStreamExt;
+
+    let local_hostname = crate::get_url_host(host_url_apub).unwrap();
 
     let posts: Vec<serde_json::Value> = stream
         .map_err(crate::Error::from)
@@ -333,9 +372,5 @@ async fn route_unstable_users_me_following_posts_list(
         .try_collect()
         .await?;
 
-    let body = serde_json::to_vec(&posts)?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body.into())?)
+    Ok(posts)
 }
