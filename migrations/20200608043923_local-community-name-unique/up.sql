@@ -1,0 +1,3 @@
+BEGIN;
+	CREATE UNIQUE INDEX ON community (LOWER(name)) WHERE local;
+COMMIT;

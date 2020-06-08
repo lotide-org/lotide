@@ -1,5 +1,39 @@
 use crate::routes::api::{RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost};
+use serde_derive::Deserialize;
 use std::sync::Arc;
+
+async fn route_unstable_communities_create(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    crate::require_login(&req, &db).await?;
+
+    #[derive(Deserialize)]
+    struct CommunitiesCreateBody<'a> {
+        name: &'a str,
+    }
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: CommunitiesCreateBody<'_> = serde_json::from_slice(&body)?;
+
+    let row = db
+        .query_one(
+            "INSERT INTO community (name, local) VALUES ($1, TRUE) RETURNING id",
+            &[&body.name],
+        )
+        .await?;
+
+    let community_id: i64 = row.get(0);
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(
+            serde_json::to_vec(&serde_json::json!({"community": {"id": community_id}}))?.into(),
+        )?)
+}
 
 async fn route_unstable_communities_get(
     params: (i64,),
@@ -172,18 +206,20 @@ async fn route_unstable_communities_posts_list(
 }
 
 pub fn route_communities() -> crate::RouteNode<()> {
-    crate::RouteNode::new().with_child_parse::<i64, _>(
-        crate::RouteNode::new()
-            .with_handler_async("GET", route_unstable_communities_get)
-            .with_child(
-                "follow",
-                crate::RouteNode::new()
-                    .with_handler_async("POST", route_unstable_communities_follow),
-            )
-            .with_child(
-                "posts",
-                crate::RouteNode::new()
-                    .with_handler_async("GET", route_unstable_communities_posts_list),
-            ),
-    )
+    crate::RouteNode::new()
+        .with_handler_async("POST", route_unstable_communities_create)
+        .with_child_parse::<i64, _>(
+            crate::RouteNode::new()
+                .with_handler_async("GET", route_unstable_communities_get)
+                .with_child(
+                    "follow",
+                    crate::RouteNode::new()
+                        .with_handler_async("POST", route_unstable_communities_follow),
+                )
+                .with_child(
+                    "posts",
+                    crate::RouteNode::new()
+                        .with_handler_async("GET", route_unstable_communities_posts_list),
+                ),
+        )
 }
