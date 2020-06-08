@@ -24,7 +24,8 @@ struct RespMinimalCommunityInfo<'a> {
 struct RespPostListPost<'a> {
     id: i64,
     title: &'a str,
-    href: &'a str,
+    href: Option<&'a str>,
+    content_text: Option<&'a str>,
     author: Option<&'a RespMinimalAuthorInfo<'a>>,
     created: &'a str,
     community: &'a RespMinimalCommunityInfo<'a>,
@@ -246,17 +247,25 @@ async fn route_unstable_posts_create(
     #[derive(Deserialize)]
     struct PostsCreateBody {
         community: i64,
-        href: String,
+        href: Option<String>,
+        content_text: Option<String>,
         title: String,
     }
 
     let body: PostsCreateBody = serde_json::from_slice(&body)?;
 
+    if body.href.is_none() && body.content_text.is_none() {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "Post must contain either href or content_text",
+        )));
+    }
+
     // TODO validate permissions to post
 
     let res_row = db.query_one(
-        "INSERT INTO post (author, href, title, created, community, local) VALUES ($1, $2, $3, current_timestamp, $4, TRUE) RETURNING id, created, (SELECT local FROM community WHERE id=post.community)",
-        &[&user, &body.href, &body.title, &body.community],
+        "INSERT INTO post (author, href, content_text, title, created, community, local) VALUES ($1, $2, $3, $4, current_timestamp, $5, TRUE) RETURNING id, created, (SELECT local FROM community WHERE id=post.community)",
+        &[&user, &body.href, &body.content_text, &body.title, &body.community],
     ).await?;
 
     crate::spawn_task(async move {
@@ -267,7 +276,8 @@ async fn route_unstable_posts_create(
         let post = crate::PostInfo {
             id,
             author: Some(user),
-            href: &body.href,
+            content_text: body.content_text.as_deref(),
+            href: body.href.as_deref(),
             title: &body.title,
             created: &created,
             community: body.community,
@@ -344,7 +354,7 @@ async fn route_unstable_users_me_following_posts_list(
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&user, &limit];
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND community.id IN (SELECT community FROM community_follow WHERE follower=$1) ORDER BY created DESC LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND community.id IN (SELECT community FROM community_follow WHERE follower=$1) ORDER BY created DESC LIMIT $2",
         values.iter().map(|s| *s as _)
     ).await?;
 
@@ -371,18 +381,19 @@ async fn handle_common_posts_list(
         .and_then(|row| {
             let id: i64 = row.get(0);
             let author_id: Option<i64> = row.get(1);
-            let href: &str = row.get(2);
-            let title: &str = row.get(3);
-            let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
-            let community_id: i64 = row.get(5);
-            let community_name: &str = row.get(6);
-            let community_local: bool = row.get(7);
-            let community_ap_id: Option<&str> = row.get(8);
+            let href: Option<&str> = row.get(2);
+            let content_text: Option<&str> = row.get(3);
+            let title: &str = row.get(4);
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
+            let community_id: i64 = row.get(6);
+            let community_name: &str = row.get(7);
+            let community_local: bool = row.get(8);
+            let community_ap_id: Option<&str> = row.get(9);
 
             let author = author_id.map(|id| {
-                let author_name: &str = row.get(9);
-                let author_local: bool = row.get(10);
-                let author_ap_id: Option<&str> = row.get(11);
+                let author_name: &str = row.get(10);
+                let author_local: bool = row.get(11);
+                let author_ap_id: Option<&str> = row.get(12);
                 RespMinimalAuthorInfo {
                     id,
                     username: author_name,
@@ -416,6 +427,7 @@ async fn handle_common_posts_list(
                 id,
                 title,
                 href,
+                content_text,
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,

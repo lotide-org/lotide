@@ -184,6 +184,11 @@ async fn handler_users_inbox_post(
 
                                         Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
                                     },
+                                    Some("Note") => {
+                                        let req_obj = req_obj.into_concrete::<activitystreams::object::Note>().unwrap();
+
+                                        Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
+                                    },
                                     _ => None,
                                 }
                             }
@@ -208,40 +213,83 @@ async fn handler_users_inbox_post(
                     let body = hyper::body::to_bytes(res.into_body()).await?;
                     let obj: activitystreams::object::ObjectBox = serde_json::from_slice(&body)?;
 
-                    match obj.kind() {
+                    // TODO reduce cloning here
+
+                    let post = match obj.kind() {
                         Some("Page") => {
                             let obj: activitystreams::object::Page = obj.into_concrete().unwrap();
                             let title = obj
                                 .as_ref()
                                 .get_summary_xsd_string()
                                 .map(|x| x.as_str())
-                                .unwrap_or("");
-                            let href = obj.as_ref().get_url_xsd_any_uri().map(|x| x.as_str());
-                            let created = obj.as_ref().get_published().map(|x| x.as_datetime());
+                                .unwrap_or("")
+                                .to_owned();
+                            let href = obj
+                                .as_ref()
+                                .get_url_xsd_any_uri()
+                                .map(|x| x.as_str().to_owned());
+                            let content_text = obj
+                                .as_ref()
+                                .get_content_xsd_string()
+                                .map(|x| x.as_str().to_owned());
+                            let created = obj
+                                .as_ref()
+                                .get_published()
+                                .map(|x| x.as_datetime().to_owned());
                             // TODO support objects here?
-                            let author = obj.as_ref().get_attributed_to_xsd_any_uri();
+                            let author = obj
+                                .as_ref()
+                                .get_attributed_to_xsd_any_uri()
+                                .map(|x| x.as_str().to_owned());
                             // TODO verify that this post is intended to go to this community
                             // TODO verify this post actually came from the specified author
 
-                            let author = match author {
-                                Some(author) => Some(
-                                    crate::apub_util::get_or_fetch_user_local_id(
-                                        author.as_str(),
-                                        &db,
-                                        &ctx.host_url_apub,
-                                        &ctx.http_client,
-                                    )
-                                    .await?,
-                                ),
-                                None => None,
-                            };
-
-                            db.execute(
-                                "INSERT INTO post (author, href, title, created, community, local, ap_id) VALUES ($1, $2, $3, COALESCE($4, current_timestamp), $5, FALSE, $6)",
-                                &[&author, &href, &title, &created, &community_local_id, &object_id.as_str()],
-                                ).await?;
+                            Some((title, href, content_text, created, author))
                         }
-                        _ => {}
+                        Some("Note") => {
+                            let obj: activitystreams::object::Note = obj.into_concrete().unwrap();
+                            let title = obj
+                                .as_ref()
+                                .get_summary_xsd_string()
+                                .map(|x| x.as_str())
+                                .unwrap_or("")
+                                .to_owned();
+                            let content_text = obj
+                                .as_ref()
+                                .get_content_xsd_string()
+                                .map(|x| x.as_str().to_owned());
+                            let created = obj
+                                .as_ref()
+                                .get_published()
+                                .map(|x| x.as_datetime().to_owned());
+                            let author = obj
+                                .as_ref()
+                                .get_attributed_to_xsd_any_uri()
+                                .map(|x| x.as_str().to_owned());
+
+                            Some((title, None, content_text, created, author))
+                        }
+                        _ => None,
+                    };
+
+                    if let Some((title, href, content_text, created, author)) = post {
+                        let author = match author {
+                            Some(author) => Some(
+                                crate::apub_util::get_or_fetch_user_local_id(
+                                    &author,
+                                    &db,
+                                    &ctx.host_url_apub,
+                                    &ctx.http_client,
+                                )
+                                .await?,
+                            ),
+                            None => None,
+                        };
+
+                        db.execute(
+                            "INSERT INTO post (author, href, content_text, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), $6, FALSE, $7)",
+                            &[&author, &href, &content_text, &title, &created, &community_local_id, &object_id.as_str()],
+                            ).await?;
                     }
                 }
             }
@@ -548,7 +596,7 @@ async fn handler_communities_posts_announce_get(
     let db = ctx.db_pool.get().await?;
 
     match db.query_opt(
-        "SELECT author, href, title, created, local, (SELECT local FROM community WHERE id=post.community) FROM post WHERE id=$1 AND community=$2",
+        "SELECT author, href, content_text, title, created, local, (SELECT local FROM community WHERE id=post.community) FROM post WHERE id=$1 AND community=$2",
         &[&post_id, &community_id],
     ).await? {
         None => {
@@ -558,7 +606,7 @@ async fn handler_communities_posts_announce_get(
             ))
         },
         Some(row) => {
-            let community_local: Option<bool> = row.get(5);
+            let community_local: Option<bool> = row.get(6);
             match community_local {
                 None => Ok(crate::simple_response(
                         hyper::StatusCode::NOT_FOUND,
@@ -572,8 +620,9 @@ async fn handler_communities_posts_announce_get(
                     let post = crate::PostInfo {
                         author: row.get(0),
                         href: row.get(1),
-                        title: row.get(2),
-                        created: &row.get(3),
+                        content_text: row.get(2),
+                        title: row.get(3),
+                        created: &row.get(4),
 
                         id: post_id,
                         community: community_id,
@@ -604,7 +653,7 @@ async fn handler_posts_get(
 
     match db
         .query_opt(
-            "SELECT author, href, title, created, community, local, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
+            "SELECT author, href, content_text, title, created, community, local, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
             &[&post_id],
         )
         .await?
@@ -614,7 +663,7 @@ async fn handler_posts_get(
             "No such post",
         )),
         Some(row) => {
-            let local: bool = row.get(5);
+            let local: bool = row.get(6);
 
             if !local {
                 return Err(crate::Error::UserError(crate::simple_response(
@@ -623,9 +672,9 @@ async fn handler_posts_get(
                 )));
             }
 
-            let community_local_id = row.get(4);
+            let community_local_id = row.get(5);
 
-            let community_ap_id = match row.get(6) {
+            let community_ap_id = match row.get(7) {
                 Some(ap_id) => ap_id,
                 None => {
                     // assume local (might be a problem?)
@@ -636,10 +685,11 @@ async fn handler_posts_get(
             let post_info = crate::PostInfo {
                 author: row.get(0),
                 community: community_local_id,
-                created: &row.get(3),
+                created: &row.get(4),
                 href: row.get(1),
+                content_text: row.get(2),
                 id: post_id,
-                title: row.get(2),
+                title: row.get(3),
             };
 
             let body = crate::apub_util::post_to_ap(&post_info, &community_ap_id, &ctx.host_url_apub)?;

@@ -150,7 +150,7 @@ async fn route_unstable_communities_posts_list(
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id, &limit];
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.title, post.created, person.username, person.local, person.ap_id FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 ORDER BY created DESC LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, person.username, person.local, person.ap_id FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 ORDER BY created DESC LIMIT $2",
         values.iter().map(|s| *s as _)
     ).await?;
 
@@ -161,14 +161,15 @@ async fn route_unstable_communities_posts_list(
         .and_then(|row| {
             let id: i64 = row.get(0);
             let author_id: Option<i64> = row.get(1);
-            let href: &str = row.get(2);
-            let title: &str = row.get(3);
-            let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
+            let href: Option<&str> = row.get(2);
+            let content_text: Option<&str> = row.get(3);
+            let title: &str = row.get(4);
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
 
             let author = author_id.map(|id| {
-                let author_name: &str = row.get(5);
-                let author_local: bool = row.get(6);
-                let author_ap_id: Option<&str> = row.get(7);
+                let author_name: &str = row.get(6);
+                let author_local: bool = row.get(7);
+                let author_ap_id: Option<&str> = row.get(8);
                 RespMinimalAuthorInfo {
                     id,
                     username: author_name,
@@ -188,6 +189,7 @@ async fn route_unstable_communities_posts_list(
                 id,
                 title,
                 href,
+                content_text,
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,

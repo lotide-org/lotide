@@ -209,22 +209,49 @@ pub fn post_to_ap(
     post: &crate::PostInfo<'_>,
     community_ap_id: &str,
     host_url_apub: &str,
-) -> Result<activitystreams::object::Page, crate::Error> {
-    let mut post_ap = activitystreams::object::Page::new();
+) -> Result<activitystreams::BaseBox, crate::Error> {
+    use std::convert::TryInto;
 
-    post_ap
-        .as_mut()
-        .set_id(get_local_post_apub_id(post.id, &host_url_apub))?
-        .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
-            post.author.unwrap(),
-            &host_url_apub,
-        ))?
-        .set_url_xsd_any_uri(post.href)?
-        .set_summary_xsd_string(post.title)?
-        .set_published(post.created.clone())?
-        .set_to_xsd_any_uri(community_ap_id)?;
+    match post.href {
+        Some(href) => {
+            let mut post_ap = activitystreams::object::Page::new();
 
-    Ok(post_ap)
+            post_ap
+                .as_mut()
+                .set_id(get_local_post_apub_id(post.id, &host_url_apub))?
+                .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
+                    post.author.unwrap(),
+                    &host_url_apub,
+                ))?
+                .set_url_xsd_any_uri(href)?
+                .set_summary_xsd_string(post.title)?
+                .set_published(post.created.clone())?
+                .set_to_xsd_any_uri(community_ap_id)?;
+
+            if let Some(content) = post.content_text {
+                post_ap.as_mut().set_content_xsd_string(content)?;
+            }
+
+            Ok(post_ap.try_into()?)
+        }
+        None => {
+            let mut post_ap = activitystreams::object::Note::new();
+
+            post_ap
+                .as_mut()
+                .set_id(get_local_post_apub_id(post.id, &host_url_apub))?
+                .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
+                    post.author.unwrap(),
+                    &host_url_apub,
+                ))?
+                .set_content_xsd_string(post.content_text.unwrap_or(""))?
+                .set_summary_xsd_string(post.title)?
+                .set_published(post.created.clone())?
+                .set_to_xsd_any_uri(community_ap_id)?;
+
+            Ok(post_ap.try_into()?)
+        }
+    }
 }
 
 pub fn local_community_post_to_announce_ap(
