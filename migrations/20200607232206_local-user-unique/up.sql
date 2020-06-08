@@ -1,0 +1,3 @@
+BEGIN;
+	CREATE UNIQUE INDEX ON person (LOWER(username)) WHERE local;
+COMMIT;

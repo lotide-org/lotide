@@ -59,18 +59,34 @@ pub fn route_api() -> crate::RouteNode<()> {
             )
             .with_child(
                 "users",
-                crate::RouteNode::new().with_child(
-                    "me",
-                    crate::RouteNode::new().with_child(
-                        "following:posts",
-                        crate::RouteNode::new().with_handler_async(
-                            "GET",
-                            route_unstable_users_me_following_posts_list,
+                crate::RouteNode::new()
+                    .with_handler_async("POST", route_unstable_users_create)
+                    .with_child(
+                        "me",
+                        crate::RouteNode::new().with_child(
+                            "following:posts",
+                            crate::RouteNode::new().with_handler_async(
+                                "GET",
+                                route_unstable_users_me_following_posts_list,
+                            ),
                         ),
                     ),
-                ),
             ),
     )
+}
+
+async fn insert_token(
+    user_id: i64,
+    db: &tokio_postgres::Client,
+) -> Result<uuid::Uuid, tokio_postgres::Error> {
+    let token = uuid::Uuid::new_v4();
+    db.execute(
+        "INSERT INTO login (token, person, created) VALUES ($1, $2, current_timestamp)",
+        &[&token, &user_id],
+    )
+    .await?;
+
+    Ok(token)
 }
 
 async fn route_unstable_actors_lookup(
@@ -164,12 +180,7 @@ async fn route_unstable_logins_create(
         tokio::task::spawn_blocking(move || bcrypt::verify(req_password, &passhash)).await??;
 
     if correct {
-        let token = uuid::Uuid::new_v4();
-        db.execute(
-            "INSERT INTO login (token, person, created) VALUES ($1, $2, current_timestamp)",
-            &[&token, &id],
-        )
-        .await?;
+        let token = insert_token(id, &db).await?;
 
         Ok(hyper::Response::builder()
             .header(hyper::header::CONTENT_TYPE, "application/json")
@@ -274,6 +285,49 @@ async fn route_unstable_posts_create(
     });
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+}
+
+async fn route_unstable_users_create(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+
+    #[derive(Deserialize)]
+    struct UsersCreateBody<'a> {
+        username: &'a str,
+        password: String,
+        #[serde(default)]
+        login: bool,
+    }
+
+    let body: UsersCreateBody<'_> = serde_json::from_slice(&body)?;
+
+    let req_password = body.password;
+    let passhash =
+        tokio::task::spawn_blocking(move || bcrypt::hash(req_password, bcrypt::DEFAULT_COST))
+            .await??;
+
+    let row = db.query_one(
+        "INSERT INTO person (username, local, created_local, passhash) VALUES ($1, TRUE, current_timestamp, $2) RETURNING id",
+        &[&body.username, &passhash],
+    ).await?;
+
+    let user_id: i64 = row.get(0);
+
+    let output = if body.login {
+        let token = insert_token(user_id, &db).await?;
+        serde_json::json!({"user": {"id": user_id}, "token": token.to_string()})
+    } else {
+        serde_json::json!({"user": {"id": user_id}})
+    };
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&output)?.into())?)
 }
 
 async fn route_unstable_users_me_following_posts_list(
