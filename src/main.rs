@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 use trout::hyper::RoutingFailureExtHyper;
 
@@ -53,6 +54,26 @@ pub fn get_url_host(url: &str) -> Option<String> {
             None => host.to_owned(),
         })
     })
+}
+
+pub fn get_actor_host<'a>(
+    local: bool,
+    ap_id: Option<&'a str>,
+    local_hostname: &'a str,
+) -> Option<Cow<'a, str>> {
+    if local {
+        Some(local_hostname.into())
+    } else {
+        ap_id.and_then(get_url_host).map(Cow::from)
+    }
+}
+
+pub fn get_actor_host_or_unknown<'a>(
+    local: bool,
+    ap_id: Option<&'a str>,
+    local_hostname: &'a str,
+) -> Cow<'a, str> {
+    get_actor_host(local, ap_id, local_hostname).unwrap_or(Cow::Borrowed("[unknown]"))
 }
 
 pub fn simple_response(

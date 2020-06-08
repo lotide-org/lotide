@@ -56,7 +56,10 @@ pub fn route_api() -> crate::RouteNode<()> {
                 "posts",
                 crate::RouteNode::new()
                     .with_handler_async("GET", route_unstable_posts_list)
-                    .with_handler_async("POST", route_unstable_posts_create),
+                    .with_handler_async("POST", route_unstable_posts_create)
+                    .with_child_parse::<i64, _>(
+                        crate::RouteNode::new().with_handler_async("GET", route_unstable_posts_get),
+                    ),
             )
             .with_child(
                 "users",
@@ -220,7 +223,7 @@ async fn route_unstable_posts_list(
     let limit: i64 = 10;
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id ORDER BY created DESC LIMIT $1",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id ORDER BY created DESC LIMIT $1",
         ([limit]).iter().map(|x| x as _),
     ).await?;
 
@@ -295,6 +298,82 @@ async fn route_unstable_posts_create(
     });
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+}
+
+async fn route_unstable_posts_get(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
+
+    let row = db.query_opt(
+        "SELECT post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+        &[&post_id],
+    ).await?;
+
+    match row {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such post",
+        )),
+        Some(row) => {
+            let href = row.get(1);
+            let content_text = row.get(2);
+            let title = row.get(3);
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
+            let community_id = row.get(5);
+            let community_name = row.get(6);
+            let community_local = row.get(7);
+            let community_ap_id = row.get(8);
+
+            let author = match row.get(9) {
+                Some(author_username) => {
+                    let author_local = row.get(10);
+                    Some(RespMinimalAuthorInfo {
+                        id: row.get(0),
+                        username: author_username,
+                        local: author_local,
+                        host: crate::get_actor_host_or_unknown(
+                            author_local,
+                            row.get(11),
+                            &local_hostname,
+                        ),
+                    })
+                }
+                None => None,
+            };
+
+            let community = RespMinimalCommunityInfo {
+                id: community_id,
+                name: community_name,
+                local: community_local,
+                host: crate::get_actor_host_or_unknown(
+                    community_local,
+                    community_ap_id,
+                    &local_hostname,
+                ),
+            };
+
+            let post = RespPostListPost {
+                id: post_id,
+                title,
+                href,
+                content_text,
+                author: author.as_ref(),
+                created: &created.to_rfc3339(),
+                community: &community,
+            };
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(serde_json::to_vec(&post)?.into())?)
+        }
+    }
 }
 
 async fn route_unstable_users_create(
@@ -398,14 +477,11 @@ async fn handle_common_posts_list(
                     id,
                     username: author_name,
                     local: author_local,
-                    host: if author_local {
-                        (&local_hostname).into()
-                    } else {
-                        match author_ap_id.and_then(crate::get_url_host) {
-                            Some(host) => host.into(),
-                            None => "[unknown]".into(),
-                        }
-                    },
+                    host: crate::get_actor_host_or_unknown(
+                        author_local,
+                        author_ap_id,
+                        &local_hostname,
+                    ),
                 }
             });
 
@@ -413,14 +489,11 @@ async fn handle_common_posts_list(
                 id: community_id,
                 name: community_name,
                 local: community_local,
-                host: if community_local {
-                    (&local_hostname).into()
-                } else {
-                    match community_ap_id.and_then(crate::get_url_host) {
-                        Some(host) => host.into(),
-                        None => "[unknown]".into(),
-                    }
-                },
+                host: crate::get_actor_host_or_unknown(
+                    community_local,
+                    community_ap_id,
+                    &local_hostname,
+                ),
             };
 
             let post = RespPostListPost {
