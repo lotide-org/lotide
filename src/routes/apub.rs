@@ -22,10 +22,12 @@ pub fn route_apub() -> crate::RouteNode<()> {
                     .with_handler_async("GET", handler_communities_get)
                     .with_child(
                         "followers",
-                        crate::RouteNode::new().with_child_parse::<i64, _>(
-                            crate::RouteNode::new()
-                                .with_handler_async("GET", handler_communities_followers_get),
-                        ),
+                        crate::RouteNode::new()
+                            .with_handler_async("GET", handler_communities_followers_list)
+                            .with_child_parse::<i64, _>(
+                                crate::RouteNode::new()
+                                    .with_handler_async("GET", handler_communities_followers_get),
+                            ),
                     )
                     .with_child(
                         "inbox",
@@ -274,6 +276,10 @@ async fn handler_communities_get(
                 "{}/communities/{}/inbox",
                 ctx.host_url_apub, community_id
             ))?;
+            actor_props.set_followers(format!(
+                "{}/communities/{}/followers",
+                ctx.host_url_apub, community_id
+            ))?;
 
             let info = info.extend(actor_props);
 
@@ -286,6 +292,33 @@ async fn handler_communities_get(
             Ok(resp)
         }
     }
+}
+
+async fn handler_communities_followers_list(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id,) = params;
+    let db = ctx.db_pool.get().await?;
+
+    let row = db
+        .query_one(
+            "SELECT COUNT(*) FROM community_follow WHERE community=$1",
+            &[&community_id],
+        )
+        .await?;
+    let count: i64 = row.get(0);
+
+    let body = serde_json::to_vec(&serde_json::json!({
+        "type": "Collection",
+        "totalItems": count,
+    }))?
+    .into();
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+        .body(body)?)
 }
 
 async fn handler_communities_followers_get(
