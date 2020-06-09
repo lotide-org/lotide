@@ -212,85 +212,15 @@ async fn handler_users_inbox_post(
 
                     let body = hyper::body::to_bytes(res.into_body()).await?;
                     let obj: activitystreams::object::ObjectBox = serde_json::from_slice(&body)?;
-
-                    // TODO reduce cloning here
-
-                    let post = match obj.kind() {
-                        Some("Page") => {
-                            let obj: activitystreams::object::Page = obj.into_concrete().unwrap();
-                            let title = obj
-                                .as_ref()
-                                .get_summary_xsd_string()
-                                .map(|x| x.as_str())
-                                .unwrap_or("")
-                                .to_owned();
-                            let href = obj
-                                .as_ref()
-                                .get_url_xsd_any_uri()
-                                .map(|x| x.as_str().to_owned());
-                            let content_text = obj
-                                .as_ref()
-                                .get_content_xsd_string()
-                                .map(|x| x.as_str().to_owned());
-                            let created = obj
-                                .as_ref()
-                                .get_published()
-                                .map(|x| x.as_datetime().to_owned());
-                            // TODO support objects here?
-                            let author = obj
-                                .as_ref()
-                                .get_attributed_to_xsd_any_uri()
-                                .map(|x| x.as_str().to_owned());
-                            // TODO verify that this post is intended to go to this community
-                            // TODO verify this post actually came from the specified author
-
-                            Some((title, href, content_text, created, author))
-                        }
-                        Some("Note") => {
-                            let obj: activitystreams::object::Note = obj.into_concrete().unwrap();
-                            let title = obj
-                                .as_ref()
-                                .get_summary_xsd_string()
-                                .map(|x| x.as_str())
-                                .unwrap_or("")
-                                .to_owned();
-                            let content_text = obj
-                                .as_ref()
-                                .get_content_xsd_string()
-                                .map(|x| x.as_str().to_owned());
-                            let created = obj
-                                .as_ref()
-                                .get_published()
-                                .map(|x| x.as_datetime().to_owned());
-                            let author = obj
-                                .as_ref()
-                                .get_attributed_to_xsd_any_uri()
-                                .map(|x| x.as_str().to_owned());
-
-                            Some((title, None, content_text, created, author))
-                        }
-                        _ => None,
-                    };
-
-                    if let Some((title, href, content_text, created, author)) = post {
-                        let author = match author {
-                            Some(author) => Some(
-                                crate::apub_util::get_or_fetch_user_local_id(
-                                    &author,
-                                    &db,
-                                    &ctx.host_url_apub,
-                                    &ctx.http_client,
-                                )
-                                .await?,
-                            ),
-                            None => None,
-                        };
-
-                        db.execute(
-                            "INSERT INTO post (author, href, content_text, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), $6, FALSE, $7)",
-                            &[&author, &href, &content_text, &title, &created, &community_local_id, &object_id.as_str()],
-                            ).await?;
-                    }
+                    crate::apub_util::handle_recieved_object(
+                        community_local_id,
+                        object_id.as_str(),
+                        obj,
+                        &db,
+                        &ctx.host_url_apub,
+                        &ctx.http_client,
+                    )
+                    .await?;
                 }
             }
         }
@@ -448,7 +378,7 @@ async fn handler_communities_inbox_post(
                 req_obj,
             ) = req_obj
             {
-                let obj_id = match req_obj {
+                let object_id = match req_obj {
                     activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::XsdAnyUri(id) => Some(id),
                     activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::BaseBox(req_obj) => {
                         match req_obj.kind() {
@@ -457,15 +387,20 @@ async fn handler_communities_inbox_post(
 
                                 Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
                             },
+                            Some("Note") => {
+                                let req_obj = req_obj.into_concrete::<activitystreams::object::Note>().unwrap();
+
+                                Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
+                            },
                             _ => None,
                         }
                     }
                 };
-                if let Some(obj_id) = obj_id {
+                if let Some(object_id) = object_id {
                     let res = ctx
                         .http_client
                         .request(
-                            hyper::Request::get(obj_id.as_str())
+                            hyper::Request::get(object_id.as_str())
                                 .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
                                 .body(Default::default())?,
                         )
@@ -473,37 +408,17 @@ async fn handler_communities_inbox_post(
 
                     let body = hyper::body::to_bytes(res.into_body()).await?;
 
-                    let obj: activitystreams::object::Page = serde_json::from_slice(&body)?;
+                    let obj: activitystreams::object::ObjectBox = serde_json::from_slice(&body)?;
 
-                    let title = obj
-                        .as_ref()
-                        .get_summary_xsd_string()
-                        .map(|x| x.as_str())
-                        .unwrap_or("");
-                    let href = obj.as_ref().get_url_xsd_any_uri().map(|x| x.as_str());
-                    let created = obj.as_ref().get_published().map(|x| x.as_datetime());
-                    // TODO support objects here?
-                    let author = obj.as_ref().get_attributed_to_xsd_any_uri();
-                    // TODO verify that this post is intended to go to this community
-                    // TODO verify this post actually came from the specified author
-
-                    let author = match author {
-                        Some(author) => Some(
-                            crate::apub_util::get_or_fetch_user_local_id(
-                                author.as_str(),
-                                &db,
-                                &ctx.host_url_apub,
-                                &ctx.http_client,
-                            )
-                            .await?,
-                        ),
-                        None => None,
-                    };
-
-                    db.execute(
-                        "INSERT INTO post (author, href, title, created, community, local, ap_id) VALUES ($1, $2, $3, COALESCE($4, current_timestamp), $5, FALSE, $6)",
-                        &[&author, &href, &title, &created, &community_id, &obj_id.as_str()],
-                    ).await?;
+                    crate::apub_util::handle_recieved_object(
+                        community_id,
+                        object_id.as_str(),
+                        obj,
+                        &db,
+                        &ctx.host_url_apub,
+                        &ctx.http_client,
+                    )
+                    .await?;
                 }
             }
         }

@@ -390,3 +390,87 @@ async fn send_to_community_followers(
 
     Ok(())
 }
+
+pub async fn handle_recieved_object(
+    community_local_id: i64,
+    object_id: &str,
+    obj: activitystreams::object::ObjectBox,
+    db: &tokio_postgres::Client,
+    host_url_apub: &str,
+    http_client: &crate::HttpClient,
+) -> Result<(), crate::Error> {
+    // TODO reduce cloning here
+
+    let post = match obj.kind() {
+        Some("Page") => {
+            let obj: activitystreams::object::Page = obj.into_concrete().unwrap();
+            let title = obj
+                .as_ref()
+                .get_summary_xsd_string()
+                .map(|x| x.as_str())
+                .unwrap_or("")
+                .to_owned();
+            let href = obj
+                .as_ref()
+                .get_url_xsd_any_uri()
+                .map(|x| x.as_str().to_owned());
+            let content_text = obj
+                .as_ref()
+                .get_content_xsd_string()
+                .map(|x| x.as_str().to_owned());
+            let created = obj
+                .as_ref()
+                .get_published()
+                .map(|x| x.as_datetime().to_owned());
+            // TODO support objects here?
+            let author = obj
+                .as_ref()
+                .get_attributed_to_xsd_any_uri()
+                .map(|x| x.as_str().to_owned());
+            // TODO verify that this post is intended to go to this community
+            // TODO verify this post actually came from the specified author
+
+            Some((title, href, content_text, created, author))
+        }
+        Some("Note") => {
+            let obj: activitystreams::object::Note = obj.into_concrete().unwrap();
+            let title = obj
+                .as_ref()
+                .get_summary_xsd_string()
+                .map(|x| x.as_str())
+                .unwrap_or("")
+                .to_owned();
+            let content_text = obj
+                .as_ref()
+                .get_content_xsd_string()
+                .map(|x| x.as_str().to_owned());
+            let created = obj
+                .as_ref()
+                .get_published()
+                .map(|x| x.as_datetime().to_owned());
+            let author = obj
+                .as_ref()
+                .get_attributed_to_xsd_any_uri()
+                .map(|x| x.as_str().to_owned());
+
+            Some((title, None, content_text, created, author))
+        }
+        _ => None,
+    };
+
+    if let Some((title, href, content_text, created, author)) = post {
+        let author = match author {
+            Some(author) => {
+                Some(get_or_fetch_user_local_id(&author, &db, host_url_apub, http_client).await?)
+            }
+            None => None,
+        };
+
+        db.execute(
+            "INSERT INTO post (author, href, content_text, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), $6, FALSE, $7)",
+            &[&author, &href, &content_text, &title, &created, &community_local_id, &object_id],
+            ).await?;
+    }
+
+    Ok(())
+}
