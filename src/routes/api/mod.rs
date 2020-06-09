@@ -7,7 +7,7 @@ mod communities;
 #[derive(Serialize)]
 struct RespMinimalAuthorInfo<'a> {
     id: i64,
-    username: &'a str,
+    username: Cow<'a, str>,
     local: bool,
     host: Cow<'a, str>,
 }
@@ -336,7 +336,7 @@ async fn route_unstable_posts_get(
                     let author_local = row.get(10);
                     Some(RespMinimalAuthorInfo {
                         id: row.get(0),
-                        username: author_username,
+                        username: Cow::Borrowed(author_username),
                         local: author_local,
                         host: crate::get_actor_host_or_unknown(
                             author_local,
@@ -475,7 +475,7 @@ async fn handle_common_posts_list(
                 let author_ap_id: Option<&str> = row.get(12);
                 RespMinimalAuthorInfo {
                     id,
-                    username: author_name,
+                    username: author_name.into(),
                     local: author_local,
                     host: crate::get_actor_host_or_unknown(
                         author_local,

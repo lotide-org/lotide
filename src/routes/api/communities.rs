@@ -172,7 +172,7 @@ async fn route_unstable_communities_posts_list(
                 let author_ap_id: Option<&str> = row.get(8);
                 RespMinimalAuthorInfo {
                     id,
-                    username: author_name,
+                    username: author_name.into(),
                     local: author_local,
                     host: if author_local {
                         (&local_hostname).into()
