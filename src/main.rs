@@ -174,8 +174,15 @@ pub fn on_community_add_post<'a>(post: &'a PostInfo<'a>, ctx: Arc<crate::RouteCo
     crate::apub_util::spawn_announce_community_post(post, ctx);
 }
 
-pub fn on_community_add_comment(comment: CommentInfo, post_ap_id: String, community: i64, ctx: Arc<crate::RouteContext>) {
-    crate::spawn_task(crate::apub_util::announce_community_comment(comment, post_ap_id, community, ctx));
+pub fn on_community_add_comment(
+    comment: CommentInfo,
+    post_ap_id: String,
+    community: i64,
+    ctx: Arc<crate::RouteContext>,
+) {
+    crate::spawn_task(crate::apub_util::announce_community_comment(
+        comment, post_ap_id, community, ctx,
+    ));
 }
 
 pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) {
@@ -194,8 +201,8 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
 
             let post_ap_id = if post_local {
                 Some(crate::apub_util::get_local_post_apub_id(
-                        comment.post,
-                        &ctx.host_url_apub,
+                    comment.post,
+                    &ctx.host_url_apub,
                 ))
             } else {
                 row.get(5)
@@ -206,7 +213,14 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                     let community = row.get(0);
                     crate::on_community_add_comment(comment, post_ap_id, community, ctx);
                 } else {
-                    crate::apub_util::send_comment_to_community(comment, row.get(2), row.get(3), post_ap_id, ctx).await?;
+                    crate::apub_util::send_comment_to_community(
+                        comment,
+                        row.get(2),
+                        row.get(3),
+                        post_ap_id,
+                        ctx,
+                    )
+                    .await?;
                 }
             }
         }

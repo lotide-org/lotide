@@ -21,6 +21,12 @@ struct RespMinimalCommunityInfo<'a> {
 }
 
 #[derive(Serialize)]
+struct RespMinimalPostInfo<'a> {
+    id: i64,
+    title: &'a str,
+}
+
+#[derive(Serialize)]
 struct RespPostListPost<'a> {
     id: i64,
     title: &'a str,
@@ -76,6 +82,12 @@ pub fn route_api() -> crate::RouteNode<()> {
                                 ),
                             ),
                     ),
+            )
+            .with_child(
+                "comments",
+                crate::RouteNode::new().with_child_parse::<i64, _>(
+                    crate::RouteNode::new().with_handler_async("GET", route_unstable_comments_get),
+                ),
             )
             .with_child(
                 "users",
@@ -499,6 +511,78 @@ async fn route_unstable_posts_replies_create(
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
         .body(serde_json::to_vec(&serde_json::json!({ "id": reply_id }))?.into())?)
+}
+
+async fn route_unstable_comments_get(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    #[derive(Serialize)]
+    struct RespCommentInfo<'a> {
+        #[serde(flatten)]
+        base: RespPostCommentInfo<'a>,
+        post: Option<RespMinimalPostInfo<'a>>,
+    }
+
+    let (comment_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let row = db.query_opt(
+        "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, person.username, person.local, person.ap_id, post.title FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+        &[&comment_id],
+    ).await?;
+
+    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
+
+    match row {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such comment",
+        )),
+        Some(row) => {
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
+            let author = match row.get(5) {
+                Some(author_username) => {
+                    let author_local = row.get(6);
+                    Some(RespMinimalAuthorInfo {
+                        id: row.get(0),
+                        username: Cow::Borrowed(author_username),
+                        local: author_local,
+                        host: crate::get_actor_host_or_unknown(
+                            author_local,
+                            row.get(7),
+                            &local_hostname,
+                        ),
+                    })
+                }
+                None => None,
+            };
+
+            let post = match row.get(8) {
+                Some(post_title) => Some(RespMinimalPostInfo {
+                    id: row.get(1),
+                    title: post_title,
+                }),
+                None => None,
+            };
+
+            let comment = RespCommentInfo {
+                base: RespPostCommentInfo {
+                    author,
+                    content_text: Cow::Borrowed(row.get(2)),
+                    created: created.to_rfc3339().into(),
+                    id: comment_id,
+                },
+                post,
+            };
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(serde_json::to_vec(&comment)?.into())?)
+        }
+    }
 }
 
 async fn route_unstable_users_create(

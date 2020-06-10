@@ -158,8 +158,18 @@ pub fn spawn_announce_community_post(post: &crate::PostInfo<'_>, ctx: Arc<crate:
     }
 }
 
-pub async fn announce_community_comment(comment: crate::CommentInfo, post_ap_id: String, community: i64, ctx: Arc<crate::RouteContext>) -> Result<(), crate::Error> {
-    let announce = local_community_comment_to_announce_ap(&comment, &post_ap_id, community, &ctx.host_url_apub)?;
+pub async fn announce_community_comment(
+    comment: crate::CommentInfo,
+    post_ap_id: String,
+    community: i64,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    let announce = local_community_comment_to_announce_ap(
+        &comment,
+        &post_ap_id,
+        community,
+        &ctx.host_url_apub,
+    )?;
 
     send_to_community_followers(community, announce, ctx).await
 }
@@ -274,7 +284,10 @@ pub fn local_comment_to_ap(
 
     obj.as_mut()
         .set_id(get_local_comment_apub_id(comment.id, &host_url_apub))?
-        .set_attributed_to_xsd_any_uri(get_local_person_apub_id(comment.author.unwrap(), &host_url_apub))?
+        .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
+            comment.author.unwrap(),
+            &host_url_apub,
+        ))?
         .set_published(comment.created.clone())?
         .set_in_reply_to_xsd_any_uri(post_ap_id)?
         .set_to_xsd_any_uri(community_ap_id)?
@@ -399,7 +412,8 @@ pub async fn send_comment_to_community(
     post_ap_id: String,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let comment_ap = local_comment_to_ap(&comment, &post_ap_id, &community_ap_id, &ctx.host_url_apub)?;
+    let comment_ap =
+        local_comment_to_ap(&comment, &post_ap_id, &community_ap_id, &ctx.host_url_apub)?;
 
     let mut create = activitystreams::activity::Create::new();
     create.create_props.set_object_base_box(comment_ap)?;
@@ -493,18 +507,9 @@ pub async fn handle_recieved_object(
                 .get_summary_xsd_string()
                 .map(|x| x.as_str())
                 .unwrap_or("");
-            let href = obj
-                .as_ref()
-                .get_url_xsd_any_uri()
-                .map(|x| x.as_str());
-            let content_text = obj
-                .as_ref()
-                .get_content_xsd_string()
-                .map(|x| x.as_str());
-            let created = obj
-                .as_ref()
-                .get_published()
-                .map(|x| x.as_datetime());
+            let href = obj.as_ref().get_url_xsd_any_uri().map(|x| x.as_str());
+            let content_text = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
+            let created = obj.as_ref().get_published().map(|x| x.as_datetime());
             // TODO support objects here?
             let author = obj
                 .as_ref()
@@ -513,18 +518,24 @@ pub async fn handle_recieved_object(
             // TODO verify that this post is intended to go to this community
             // TODO verify this post actually came from the specified author
 
-            handle_recieved_post(object_id, title, href, content_text, created, author, community_local_id, db, host_url_apub, http_client).await?;
+            handle_recieved_post(
+                object_id,
+                title,
+                href,
+                content_text,
+                created,
+                author,
+                community_local_id,
+                db,
+                host_url_apub,
+                http_client,
+            )
+            .await?;
         }
         Some("Note") => {
             let obj: activitystreams::object::Note = obj.into_concrete().unwrap();
-            let content_text = obj
-                .as_ref()
-                .get_content_xsd_string()
-                .map(|x| x.as_str());
-            let created = obj
-                .as_ref()
-                .get_published()
-                .map(|x| x.as_datetime());
+            let content_text = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
+            let created = obj.as_ref().get_published().map(|x| x.as_datetime());
             let author = obj
                 .as_ref()
                 .get_attributed_to_xsd_any_uri()
@@ -533,7 +544,17 @@ pub async fn handle_recieved_object(
             if let Some(in_reply_to) = &obj.as_ref().in_reply_to {
                 // it's a reply
 
-                handle_recieved_reply(object_id, content_text.unwrap_or(""), created, author, in_reply_to, db, host_url_apub, http_client).await?;
+                handle_recieved_reply(
+                    object_id,
+                    content_text.unwrap_or(""),
+                    created,
+                    author,
+                    in_reply_to,
+                    db,
+                    host_url_apub,
+                    http_client,
+                )
+                .await?;
             } else {
                 // not a reply, must be a top-level post
                 let title = obj
@@ -542,16 +563,39 @@ pub async fn handle_recieved_object(
                     .map(|x| x.as_str())
                     .unwrap_or("");
 
-                handle_recieved_post(object_id, title, None, content_text, created, author, community_local_id, db, host_url_apub, http_client).await?;
+                handle_recieved_post(
+                    object_id,
+                    title,
+                    None,
+                    content_text,
+                    created,
+                    author,
+                    community_local_id,
+                    db,
+                    host_url_apub,
+                    http_client,
+                )
+                .await?;
             }
-        },
-        _ => {},
+        }
+        _ => {}
     }
 
     Ok(())
 }
 
-async fn handle_recieved_post(object_id: &str, title: &str, href: Option<&str>, content_text: Option<&str>, created: Option<&chrono::DateTime<chrono::FixedOffset>>, author: Option<&str>, community_local_id: i64, db: &tokio_postgres::Client, host_url_apub: &str, http_client: &crate::HttpClient) -> Result<(), crate::Error> {
+async fn handle_recieved_post(
+    object_id: &str,
+    title: &str,
+    href: Option<&str>,
+    content_text: Option<&str>,
+    created: Option<&chrono::DateTime<chrono::FixedOffset>>,
+    author: Option<&str>,
+    community_local_id: i64,
+    db: &tokio_postgres::Client,
+    host_url_apub: &str,
+    http_client: &crate::HttpClient,
+) -> Result<(), crate::Error> {
     let author = match author {
         Some(author) => {
             Some(get_or_fetch_user_local_id(&author, &db, host_url_apub, http_client).await?)
@@ -567,7 +611,16 @@ async fn handle_recieved_post(object_id: &str, title: &str, href: Option<&str>, 
     Ok(())
 }
 
-async fn handle_recieved_reply(object_id: &str, content_text: &str, created: Option<&chrono::DateTime<chrono::FixedOffset>>, author: Option<&str>, in_reply_to: &activitystreams::object::properties::ObjectPropertiesInReplyToEnum, db: &tokio_postgres::Client, host_url_apub: &str, http_client: &crate::HttpClient) -> Result<(), crate::Error> {
+async fn handle_recieved_reply(
+    object_id: &str,
+    content_text: &str,
+    created: Option<&chrono::DateTime<chrono::FixedOffset>>,
+    author: Option<&str>,
+    in_reply_to: &activitystreams::object::properties::ObjectPropertiesInReplyToEnum,
+    db: &tokio_postgres::Client,
+    host_url_apub: &str,
+    http_client: &crate::HttpClient,
+) -> Result<(), crate::Error> {
     let author = match author {
         Some(author) => {
             Some(get_or_fetch_user_local_id(&author, &db, host_url_apub, http_client).await?)
@@ -576,8 +629,12 @@ async fn handle_recieved_reply(object_id: &str, content_text: &str, created: Opt
     };
 
     let in_reply_to = match in_reply_to {
-        activitystreams::object::properties::ObjectPropertiesInReplyToEnum::Term(term) => either::Either::Left(std::iter::once(term)),
-        activitystreams::object::properties::ObjectPropertiesInReplyToEnum::Array(terms) => either::Either::Right(terms.iter()),
+        activitystreams::object::properties::ObjectPropertiesInReplyToEnum::Term(term) => {
+            either::Either::Left(std::iter::once(term))
+        }
+        activitystreams::object::properties::ObjectPropertiesInReplyToEnum::Array(terms) => {
+            either::Either::Right(terms.iter())
+        }
     };
 
     let mut reply_to_local_posts = Vec::new();
@@ -586,7 +643,10 @@ async fn handle_recieved_reply(object_id: &str, content_text: &str, created: Opt
     let local_post_id_prefix = format!("{}/posts/", host_url_apub);
 
     for term in in_reply_to {
-        if let activitystreams::object::properties::ObjectPropertiesInReplyToTermEnum::XsdAnyUri(term_ap_id) = term {
+        if let activitystreams::object::properties::ObjectPropertiesInReplyToTermEnum::XsdAnyUri(
+            term_ap_id,
+        ) = term
+        {
             let term_ap_id = term_ap_id.as_str();
             if term_ap_id.starts_with(&local_post_id_prefix) {
                 let local_term_id = &term_ap_id[local_post_id_prefix.len()..];
@@ -603,12 +663,20 @@ async fn handle_recieved_reply(object_id: &str, content_text: &str, created: Opt
     let reply_to_remotes_local_ids: Vec<i64> = if reply_to_remotes.is_empty() {
         vec![]
     } else {
-        let rows = db.query("SELECT id FROM post WHERE ap_id = ANY($1::TEXT[])", &[&reply_to_remotes]).await?;
+        let rows = db
+            .query(
+                "SELECT id FROM post WHERE ap_id = ANY($1::TEXT[])",
+                &[&reply_to_remotes],
+            )
+            .await?;
 
         rows.into_iter().map(|row| row.get(0)).collect()
     };
 
-    let post = reply_to_remotes_local_ids.into_iter().chain(reply_to_local_posts).max();
+    let post = reply_to_remotes_local_ids
+        .into_iter()
+        .chain(reply_to_local_posts)
+        .max();
     if let Some(post) = post {
         db.execute(
             "INSERT INTO reply (post, author, content_text, created, local, ap_id) VALUES ($1, $2, $3, COALESCE($4, current_timestamp), FALSE, $5)",

@@ -17,11 +17,9 @@ pub fn route_apub() -> crate::RouteNode<()> {
         )
         .with_child(
             "comments",
-            crate::RouteNode::new()
-                .with_child_parse::<i64, _>(
-                    crate::RouteNode::new()
-                        .with_handler_async("GET", handler_comments_get)
-                )
+            crate::RouteNode::new().with_child_parse::<i64, _>(
+                crate::RouteNode::new().with_handler_async("GET", handler_comments_get),
+            ),
         )
         .with_child(
             "communities",
@@ -574,15 +572,15 @@ async fn handler_communities_inbox_post(
                 };
                 if let Some(object_id) = object_id {
                     let res = crate::res_to_error(
-                        ctx
-                        .http_client
-                        .request(
-                            hyper::Request::get(object_id.as_str())
-                                .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
-                                .body(Default::default())?,
-                        )
-                        .await?
-                    ).await?;
+                        ctx.http_client
+                            .request(
+                                hyper::Request::get(object_id.as_str())
+                                    .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
+                                    .body(Default::default())?,
+                            )
+                            .await?,
+                    )
+                    .await?;
 
                     let body = hyper::body::to_bytes(res.into_body()).await?;
 
