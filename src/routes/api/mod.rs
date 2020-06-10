@@ -31,6 +31,14 @@ struct RespPostListPost<'a> {
     community: &'a RespMinimalCommunityInfo<'a>,
 }
 
+#[derive(Serialize)]
+struct RespPostCommentInfo<'a> {
+    id: i64,
+    author: Option<RespMinimalAuthorInfo<'a>>,
+    created: Cow<'a, str>,
+    content_text: Cow<'a, str>,
+}
+
 pub fn route_api() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child(
         "unstable",
@@ -58,7 +66,15 @@ pub fn route_api() -> crate::RouteNode<()> {
                     .with_handler_async("GET", route_unstable_posts_list)
                     .with_handler_async("POST", route_unstable_posts_create)
                     .with_child_parse::<i64, _>(
-                        crate::RouteNode::new().with_handler_async("GET", route_unstable_posts_get),
+                        crate::RouteNode::new()
+                            .with_handler_async("GET", route_unstable_posts_get)
+                            .with_child(
+                                "replies",
+                                crate::RouteNode::new().with_handler_async(
+                                    "POST",
+                                    route_unstable_posts_replies_create,
+                                ),
+                            ),
                     ),
             )
             .with_child(
@@ -300,20 +316,81 @@ async fn route_unstable_posts_create(
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
 }
 
+async fn get_post_comments<'a>(
+    post_id: i64,
+    db: &tokio_postgres::Client,
+    local_hostname: &'a str,
+) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
+    use futures::TryStreamExt;
+
+    let stream = crate::query_stream(
+        db,
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, person.username, person.local, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL",
+        &[&post_id],
+    ).await?;
+
+    stream
+        .map_err(crate::Error::from)
+        .and_then(|row| {
+            let id: i64 = row.get(0);
+            let content_text: String = row.get(2);
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
+
+            let author_username: Option<String> = row.get(4);
+            let author = author_username.map(move |author_username| {
+                let author_id: i64 = row.get(1);
+                let author_local: bool = row.get(5);
+                let author_ap_id: Option<&str> = row.get(6);
+
+                RespMinimalAuthorInfo {
+                    id: author_id,
+                    username: author_username.into(),
+                    local: author_local,
+                    host: crate::get_actor_host_or_unknown(
+                        author_local,
+                        author_ap_id,
+                        &local_hostname,
+                    ),
+                }
+            });
+
+            futures::future::ok(RespPostCommentInfo {
+                id,
+                author,
+                content_text: content_text.into(),
+                created: created.to_rfc3339().into(),
+            })
+        })
+        .try_collect()
+        .await
+}
+
 async fn route_unstable_posts_get(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    use futures::future::TryFutureExt;
+
+    #[derive(Serialize)]
+    struct RespPostInfo<'a> {
+        #[serde(flatten)]
+        post: &'a RespPostListPost<'a>,
+        comments: Vec<RespPostCommentInfo<'a>>,
+    }
     let (post_id,) = params;
 
     let db = ctx.db_pool.get().await?;
 
     let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
 
-    let row = db.query_opt(
-        "SELECT post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
-        &[&post_id],
+    let (row, comments) = futures::future::try_join(
+        db.query_opt(
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            &[&post_id],
+        )
+        .map_err(crate::Error::from),
+        get_post_comments(post_id, &db, &local_hostname),
     ).await?;
 
     match row {
@@ -369,11 +446,59 @@ async fn route_unstable_posts_get(
                 community: &community,
             };
 
+            let output = RespPostInfo {
+                post: &post,
+                comments,
+            };
+
             Ok(hyper::Response::builder()
                 .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(serde_json::to_vec(&post)?.into())?)
+                .body(serde_json::to_vec(&output)?.into())?)
         }
     }
+}
+
+async fn route_unstable_posts_replies_create(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+
+    #[derive(Deserialize)]
+    struct RepliesCreateBody<'a> {
+        content_text: &'a str,
+    }
+
+    let body: RepliesCreateBody<'_> = serde_json::from_slice(&body)?;
+
+    let row = db.query_one(
+        "INSERT INTO reply (post, author, content_text, created, local) VALUES ($1, $2, $3, current_timestamp, TRUE) RETURNING id, created",
+        &[&post_id, &user, &body.content_text],
+    ).await?;
+
+    let reply_id: i64 = row.get(0);
+    let created = row.get(1);
+
+    let comment = crate::CommentInfo {
+        id: reply_id,
+        author: Some(user),
+        post: post_id,
+        content_text: body.content_text.to_owned(),
+        created,
+    };
+
+    crate::on_post_add_comment(comment, ctx);
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&serde_json::json!({ "id": reply_id }))?.into())?)
 }
 
 async fn route_unstable_users_create(

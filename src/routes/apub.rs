@@ -16,10 +16,30 @@ pub fn route_apub() -> crate::RouteNode<()> {
             ),
         )
         .with_child(
+            "comments",
+            crate::RouteNode::new()
+                .with_child_parse::<i64, _>(
+                    crate::RouteNode::new()
+                        .with_handler_async("GET", handler_comments_get)
+                )
+        )
+        .with_child(
             "communities",
             crate::RouteNode::new().with_child_parse::<i64, _>(
                 crate::RouteNode::new()
                     .with_handler_async("GET", handler_communities_get)
+                    .with_child(
+                        "comments",
+                        crate::RouteNode::new().with_child_parse::<i64, _>(
+                            crate::RouteNode::new().with_child(
+                                "announce",
+                                crate::RouteNode::new().with_handler_async(
+                                    "GET",
+                                    handler_communities_comments_announce_get,
+                                ),
+                            ),
+                        ),
+                    )
                     .with_child(
                         "followers",
                         crate::RouteNode::new()
@@ -232,6 +252,74 @@ async fn handler_users_inbox_post(
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
 }
 
+async fn handler_comments_get(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (comment_id,) = params;
+    let db = ctx.db_pool.get().await?;
+
+    match db
+        .query_opt(
+            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, post.local, post.ap_id, post.community, community.local, community.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN community ON (community.id = post.community) WHERE reply.id=$1",
+            &[&comment_id],
+        )
+        .await?
+    {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such comment",
+        )),
+        Some(row) => {
+            let local: bool = row.get(4);
+
+            if !local {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested comment is not owned by this instance",
+                )));
+            }
+
+            let post_local_id: i64 = row.get(2);
+
+            let community_local_id: i64 = row.get(7);
+
+            let community_ap_id = if row.get(8) {
+                crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+            } else {
+                row.get(9)
+            };
+
+            let post_ap_id = if row.get(5) {
+                crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
+            } else {
+                row.get(6)
+            };
+
+            let info = crate::CommentInfo {
+                author: row.get(0),
+                created: row.get(3),
+                content_text: row.get(1),
+                id: comment_id,
+                post: post_local_id,
+            };
+
+            let body = crate::apub_util::local_comment_to_ap(&info, &post_ap_id, &community_ap_id, &ctx.host_url_apub)?;
+
+            let body = serde_json::to_vec(&body)?.into();
+
+            let mut resp = hyper::Response::new(body);
+            resp.headers_mut().insert(
+                hyper::header::CONTENT_TYPE,
+                hyper::header::HeaderValue::from_static(crate::apub_util::ACTIVITY_TYPE),
+            );
+
+            Ok(resp)
+        },
+    }
+}
+
 async fn handler_communities_get(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
@@ -290,6 +378,61 @@ async fn handler_communities_get(
             );
 
             Ok(resp)
+        }
+    }
+}
+
+async fn handler_communities_comments_announce_get(
+    params: (i64, i64),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, comment_id) = params;
+    let db = ctx.db_pool.get().await?;
+
+    match db
+        .query_opt(
+            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, post.local, post.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) WHERE reply.id=$1 AND community=$2",
+            &[&comment_id, &community_id],
+        )
+        .await?
+    {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such publish",
+        )),
+        Some(row) => {
+            let local: bool = row.get(4);
+
+            if !local {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested comment is not owned by this instance",
+                )));
+            }
+
+            let post_local_id: i64 = row.get(2);
+
+            let post_ap_id = if row.get(5) {
+                crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
+            } else {
+                row.get(6)
+            };
+
+            let comment = crate::CommentInfo {
+                author: row.get(0),
+                content_text: row.get(1),
+                post: post_local_id,
+                created: row.get(3),
+                id: comment_id,
+            };
+
+            let body = crate::apub_util::local_community_comment_to_announce_ap(&comment, &post_ap_id, community_id, &ctx.host_url_apub)?;
+            let body = serde_json::to_vec(&body)?;
+
+            Ok(hyper::Response::builder()
+               .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+               .body(body.into())?)
         }
     }
 }
@@ -430,14 +573,16 @@ async fn handler_communities_inbox_post(
                     }
                 };
                 if let Some(object_id) = object_id {
-                    let res = ctx
+                    let res = crate::res_to_error(
+                        ctx
                         .http_client
                         .request(
                             hyper::Request::get(object_id.as_str())
                                 .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
                                 .body(Default::default())?,
                         )
-                        .await?;
+                        .await?
+                    ).await?;
 
                     let body = hyper::body::to_bytes(res.into_body()).await?;
 

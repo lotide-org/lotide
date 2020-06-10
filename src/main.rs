@@ -47,6 +47,14 @@ pub struct PostInfo<'a> {
     community: i64,
 }
 
+pub struct CommentInfo {
+    id: i64,
+    author: Option<i64>,
+    post: i64,
+    content_text: String,
+    created: chrono::DateTime<chrono::FixedOffset>,
+}
+
 pub fn get_url_host(url: &str) -> Option<String> {
     url::Url::parse(url).ok().and_then(|url| {
         url.host_str().map(|host| match url.port() {
@@ -58,7 +66,7 @@ pub fn get_url_host(url: &str) -> Option<String> {
 
 pub fn get_actor_host<'a>(
     local: bool,
-    ap_id: Option<&'a str>,
+    ap_id: Option<&str>,
     local_hostname: &'a str,
 ) -> Option<Cow<'a, str>> {
     if local {
@@ -70,10 +78,20 @@ pub fn get_actor_host<'a>(
 
 pub fn get_actor_host_or_unknown<'a>(
     local: bool,
-    ap_id: Option<&'a str>,
+    ap_id: Option<&str>,
     local_hostname: &'a str,
 ) -> Cow<'a, str> {
     get_actor_host(local, ap_id, local_hostname).unwrap_or(Cow::Borrowed("[unknown]"))
+}
+
+pub async fn query_stream(
+    db: &tokio_postgres::Client,
+    statement: &(impl tokio_postgres::ToStatement + ?Sized),
+    params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+) -> Result<tokio_postgres::RowStream, tokio_postgres::Error> {
+    let params = params.iter().map(|s| *s as _);
+
+    db.query_raw(statement, params).await
 }
 
 pub fn simple_response(
@@ -154,6 +172,47 @@ pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 's
 pub fn on_community_add_post<'a>(post: &'a PostInfo<'a>, ctx: Arc<crate::RouteContext>) {
     println!("on_community_add_post");
     crate::apub_util::spawn_announce_community_post(post, ctx);
+}
+
+pub fn on_community_add_comment(comment: CommentInfo, post_ap_id: String, community: i64, ctx: Arc<crate::RouteContext>) {
+    crate::spawn_task(crate::apub_util::announce_community_comment(comment, post_ap_id, community, ctx));
+}
+
+pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) {
+    println!("on_post_add_comment");
+    spawn_task(async move {
+        let db = ctx.db_pool.get().await?;
+
+        let row = db.query_opt(
+            "SELECT community.id, community.local, community.ap_id, community.ap_inbox, post.local, post.ap_id FROM post, community WHERE post.id = $1 AND post.community = community.id",
+            &[&comment.post],
+        ).await?;
+
+        if let Some(row) = row {
+            let community_local: bool = row.get(1);
+            let post_local: bool = row.get(4);
+
+            let post_ap_id = if post_local {
+                Some(crate::apub_util::get_local_post_apub_id(
+                        comment.post,
+                        &ctx.host_url_apub,
+                ))
+            } else {
+                row.get(5)
+            };
+
+            if let Some(post_ap_id) = post_ap_id {
+                if community_local {
+                    let community = row.get(0);
+                    crate::on_community_add_comment(comment, post_ap_id, community, ctx);
+                } else {
+                    crate::apub_util::send_comment_to_community(comment, row.get(2), row.get(3), post_ap_id, ctx).await?;
+                }
+            }
+        }
+
+        Ok(())
+    });
 }
 
 #[tokio::main]
