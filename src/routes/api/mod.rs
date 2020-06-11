@@ -1,5 +1,7 @@
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 mod communities;
@@ -43,6 +45,7 @@ struct RespPostCommentInfo<'a> {
     author: Option<RespMinimalAuthorInfo<'a>>,
     created: Cow<'a, str>,
     content_text: Cow<'a, str>,
+    replies: Option<Vec<RespPostCommentInfo<'a>>>,
 }
 
 pub fn route_api() -> crate::RouteNode<()> {
@@ -86,7 +89,13 @@ pub fn route_api() -> crate::RouteNode<()> {
             .with_child(
                 "comments",
                 crate::RouteNode::new().with_child_parse::<i64, _>(
-                    crate::RouteNode::new().with_handler_async("GET", route_unstable_comments_get),
+                    crate::RouteNode::new()
+                        .with_handler_async("GET", route_unstable_comments_get)
+                        .with_child(
+                            "replies",
+                            crate::RouteNode::new()
+                                .with_handler_async("POST", route_unstable_comments_replies_create),
+                        ),
                 ),
             )
             .with_child(
@@ -328,6 +337,106 @@ async fn route_unstable_posts_create(
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
 }
 
+async fn apply_comments_replies<'a, T>(
+    comments: &mut Vec<(T, RespPostCommentInfo<'a>)>,
+    depth: u8,
+    db: &tokio_postgres::Client,
+    local_hostname: &'a str,
+) -> Result<(), crate::Error> {
+    if depth > 0 {
+        let ids = comments
+            .iter()
+            .map(|(_, comment)| comment.id)
+            .collect::<Vec<_>>();
+        let mut replies = get_comments_replies_box(&ids, depth - 1, db, local_hostname).await?;
+
+        for (_, comment) in comments {
+            comment.replies = Some(replies.remove(&comment.id).unwrap_or_else(Vec::new));
+        }
+    }
+
+    Ok(())
+}
+
+fn get_comments_replies_box<'a: 'b, 'b>(
+    parents: &'b [i64],
+    depth: u8,
+    db: &'b tokio_postgres::Client,
+    local_hostname: &'a str,
+) -> std::pin::Pin<
+    Box<
+        dyn Future<Output = Result<HashMap<i64, Vec<RespPostCommentInfo<'a>>>, crate::Error>>
+            + Send
+            + 'b,
+    >,
+> {
+    Box::pin(get_comments_replies(parents, depth, db, local_hostname))
+}
+
+async fn get_comments_replies<'a>(
+    parents: &[i64],
+    depth: u8,
+    db: &tokio_postgres::Client,
+    local_hostname: &'a str,
+) -> Result<HashMap<i64, Vec<RespPostCommentInfo<'a>>>, crate::Error> {
+    use futures::TryStreamExt;
+
+    let stream = crate::query_stream(
+        db,
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, person.username, person.local, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[])",
+        &[&parents],
+    ).await?;
+
+    let mut comments: Vec<_> = stream
+        .map_err(crate::Error::from)
+        .and_then(|row| {
+            let id: i64 = row.get(0);
+            let content_text: String = row.get(2);
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
+            let parent: i64 = row.get(4);
+
+            let author_username: Option<String> = row.get(5);
+            let author = author_username.map(move |author_username| {
+                let author_id: i64 = row.get(1);
+                let author_local: bool = row.get(6);
+                let author_ap_id: Option<&str> = row.get(7);
+
+                RespMinimalAuthorInfo {
+                    id: author_id,
+                    username: author_username.into(),
+                    local: author_local,
+                    host: crate::get_actor_host_or_unknown(
+                        author_local,
+                        author_ap_id,
+                        &local_hostname,
+                    ),
+                }
+            });
+
+            futures::future::ok((
+                parent,
+                RespPostCommentInfo {
+                    id,
+                    author,
+                    content_text: content_text.into(),
+                    created: created.to_rfc3339().into(),
+                    replies: None,
+                },
+            ))
+        })
+        .try_collect()
+        .await?;
+
+    apply_comments_replies(&mut comments, depth, db, local_hostname).await?;
+
+    let mut result = HashMap::new();
+    for (parent, comment) in comments {
+        result.entry(parent).or_insert(Vec::new()).push(comment);
+    }
+
+    Ok(result)
+}
+
 async fn get_post_comments<'a>(
     post_id: i64,
     db: &tokio_postgres::Client,
@@ -341,7 +450,7 @@ async fn get_post_comments<'a>(
         &[&post_id],
     ).await?;
 
-    stream
+    let mut comments: Vec<_> = stream
         .map_err(crate::Error::from)
         .and_then(|row| {
             let id: i64 = row.get(0);
@@ -366,15 +475,23 @@ async fn get_post_comments<'a>(
                 }
             });
 
-            futures::future::ok(RespPostCommentInfo {
-                id,
-                author,
-                content_text: content_text.into(),
-                created: created.to_rfc3339().into(),
-            })
+            futures::future::ok((
+                (),
+                RespPostCommentInfo {
+                    id,
+                    author,
+                    content_text: content_text.into(),
+                    created: created.to_rfc3339().into(),
+                    replies: None,
+                },
+            ))
         })
         .try_collect()
-        .await
+        .await?;
+
+    apply_comments_replies(&mut comments, 2, db, local_hostname).await?;
+
+    Ok(comments.into_iter().map(|(_, comment)| comment).collect())
 }
 
 async fn route_unstable_posts_get(
@@ -502,6 +619,7 @@ async fn route_unstable_posts_replies_create(
         id: reply_id,
         author: Some(user),
         post: post_id,
+        parent: None,
         content_text: body.content_text.to_owned(),
         created,
     };
@@ -574,6 +692,7 @@ async fn route_unstable_comments_get(
                     content_text: Cow::Borrowed(row.get(2)),
                     created: created.to_rfc3339().into(),
                     id: comment_id,
+                    replies: None, // TODO fetch replies
                 },
                 post,
             };
@@ -583,6 +702,63 @@ async fn route_unstable_comments_get(
                 .body(serde_json::to_vec(&comment)?.into())?)
         }
     }
+}
+
+async fn route_unstable_comments_replies_create(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (parent_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    #[derive(Deserialize)]
+    struct CommentRepliesCreateBody<'a> {
+        content_text: &'a str,
+    }
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: CommentRepliesCreateBody<'_> = serde_json::from_slice(&body)?;
+
+    let post: i64 = match db
+        .query_opt("SELECT post FROM reply WHERE id=$1", &[&parent_id])
+        .await?
+    {
+        None => Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such comment",
+        ))),
+        Some(row) => Ok(row.get(0)),
+    }?;
+
+    let row = db.query_one(
+        "INSERT INTO reply (post, parent, author, content_text, created, local) VALUES ($1, $2, $3, $4, current_timestamp, TRUE) RETURNING id, created",
+        &[&post, &parent_id, &user, &body.content_text],
+    ).await?;
+
+    let reply_id: i64 = row.get(0);
+    let created = row.get(1);
+
+    let info = crate::CommentInfo {
+        id: reply_id,
+        author: Some(user),
+        post,
+        parent: Some(parent_id),
+        content_text: body.content_text.to_owned(),
+        created,
+    };
+
+    crate::on_post_add_comment(info, ctx);
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(
+            serde_json::to_vec(&serde_json::json!({ "id": reply_id, "post": {"id": post} }))?
+                .into(),
+        )?)
 }
 
 async fn route_unstable_users_create(

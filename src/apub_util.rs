@@ -161,12 +161,14 @@ pub fn spawn_announce_community_post(post: &crate::PostInfo<'_>, ctx: Arc<crate:
 pub async fn announce_community_comment(
     comment: crate::CommentInfo,
     post_ap_id: String,
+    parent_ap_id: Option<String>,
     community: i64,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let announce = local_community_comment_to_announce_ap(
         &comment,
         &post_ap_id,
+        &parent_ap_id,
         community,
         &ctx.host_url_apub,
     )?;
@@ -277,6 +279,7 @@ pub fn post_to_ap(
 pub fn local_comment_to_ap(
     comment: &crate::CommentInfo,
     post_ap_id: &str,
+    parent_ap_id: Option<&str>,
     community_ap_id: &str,
     host_url_apub: &str,
 ) -> Result<activitystreams::object::Note, crate::Error> {
@@ -289,7 +292,7 @@ pub fn local_comment_to_ap(
             &host_url_apub,
         ))?
         .set_published(comment.created.clone())?
-        .set_in_reply_to_xsd_any_uri(post_ap_id)?
+        .set_in_reply_to_xsd_any_uri(parent_ap_id.unwrap_or(post_ap_id))?
         .set_to_xsd_any_uri(community_ap_id)?
         .set_content_xsd_string(comment.content_text.to_owned())?;
 
@@ -321,11 +324,18 @@ pub fn local_community_post_to_announce_ap(
 pub fn local_community_comment_to_announce_ap(
     comment: &crate::CommentInfo,
     post_ap_id: &str,
+    parent_ap_id: &Option<String>,
     community: i64,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Announce, crate::Error> {
     let community_ap_id = get_local_community_apub_id(community, host_url_apub);
-    let comment_ap = local_comment_to_ap(comment, post_ap_id, &community_ap_id, host_url_apub)?;
+    let comment_ap = local_comment_to_ap(
+        comment,
+        post_ap_id,
+        parent_ap_id.as_deref(),
+        &community_ap_id,
+        host_url_apub,
+    )?;
 
     let mut announce = activitystreams::activity::Announce::new();
 
@@ -410,10 +420,16 @@ pub async fn send_comment_to_community(
     community_ap_id: &str,
     community_ap_inbox: &str,
     post_ap_id: String,
+    parent_ap_id: Option<String>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let comment_ap =
-        local_comment_to_ap(&comment, &post_ap_id, &community_ap_id, &ctx.host_url_apub)?;
+    let comment_ap = local_comment_to_ap(
+        &comment,
+        &post_ap_id,
+        parent_ap_id.as_deref(),
+        &community_ap_id,
+        &ctx.host_url_apub,
+    )?;
 
     let mut create = activitystreams::activity::Create::new();
     create.create_props.set_object_base_box(comment_ap)?;

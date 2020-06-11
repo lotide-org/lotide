@@ -51,6 +51,7 @@ pub struct CommentInfo {
     id: i64,
     author: Option<i64>,
     post: i64,
+    parent: Option<i64>,
     content_text: String,
     created: chrono::DateTime<chrono::FixedOffset>,
 }
@@ -177,11 +178,16 @@ pub fn on_community_add_post<'a>(post: &'a PostInfo<'a>, ctx: Arc<crate::RouteCo
 pub fn on_community_add_comment(
     comment: CommentInfo,
     post_ap_id: String,
+    parent_ap_id: Option<String>,
     community: i64,
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(crate::apub_util::announce_community_comment(
-        comment, post_ap_id, community, ctx,
+        comment,
+        post_ap_id,
+        parent_ap_id,
+        community,
+        ctx,
     ));
 }
 
@@ -190,12 +196,31 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
     spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
-        let row = db.query_opt(
-            "SELECT community.id, community.local, community.ap_id, community.ap_inbox, post.local, post.ap_id FROM post, community WHERE post.id = $1 AND post.community = community.id",
-            &[&comment.post],
+        let (post_community_row, parent_ap_id) = futures::future::try_join(
+            db.query_opt(
+                "SELECT community.id, community.local, community.ap_id, community.ap_inbox, post.local, post.ap_id FROM post, community WHERE post.id = $1 AND post.community = community.id",
+                &[&comment.post],
+            ),
+            async {
+                match comment.parent {
+                    Some(parent) => {
+                        let row = db.query_one(
+                            "SELECT local, ap_id FROM reply WHERE id=$1",
+                            &[&parent],
+                        ).await?;
+
+                        if row.get(0) {
+                            Ok(Some(crate::apub_util::get_local_comment_apub_id(parent, &ctx.host_url_apub)))
+                        } else {
+                            Ok(row.get(1))
+                        }
+                    },
+                    None => Ok(None),
+                }
+            }
         ).await?;
 
-        if let Some(row) = row {
+        if let Some(row) = post_community_row {
             let community_local: bool = row.get(1);
             let post_local: bool = row.get(4);
 
@@ -211,13 +236,20 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
             if let Some(post_ap_id) = post_ap_id {
                 if community_local {
                     let community = row.get(0);
-                    crate::on_community_add_comment(comment, post_ap_id, community, ctx);
+                    crate::on_community_add_comment(
+                        comment,
+                        post_ap_id,
+                        parent_ap_id,
+                        community,
+                        ctx,
+                    );
                 } else {
                     crate::apub_util::send_comment_to_community(
                         comment,
                         row.get(2),
                         row.get(3),
                         post_ap_id,
+                        parent_ap_id,
                         ctx,
                     )
                     .await?;

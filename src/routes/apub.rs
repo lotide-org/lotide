@@ -260,7 +260,7 @@ async fn handler_comments_get(
 
     match db
         .query_opt(
-            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, post.local, post.ap_id, post.community, community.local, community.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN community ON (community.id = post.community) WHERE reply.id=$1",
+            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) WHERE reply.id=$1",
             &[&comment_id],
         )
         .await?
@@ -281,19 +281,21 @@ async fn handler_comments_get(
 
             let post_local_id: i64 = row.get(2);
 
-            let community_local_id: i64 = row.get(7);
+            let community_local_id: i64 = row.get(8);
 
-            let community_ap_id = if row.get(8) {
+            let community_ap_id = if row.get(9) {
                 crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
             } else {
-                row.get(9)
+                row.get(10)
             };
 
-            let post_ap_id = if row.get(5) {
+            let post_ap_id = if row.get(6) {
                 crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
             } else {
-                row.get(6)
+                row.get(7)
             };
+
+            let parent_local_id = row.get(5);
 
             let info = crate::CommentInfo {
                 author: row.get(0),
@@ -301,9 +303,16 @@ async fn handler_comments_get(
                 content_text: row.get(1),
                 id: comment_id,
                 post: post_local_id,
+                parent: parent_local_id,
             };
 
-            let body = crate::apub_util::local_comment_to_ap(&info, &post_ap_id, &community_ap_id, &ctx.host_url_apub)?;
+            let parent_ap_id = match row.get(11) {
+                None => None,
+                Some(true) => Some(crate::apub_util::get_local_comment_apub_id(parent_local_id.unwrap(), &ctx.host_url_apub)),
+                Some(false) => row.get(12),
+            };
+
+            let body = crate::apub_util::local_comment_to_ap(&info, &post_ap_id, parent_ap_id.as_deref(), &community_ap_id, &ctx.host_url_apub)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
@@ -390,7 +399,7 @@ async fn handler_communities_comments_announce_get(
 
     match db
         .query_opt(
-            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, post.local, post.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) WHERE reply.id=$1 AND community=$2",
+            "SELECT reply.author, reply.content_text, reply.post, reply.parent, reply.created, reply.local, post.local, post.ap_id, parent_reply.local, parent_reply.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN reply AS parent_reply ON (reply.parent = parent_reply.id) WHERE reply.id=$1 AND community=$2",
             &[&comment_id, &community_id],
         )
         .await?
@@ -400,7 +409,7 @@ async fn handler_communities_comments_announce_get(
             "No such publish",
         )),
         Some(row) => {
-            let local: bool = row.get(4);
+            let local: bool = row.get(5);
 
             if !local {
                 return Err(crate::Error::UserError(crate::simple_response(
@@ -411,21 +420,34 @@ async fn handler_communities_comments_announce_get(
 
             let post_local_id: i64 = row.get(2);
 
-            let post_ap_id = if row.get(5) {
+            let post_ap_id = if row.get(6) {
                 crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
             } else {
-                row.get(6)
+                row.get(7)
             };
+
+            let comment_parent = row.get(3);
 
             let comment = crate::CommentInfo {
                 author: row.get(0),
                 content_text: row.get(1),
                 post: post_local_id,
-                created: row.get(3),
+                parent: comment_parent,
+                created: row.get(4),
                 id: comment_id,
             };
 
-            let body = crate::apub_util::local_community_comment_to_announce_ap(&comment, &post_ap_id, community_id, &ctx.host_url_apub)?;
+            let parent_ap_id = match row.get(8) {
+                None => None,
+                Some(true) => {
+                    Some(crate::apub_util::get_local_comment_apub_id(comment_parent.unwrap(), &ctx.host_url_apub))
+                },
+                Some(false) => {
+                    row.get(9)
+                },
+            };
+
+            let body = crate::apub_util::local_community_comment_to_announce_ap(&comment, &post_ap_id, &parent_ap_id, community_id, &ctx.host_url_apub)?;
             let body = serde_json::to_vec(&body)?;
 
             Ok(hyper::Response::builder()
