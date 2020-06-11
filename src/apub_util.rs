@@ -653,51 +653,68 @@ async fn handle_recieved_reply(
         }
     };
 
-    let mut reply_to_local_posts = Vec::new();
-    let mut reply_to_remotes = Vec::new();
-
-    let local_post_id_prefix = format!("{}/posts/", host_url_apub);
-
-    for term in in_reply_to {
+    let last_reply_to = in_reply_to.last(); // TODO maybe not this? Not sure how to interpret inReplyTo
+    if let Some(last_reply_to) = last_reply_to {
         if let activitystreams::object::properties::ObjectPropertiesInReplyToTermEnum::XsdAnyUri(
             term_ap_id,
-        ) = term
+        ) = last_reply_to
         {
-            let term_ap_id = term_ap_id.as_str();
-            if term_ap_id.starts_with(&local_post_id_prefix) {
-                let local_term_id = &term_ap_id[local_post_id_prefix.len()..];
-                if let Ok(local_term_id) = local_term_id.parse() {
-                    reply_to_local_posts.push(local_term_id);
-                    continue;
-                }
+            #[derive(Debug)]
+            enum ReplyTarget {
+                Post { id: i64 },
+                Comment { id: i64, post: i64 },
             }
 
-            reply_to_remotes.push(term_ap_id);
+            let term_ap_id = term_ap_id.as_str();
+            let target = if term_ap_id.starts_with(&host_url_apub) {
+                let remaining = &term_ap_id[host_url_apub.len()..];
+                if remaining.starts_with("/posts/") {
+                    if let Ok(local_post_id) = remaining[7..].parse() {
+                        Some(ReplyTarget::Post { id: local_post_id })
+                    } else {
+                        None
+                    }
+                } else if remaining.starts_with("/comments/") {
+                    if let Ok(local_comment_id) = remaining[10..].parse() {
+                        let row = db
+                            .query_opt("SELECT post FROM reply WHERE id=$1", &[&local_comment_id])
+                            .await?;
+                        if let Some(row) = row {
+                            Some(ReplyTarget::Comment {
+                                id: local_comment_id,
+                                post: row.get(0),
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                let row = db
+                    .query_opt("SELECT id, post FROM reply WHERE ap_id=$1", &[&term_ap_id])
+                    .await?;
+                row.map(|row| ReplyTarget::Comment {
+                    id: row.get(0),
+                    post: row.get(1),
+                })
+            };
+
+            if let Some(target) = target {
+                let (post, parent) = match target {
+                    ReplyTarget::Post { id } => (id, None),
+                    ReplyTarget::Comment { id, post } => (post, Some(id)),
+                };
+
+                db.execute(
+                    "INSERT INTO reply (post, parent, author, content_text, created, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), FALSE, $6)",
+                    &[&post, &parent, &author, &content_text, &created, &object_id],
+                    ).await?;
+            }
         }
-    }
-
-    let reply_to_remotes_local_ids: Vec<i64> = if reply_to_remotes.is_empty() {
-        vec![]
-    } else {
-        let rows = db
-            .query(
-                "SELECT id FROM post WHERE ap_id = ANY($1::TEXT[])",
-                &[&reply_to_remotes],
-            )
-            .await?;
-
-        rows.into_iter().map(|row| row.get(0)).collect()
-    };
-
-    let post = reply_to_remotes_local_ids
-        .into_iter()
-        .chain(reply_to_local_posts)
-        .max();
-    if let Some(post) = post {
-        db.execute(
-            "INSERT INTO reply (post, author, content_text, created, local, ap_id) VALUES ($1, $2, $3, COALESCE($4, current_timestamp), FALSE, $5)",
-            &[&post, &author, &content_text, &created, &object_id],
-        ).await?;
     }
 
     Ok(())
