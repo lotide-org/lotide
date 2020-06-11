@@ -383,7 +383,7 @@ async fn get_comments_replies<'a>(
 
     let stream = crate::query_stream(
         db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, person.username, person.local, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[])",
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, person.username, person.local, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY created DESC",
         &[&parents],
     ).await?;
 
@@ -446,7 +446,7 @@ async fn get_post_comments<'a>(
 
     let stream = crate::query_stream(
         db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, person.username, person.local, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL",
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, person.username, person.local, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY created DESC",
         &[&post_id],
     ).await?;
 
