@@ -454,6 +454,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hancock"
+version = "0.1.0"
+source = "git+https://git.sr.ht/~vpzom/hancock?rev=6ecad6d36#6ecad6d36736f226e4fe298542cd5f4584af696f"
+dependencies = [
+ "base64",
+ "http",
+ "thiserror",
+]
+
+[[package]]
 name = "headers"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -660,9 +670,11 @@ dependencies = [
  "deadpool-postgres",
  "either",
  "futures",
+ "hancock",
  "headers",
  "hyper",
  "hyper-tls",
+ "openssl",
  "serde",
  "serde_derive",
  "serde_json",

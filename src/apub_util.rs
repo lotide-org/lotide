@@ -78,14 +78,38 @@ pub async fn get_or_fetch_user_local_id(
     }
 }
 
+pub async fn fetch_or_create_local_user_privkey(
+    user: i64,
+    db: &tokio_postgres::Client
+) -> Result<openssl::pkey::PKey<openssl::pkey::Private>, crate::Error> {
+    let row = db.query_one("SELECT private_key, local FROM person WHERE id=$1", &[&user]).await?;
+    match row.get(0) {
+        Some(bytes) => Ok(openssl::pkey::PKey::private_key_from_pem(bytes)?),
+        None => {
+            let local: bool = row.get(1);
+            if !local {
+                Err(crate::Error::InternalStr(format!("Won't create privkey for user {} because they aren't local", user)))
+            } else {
+                let rsa = openssl::rsa::Rsa::generate(crate::KEY_BITS)?;
+                let private_key = rsa.private_key_to_pem()?;
+                let public_key = rsa.public_key_to_pem()?;
+
+                db.execute("UPDATE person SET private_key=$1, public_key=$2 WHERE id=$3", &[&private_key, &public_key, &user]).await?;
+
+                Ok(openssl::pkey::PKey::from_rsa(rsa)?)
+            }
+        }
+    }
+}
+
 pub async fn send_community_follow(
     community: i64,
     local_follower: i64,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let (community_ap_id, community_inbox): (String, String) = {
-        let db = ctx.db_pool.get().await?;
+    let db = ctx.db_pool.get().await?;
 
+    let (community_ap_id, community_inbox): (String, String) = {
         let row = db
             .query_one(
                 "SELECT local, ap_id, ap_inbox FROM community WHERE id=$1",
@@ -115,28 +139,54 @@ pub async fn send_community_follow(
         }
     };
 
-    let mut follow = activitystreams::activity::Follow::new();
-    follow.object_props.set_id(format!(
-        "{}/communities/{}/followers/{}",
-        ctx.host_url_apub, community, local_follower
-    ))?;
+    let (body, user_privkey) = futures::future::try_join(
+        async {
+            let mut follow = activitystreams::activity::Follow::new();
+            follow.object_props.set_id(format!(
+                    "{}/communities/{}/followers/{}",
+                    ctx.host_url_apub, community, local_follower
+                    ))?;
 
-    let person_ap_id = get_local_person_apub_id(local_follower, &ctx.host_url_apub);
+            let person_ap_id = get_local_person_apub_id(local_follower, &ctx.host_url_apub);
 
-    follow.follow_props.set_actor_xsd_any_uri(person_ap_id)?;
+            follow.follow_props.set_actor_xsd_any_uri(person_ap_id)?;
 
-    follow
-        .follow_props
-        .set_object_xsd_any_uri(community_ap_id.as_ref())?;
-    follow.object_props.set_to_xsd_any_uri(community_ap_id)?;
+            follow
+                .follow_props
+                .set_object_xsd_any_uri(community_ap_id.as_ref())?;
+            follow.object_props.set_to_xsd_any_uri(community_ap_id)?;
 
-    println!("{:?}", follow);
+            println!("{:?}", follow);
 
-    let body = serde_json::to_vec(&follow)?.into();
+            Ok(serde_json::to_vec(&follow)?.into())
+        },
+        fetch_or_create_local_user_privkey(local_follower, &db),
+    ).await?;
 
-    let req = hyper::Request::post(community_inbox)
+    let mut req = hyper::Request::post(&community_inbox)
         .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
         .body(body)?;
+
+    {
+        if let Ok(inbox_url) = url::Url::parse(&community_inbox) {
+            let path_and_query = format!("{}{}", inbox_url.path(), inbox_url.query().unwrap_or(""));
+
+            let signature = hancock::create_signature(
+                &format!("{}/users/{}#main-key", ctx.host_url_apub, local_follower),
+                &hyper::Method::POST,
+                &path_and_query,
+                30,
+                &mut Default::default(),
+                |signing_string| -> Result<_, openssl::error::ErrorStack> {
+                    let mut signer = openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &user_privkey)?;
+                    signer.update(&signing_string)?;
+                    Ok(signer.sign_to_vec()?)
+                },
+            )?;
+
+            req.headers_mut().insert("Signature", signature);
+        }
+    }
 
     let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
 
@@ -431,12 +481,14 @@ pub async fn send_comment_to_community(
         &ctx.host_url_apub,
     )?;
 
+    let author = comment.author.unwrap();
+
     let mut create = activitystreams::activity::Create::new();
     create.create_props.set_object_base_box(comment_ap)?;
     create
         .create_props
         .set_actor_xsd_any_uri(get_local_person_apub_id(
-            comment.author.unwrap(),
+            author,
             &ctx.host_url_apub,
         ))?;
 

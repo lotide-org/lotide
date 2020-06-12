@@ -56,6 +56,8 @@ pub struct CommentInfo {
     created: chrono::DateTime<chrono::FixedOffset>,
 }
 
+pub const KEY_BITS: u32 = 2048;
+
 pub fn get_url_host(url: &str) -> Option<String> {
     url::Url::parse(url).ok().and_then(|url| {
         url.host_str().map(|host| match url.port() {

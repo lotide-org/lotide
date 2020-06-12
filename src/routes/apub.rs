@@ -1,4 +1,5 @@
 use activitystreams::ext::Extensible;
+use serde_derive::Serialize;
 use std::sync::Arc;
 
 pub fn route_apub() -> crate::RouteNode<()> {
@@ -74,6 +75,22 @@ pub fn route_apub() -> crate::RouteNode<()> {
         )
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicKey<'a> {
+    id: &'a str,
+    owner: &'a str,
+    public_key_pem: &'a str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicKeyExtension<'a> {
+    public_key: PublicKey<'a>,
+}
+
+impl<'a, T: activitystreams::actor::Actor> activitystreams::ext::Extension<T> for PublicKeyExtension<'a> {}
+
 async fn handler_users_get(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
@@ -84,7 +101,7 @@ async fn handler_users_get(
 
     match db
         .query_opt(
-            "SELECT username, local FROM person WHERE id=$1",
+            "SELECT username, local, public_key FROM person WHERE id=$1",
             &[&user_id],
         )
         .await?
@@ -94,7 +111,6 @@ async fn handler_users_get(
             "No such user",
         )),
         Some(row) => {
-            let username: String = row.get(0);
             let local: bool = row.get(1);
 
             if !local {
@@ -104,12 +120,25 @@ async fn handler_users_get(
                 )));
             }
 
+            let username: String = row.get(0);
+            let public_key: Option<&str> = row.get::<_, Option<&[u8]>>(2).and_then(|bytes| {
+                match std::str::from_utf8(bytes) {
+                    Ok(key) => Some(key),
+                    Err(err) => {
+                        eprintln!("Warning: public_key is not UTF-8: {:?}", err);
+                        None
+                    },
+                }
+            });
+
+            let user_ap_id = crate::apub_util::get_local_person_apub_id(
+                user_id,
+                &ctx.host_url_apub,
+            );
+
             let mut info = activitystreams::actor::Person::new();
             info.as_mut()
-                .set_id(crate::apub_util::get_local_person_apub_id(
-                    user_id,
-                    &ctx.host_url_apub,
-                ))?
+                .set_id(user_ap_id.as_ref())?
                 .set_name_xsd_string(username)?;
 
             let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
@@ -118,7 +147,23 @@ async fn handler_users_get(
 
             let info = info.extend(actor_props);
 
-            let mut resp = hyper::Response::new(serde_json::to_vec(&info)?.into());
+            let body = if let Some(public_key) = public_key {
+                let public_key_ext = PublicKeyExtension {
+                    public_key: PublicKey {
+                        id: &format!("{}/users/{}#main-key", ctx.host_url_apub, user_id),
+                        owner: &user_ap_id,
+                        public_key_pem: public_key,
+                    },
+                };
+
+                let info = info.extend(public_key_ext);
+
+                serde_json::to_vec(&info)
+            } else {
+                serde_json::to_vec(&info)
+            }?;
+
+            let mut resp = hyper::Response::new(body.into());
             resp.headers_mut().insert(
                 hyper::header::CONTENT_TYPE,
                 hyper::header::HeaderValue::from_static("application/activity+json"),
