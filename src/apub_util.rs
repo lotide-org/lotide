@@ -80,21 +80,33 @@ pub async fn get_or_fetch_user_local_id(
 
 pub async fn fetch_or_create_local_user_privkey(
     user: i64,
-    db: &tokio_postgres::Client
+    db: &tokio_postgres::Client,
 ) -> Result<openssl::pkey::PKey<openssl::pkey::Private>, crate::Error> {
-    let row = db.query_one("SELECT private_key, local FROM person WHERE id=$1", &[&user]).await?;
+    let row = db
+        .query_one(
+            "SELECT private_key, local FROM person WHERE id=$1",
+            &[&user],
+        )
+        .await?;
     match row.get(0) {
         Some(bytes) => Ok(openssl::pkey::PKey::private_key_from_pem(bytes)?),
         None => {
             let local: bool = row.get(1);
             if !local {
-                Err(crate::Error::InternalStr(format!("Won't create privkey for user {} because they aren't local", user)))
+                Err(crate::Error::InternalStr(format!(
+                    "Won't create privkey for user {} because they aren't local",
+                    user
+                )))
             } else {
                 let rsa = openssl::rsa::Rsa::generate(crate::KEY_BITS)?;
                 let private_key = rsa.private_key_to_pem()?;
                 let public_key = rsa.public_key_to_pem()?;
 
-                db.execute("UPDATE person SET private_key=$1, public_key=$2 WHERE id=$3", &[&private_key, &public_key, &user]).await?;
+                db.execute(
+                    "UPDATE person SET private_key=$1, public_key=$2 WHERE id=$3",
+                    &[&private_key, &public_key, &user],
+                )
+                .await?;
 
                 Ok(openssl::pkey::PKey::from_rsa(rsa)?)
             }
@@ -143,9 +155,9 @@ pub async fn send_community_follow(
         async {
             let mut follow = activitystreams::activity::Follow::new();
             follow.object_props.set_id(format!(
-                    "{}/communities/{}/followers/{}",
-                    ctx.host_url_apub, community, local_follower
-                    ))?;
+                "{}/communities/{}/followers/{}",
+                ctx.host_url_apub, community, local_follower
+            ))?;
 
             let person_ap_id = get_local_person_apub_id(local_follower, &ctx.host_url_apub);
 
@@ -161,7 +173,8 @@ pub async fn send_community_follow(
             Ok(serde_json::to_vec(&follow)?.into())
         },
         fetch_or_create_local_user_privkey(local_follower, &db),
-    ).await?;
+    )
+    .await?;
 
     let mut req = hyper::Request::post(&community_inbox)
         .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
@@ -178,7 +191,10 @@ pub async fn send_community_follow(
                 30,
                 &mut Default::default(),
                 |signing_string| -> Result<_, openssl::error::ErrorStack> {
-                    let mut signer = openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &user_privkey)?;
+                    let mut signer = openssl::sign::Signer::new(
+                        openssl::hash::MessageDigest::sha256(),
+                        &user_privkey,
+                    )?;
                     signer.update(&signing_string)?;
                     Ok(signer.sign_to_vec()?)
                 },
@@ -487,10 +503,7 @@ pub async fn send_comment_to_community(
     create.create_props.set_object_base_box(comment_ap)?;
     create
         .create_props
-        .set_actor_xsd_any_uri(get_local_person_apub_id(
-            author,
-            &ctx.host_url_apub,
-        ))?;
+        .set_actor_xsd_any_uri(get_local_person_apub_id(author, &ctx.host_url_apub))?;
 
     let body = serde_json::to_vec(&create)?.into();
 
