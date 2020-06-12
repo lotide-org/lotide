@@ -14,7 +14,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
                     .with_child(
                         "inbox",
                         crate::RouteNode::new()
-                            .with_handler_async("POST", handler_users_inbox_post),
+                            .with_handler_async("POST", handler_users_inbox_post)
                     ),
             ),
         )
@@ -26,11 +26,19 @@ pub fn route_apub() -> crate::RouteNode<()> {
         )
         .with_child("communities", communities::route_communities())
         .with_child(
+            "inbox",
+            route_inbox(),
+        )
+        .with_child(
             "posts",
             crate::RouteNode::new().with_child_parse::<i64, _>(
                 crate::RouteNode::new().with_handler_async("GET", handler_posts_get),
             ),
         )
+}
+
+pub fn route_inbox() -> crate::RouteNode<()> {
+    crate::RouteNode::new().with_handler_async("POST", handler_inbox_post)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -100,9 +108,12 @@ async fn handler_users_get(
                 .set_id(user_ap_id.as_ref())?
                 .set_name_xsd_string(username)?;
 
-            let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
+            let mut endpoints = activitystreams::endpoint::EndpointProperties::default();
+            endpoints.set_shared_inbox(format!("{}/inbox", ctx.host_url_apub))?;
 
+            let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
             actor_props.set_inbox(format!("{}/users/{}/inbox", ctx.host_url_apub, user_id))?;
+            actor_props.set_endpoints(endpoints)?;
 
             let info = info.extend(actor_props);
 
@@ -133,11 +144,7 @@ async fn handler_users_get(
     }
 }
 
-async fn handler_users_inbox_post(
-    _: (i64,),
-    ctx: Arc<crate::RouteContext>,
-    req: hyper::Request<hyper::Body>,
-) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+async fn inbox_common(ctx: Arc<crate::RouteContext>, req: hyper::Request<hyper::Body>) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let db = ctx.db_pool.get().await?;
 
     let req_activity: activitystreams::activity::ActivityBox = {
@@ -254,6 +261,14 @@ async fn handler_users_inbox_post(
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
 }
 
+async fn handler_users_inbox_post(
+    _: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    inbox_common(ctx, req).await
+}
+
 async fn handler_comments_get(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
@@ -329,6 +344,15 @@ async fn handler_comments_get(
             Ok(resp)
         },
     }
+}
+
+// sharedInbox
+async fn handler_inbox_post(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    inbox_common(ctx, req).await
 }
 
 async fn handler_posts_get(
