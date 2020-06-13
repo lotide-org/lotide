@@ -327,7 +327,7 @@ async fn route_unstable_posts_create(
             if community_local {
                 crate::on_community_add_post(&post, ctx);
             } else {
-                crate::apub_util::send_post_to_community(post, ctx).await?;
+                crate::apub_util::send_local_post_to_community(post, ctx).await?;
             }
         }
 

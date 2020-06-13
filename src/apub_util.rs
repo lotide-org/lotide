@@ -18,6 +18,36 @@ pub fn get_local_community_apub_id(community: i64, host_url_apub: &str) -> Strin
     format!("{}/communities/{}", host_url_apub, community)
 }
 
+pub fn get_local_person_pubkey_apub_id(person: i64, host_url_apub: &str) -> String {
+    format!(
+        "{}#main-key",
+        get_local_person_apub_id(person, host_url_apub)
+    )
+}
+
+pub fn get_local_community_pubkey_apub_id(community: i64, host_url_apub: &str) -> String {
+    format!(
+        "{}#main-key",
+        get_local_community_apub_id(community, host_url_apub)
+    )
+}
+
+pub fn get_path_and_query(url: &str) -> Result<String, url::ParseError> {
+    let url = url::Url::parse(&url)?;
+    Ok(format!("{}{}", url.path(), url.query().unwrap_or("")))
+}
+
+pub const SIG_LIFETIME: u64 = 30;
+
+pub fn do_sign(
+    key: &openssl::pkey::PKey<openssl::pkey::Private>,
+    src: &[u8],
+) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    let mut signer = openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &key)?;
+    signer.update(&src)?;
+    Ok(signer.sign_to_vec()?)
+}
+
 pub async fn get_or_fetch_user_local_id(
     ap_id: &str,
     db: &tokio_postgres::Client,
@@ -119,6 +149,42 @@ pub async fn fetch_or_create_local_user_privkey(
     }
 }
 
+pub async fn fetch_or_create_local_community_privkey(
+    community: i64,
+    db: &tokio_postgres::Client,
+) -> Result<openssl::pkey::PKey<openssl::pkey::Private>, crate::Error> {
+    let row = db
+        .query_one(
+            "SELECT private_key, local FROM community WHERE id=$1",
+            &[&community],
+        )
+        .await?;
+    match row.get(0) {
+        Some(bytes) => Ok(openssl::pkey::PKey::private_key_from_pem(bytes)?),
+        None => {
+            let local: bool = row.get(1);
+            if !local {
+                Err(crate::Error::InternalStr(format!(
+                    "Won't create privkey for community {} because they aren't local",
+                    community,
+                )))
+            } else {
+                let rsa = openssl::rsa::Rsa::generate(crate::KEY_BITS)?;
+                let private_key = rsa.private_key_to_pem()?;
+                let public_key = rsa.public_key_to_pem()?;
+
+                db.execute(
+                    "UPDATE community SET private_key=$1, public_key=$2 WHERE id=$3",
+                    &[&private_key, &public_key, &community],
+                )
+                .await?;
+
+                Ok(openssl::pkey::PKey::from_rsa(rsa)?)
+            }
+        }
+    }
+}
+
 pub async fn send_community_follow(
     community: i64,
     local_follower: i64,
@@ -186,23 +252,14 @@ pub async fn send_community_follow(
         .body(body)?;
 
     {
-        if let Ok(inbox_url) = url::Url::parse(&community_inbox) {
-            let path_and_query = format!("{}{}", inbox_url.path(), inbox_url.query().unwrap_or(""));
-
+        if let Ok(path_and_query) = get_path_and_query(&community_inbox) {
             let signature = hancock::create_signature(
-                &format!("{}/users/{}#main-key", ctx.host_url_apub, local_follower),
+                &get_local_person_pubkey_apub_id(local_follower, &ctx.host_url_apub),
                 &hyper::Method::POST,
                 &path_and_query,
-                30,
+                SIG_LIFETIME,
                 &mut Default::default(),
-                |signing_string| -> Result<_, openssl::error::ErrorStack> {
-                    let mut signer = openssl::sign::Signer::new(
-                        openssl::hash::MessageDigest::sha256(),
-                        &user_privkey,
-                    )?;
-                    signer.update(&signing_string)?;
-                    Ok(signer.sign_to_vec()?)
-                },
+                |src| do_sign(&user_privkey, &src),
             )?;
 
             req.headers_mut().insert("Signature", signature);
@@ -253,47 +310,73 @@ pub async fn send_community_follow_accept(
     follow: activitystreams::activity::Follow,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let community_ap_id = get_local_community_apub_id(local_community, &ctx.host_url_apub);
+    let db = ctx.db_pool.get().await?;
 
-    let follower_inbox = {
-        let db = ctx.db_pool.get().await?;
+    let (val1, community_privkey) = futures::future::try_join(
+        async {
+            let community_ap_id = get_local_community_apub_id(local_community, &ctx.host_url_apub);
 
-        let row = db
-            .query_one(
-                "SELECT local, ap_inbox FROM person WHERE id=$1",
-                &[&follower],
-            )
-            .await?;
+            let follower_inbox = {
+                let row = db
+                    .query_one(
+                        "SELECT local, ap_inbox FROM person WHERE id=$1",
+                        &[&follower],
+                    )
+                    .await?;
 
-        let local = row.get(0);
-        if local {
-            // Shouldn't happen, but fine to ignore it
-            return Ok(());
-        } else {
-            let ap_inbox: Option<String> = row.get(1);
+                let local = row.get(0);
+                if local {
+                    // Shouldn't happen, but fine to ignore it
+                    return Ok(None);
+                } else {
+                    let ap_inbox: Option<String> = row.get(1);
 
-            ap_inbox.ok_or_else(|| {
-                crate::Error::InternalStr(format!("Missing apub info for user {}", follower))
-            })?
+                    ap_inbox.ok_or_else(|| {
+                        crate::Error::InternalStr(format!(
+                            "Missing apub info for user {}",
+                            follower
+                        ))
+                    })?
+                }
+            };
+
+            let mut accept = activitystreams::activity::Accept::new();
+
+            accept.accept_props.set_actor_xsd_any_uri(community_ap_id)?;
+            accept.accept_props.set_object_base_box(follow)?;
+
+            println!("{:?}", accept);
+
+            let body = serde_json::to_vec(&accept)?.into();
+            Ok(Some((
+                get_path_and_query(&follower_inbox),
+                hyper::Request::post(follower_inbox)
+                    .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
+                    .body(body)?,
+            )))
+        },
+        fetch_or_create_local_community_privkey(local_community, &db),
+    )
+    .await?;
+
+    if let Some((path_and_query, mut req)) = val1 {
+        if let Ok(path_and_query) = path_and_query {
+            let signature = hancock::create_signature(
+                &get_local_community_pubkey_apub_id(local_community, &ctx.host_url_apub),
+                &hyper::Method::POST,
+                &path_and_query,
+                SIG_LIFETIME,
+                &mut Default::default(),
+                |src| do_sign(&community_privkey, &src),
+            )?;
+
+            req.headers_mut().insert("Signature", signature);
         }
-    };
 
-    let mut accept = activitystreams::activity::Accept::new();
+        let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
 
-    accept.accept_props.set_actor_xsd_any_uri(community_ap_id)?;
-    accept.accept_props.set_object_base_box(follow)?;
-
-    println!("{:?}", accept);
-
-    let body = serde_json::to_vec(&accept)?.into();
-
-    let req = hyper::Request::post(follower_inbox)
-        .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
-        .body(body)?;
-
-    let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
-
-    println!("{:?}", res);
+        println!("{:?}", res);
+    }
 
     Ok(())
 }
@@ -423,65 +506,89 @@ pub fn local_community_comment_to_announce_ap(
     Ok(announce)
 }
 
-pub async fn send_post_to_community(
+pub async fn send_local_post_to_community(
     post: crate::PostInfo<'_>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let (community_ap_id, community_inbox): (String, String) = {
-        let db = ctx.db_pool.get().await?;
+    let db = ctx.db_pool.get().await?;
 
-        let row = db
-            .query_one(
-                "SELECT local, ap_id, ap_inbox FROM community WHERE id=$1",
-                &[&post.community],
-            )
-            .await?;
-        let local = row.get(0);
-        if local {
-            // no need to send posts for local communities
-            return Ok(());
-        } else {
-            let ap_id = row.get(1);
-            let ap_inbox = row.get(2);
-
-            (if let Some(ap_id) = ap_id {
-                if let Some(ap_inbox) = ap_inbox {
-                    Some((ap_id, ap_inbox))
+    let (val1, user_privkey) = futures::future::try_join(
+        async {
+            let (community_ap_id, community_inbox): (String, String) = {
+                let row = db
+                    .query_one(
+                        "SELECT local, ap_id, ap_inbox FROM community WHERE id=$1",
+                        &[&post.community],
+                    )
+                    .await?;
+                let local = row.get(0);
+                if local {
+                    // no need to send posts for local communities
+                    return Ok(None);
                 } else {
-                    None
+                    let ap_id = row.get(1);
+                    let ap_inbox = row.get(2);
+
+                    (if let Some(ap_id) = ap_id {
+                        if let Some(ap_inbox) = ap_inbox {
+                            Some((ap_id, ap_inbox))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    })
+                    .ok_or_else(|| {
+                        crate::Error::InternalStr(format!(
+                            "Missing apub info for community {}",
+                            post.community
+                        ))
+                    })?
                 }
-            } else {
-                None
-            })
-            .ok_or_else(|| {
-                crate::Error::InternalStr(format!(
-                    "Missing apub info for community {}",
-                    post.community
-                ))
-            })?
+            };
+
+            let post_ap = post_to_ap(&post, &community_ap_id, &ctx.host_url_apub)?;
+
+            let mut create = activitystreams::activity::Create::new();
+            create.create_props.set_object_base_box(post_ap)?;
+            create
+                .create_props
+                .set_actor_xsd_any_uri(get_local_person_apub_id(
+                    post.author.unwrap(),
+                    &ctx.host_url_apub,
+                ))?;
+
+            let body = serde_json::to_vec(&create)?.into();
+
+            Ok(Some((
+                get_path_and_query(&community_inbox),
+                hyper::Request::post(community_inbox)
+                    .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
+                    .body(body)?,
+            )))
+        },
+        fetch_or_create_local_user_privkey(post.author.unwrap(), &db),
+    )
+    .await?;
+
+    if let Some((path_and_query, mut req)) = val1 {
+        if let Ok(path_and_query) = path_and_query {
+            let signature = hancock::create_signature(
+                &get_local_person_pubkey_apub_id(post.author.unwrap(), &ctx.host_url_apub),
+                &hyper::Method::POST,
+                &path_and_query,
+                SIG_LIFETIME,
+                &mut Default::default(),
+                |src| do_sign(&user_privkey, &src),
+            )?;
+
+            req.headers_mut().insert("Signature", signature);
         }
-    };
 
-    let post_ap = post_to_ap(&post, &community_ap_id, &ctx.host_url_apub)?;
+        let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
 
-    let mut create = activitystreams::activity::Create::new();
-    create.create_props.set_object_base_box(post_ap)?;
-    create
-        .create_props
-        .set_actor_xsd_any_uri(get_local_person_apub_id(
-            post.author.unwrap(),
-            &ctx.host_url_apub,
-        ))?;
-
-    let body = serde_json::to_vec(&create)?.into();
-
-    let req = hyper::Request::post(community_inbox)
-        .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
-        .body(body)?;
-
-    let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
-
-    println!("{:?}", res);
+        println!("{:?}", res);
+    }
 
     Ok(())
 }
@@ -512,9 +619,27 @@ pub async fn send_comment_to_community(
 
     let body = serde_json::to_vec(&create)?.into();
 
-    let req = hyper::Request::post(community_ap_inbox)
+    let mut req = hyper::Request::post(community_ap_inbox)
         .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
         .body(body)?;
+
+    let user_privkey = {
+        let db = ctx.db_pool.get().await?;
+        fetch_or_create_local_user_privkey(author, &db).await?
+    };
+
+    if let Ok(path_and_query) = get_path_and_query(&community_ap_inbox) {
+        let signature = hancock::create_signature(
+            &get_local_person_pubkey_apub_id(author, &ctx.host_url_apub),
+            &hyper::Method::POST,
+            &path_and_query,
+            SIG_LIFETIME,
+            &mut Default::default(),
+            |src| do_sign(&user_privkey, &src),
+        )?;
+
+        req.headers_mut().insert("Signature", signature);
+    }
 
     let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
 
@@ -533,31 +658,57 @@ async fn send_to_community_followers(
 
     let db = ctx.db_pool.get().await?;
 
-    let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id];
+    let ((inboxes, body), community_privkey) = futures::future::try_join(
+        async {
+            let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id];
 
-    let stream = db.query_raw(
-        "SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) FROM community_follow, person WHERE person.id = community_follow.follower AND person.local = FALSE AND community = $1",
-        values.iter().map(|s| *s as _)
+            let stream = db.query_raw(
+                "SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) FROM community_follow, person WHERE person.id = community_follow.follower AND person.local = FALSE AND community = $1",
+                values.iter().map(|s| *s as _)
+            ).await?;
+
+            let inboxes: std::collections::HashSet<String> =
+                stream.map_ok(|row| row.get(0)).try_collect().await?;
+
+            let body: bytes::Bytes = serde_json::to_vec(&announce)?.into();
+
+            Ok((inboxes, body))
+        },
+        fetch_or_create_local_community_privkey(community_id, &db),
     ).await?;
-
-    let inboxes: std::collections::HashSet<String> =
-        stream.map_ok(|row| row.get(0)).try_collect().await?;
-
-    let body: bytes::Bytes = serde_json::to_vec(&announce)?.into();
 
     let requests: futures::stream::FuturesUnordered<_> = inboxes
         .into_iter()
-        .filter_map(
-            |inbox| match hyper::Request::post(inbox).body(body.clone().into()) {
+        .filter_map(|inbox| {
+            let path_and_query_res = get_path_and_query(&inbox);
+            match hyper::Request::post(inbox).body(body.clone().into()) {
                 Err(err) => {
                     eprintln!("Failed to construct inbox post: {:?}", err);
 
                     None
                 }
-                Ok(req) => Some(req),
-            },
-        )
-        .map(|req| {
+                Ok(req) => Some((req, path_and_query_res)),
+            }
+        })
+        .map(|(mut req, path_and_query_res)| {
+            if let Ok(path_and_query) = path_and_query_res {
+                match hancock::create_signature(
+                    &get_local_community_pubkey_apub_id(community_id, &ctx.host_url_apub),
+                    &hyper::Method::POST,
+                    &path_and_query,
+                    SIG_LIFETIME,
+                    &mut Default::default(),
+                    |src| do_sign(&community_privkey, &src),
+                ) {
+                    Ok(signature) => {
+                        req.headers_mut().insert("Signature", signature);
+                    }
+                    Err(err) => {
+                        eprintln!("Failed to create signature: {:?}", err);
+                    }
+                }
+            }
+
             ctx.http_client
                 .request(req)
                 .map_err(crate::Error::from)
