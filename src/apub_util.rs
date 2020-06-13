@@ -517,7 +517,7 @@ pub async fn send_local_post_to_community(
             let (community_ap_id, community_inbox): (String, String) = {
                 let row = db
                     .query_one(
-                        "SELECT local, ap_id, ap_inbox FROM community WHERE id=$1",
+                        "SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox) FROM community WHERE id=$1",
                         &[&post.community],
                     )
                     .await?;

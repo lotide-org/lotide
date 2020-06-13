@@ -159,20 +159,30 @@ async fn route_unstable_actors_lookup(
     > = serde_json::from_slice(&body)?;
 
     let name = group.as_ref().get_name_xsd_string();
-    let ap_inbox = group.extension.get_inbox();
+    let ap_inbox = group.extension.get_inbox().as_str();
+    let ap_shared_inbox = group
+        .extension
+        .get_endpoints()
+        .and_then(|endpoints| endpoints.get_shared_inbox())
+        .map(|x| x.as_str());
 
     if let Some(name) = name {
-        db.execute(
-            "INSERT INTO community (name, local, ap_id, ap_inbox) VALUES ($1, FALSE, $2, $3)",
-            &[&name.as_str(), &query, &ap_inbox.as_str()],
+        let row = db.query_one(
+            "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox) VALUES ($1, FALSE, $2, $3, $4) ON CONFLICT (ap_id) DO UPDATE SET name=$1, ap_inbox=$3, ap_shared_inbox=$4 RETURNING id",
+            &[&name.as_str(), &query, &ap_inbox, &ap_shared_inbox],
         )
         .await?;
-    }
 
-    Ok(crate::simple_response(
-        hyper::StatusCode::ACCEPTED,
-        "accepted",
-    ))
+        let new_id: i64 = row.get(0);
+
+        Ok(hyper::Response::builder()
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(serde_json::to_vec(&serde_json::json!([{ "id": new_id }]))?.into())?)
+    } else {
+        Ok(hyper::Response::builder()
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body(serde_json::to_vec(&serde_json::json!([]))?.into())?)
+    }
 }
 
 async fn route_unstable_logins_create(
