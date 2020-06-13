@@ -690,7 +690,7 @@ async fn handle_recieved_post(
     };
 
     db.execute(
-        "INSERT INTO post (author, href, content_text, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), $6, FALSE, $7)",
+        "INSERT INTO post (author, href, content_text, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), $6, FALSE, $7) ON CONFLICT (ap_id) DO NOTHING",
         &[&author, &href, &content_text, &title, &created, &community_local_id, &object_id],
     ).await?;
 
@@ -724,6 +724,7 @@ async fn handle_recieved_reply(
     };
 
     let last_reply_to = in_reply_to.last(); // TODO maybe not this? Not sure how to interpret inReplyTo
+
     if let Some(last_reply_to) = last_reply_to {
         if let activitystreams::object::properties::ObjectPropertiesInReplyToTermEnum::XsdAnyUri(
             term_ap_id,
@@ -780,7 +781,7 @@ async fn handle_recieved_reply(
                 };
 
                 db.execute(
-                    "INSERT INTO reply (post, parent, author, content_text, created, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), FALSE, $6)",
+                    "INSERT INTO reply (post, parent, author, content_text, created, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), FALSE, $6) ON CONFLICT (ap_id) DO NOTHING",
                     &[&post, &parent, &author, &content_text, &created, &object_id],
                     ).await?;
             }
