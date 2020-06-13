@@ -14,7 +14,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
                     .with_child(
                         "inbox",
                         crate::RouteNode::new()
-                            .with_handler_async("POST", handler_users_inbox_post)
+                            .with_handler_async("POST", handler_users_inbox_post),
                     ),
             ),
         )
@@ -25,10 +25,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
             ),
         )
         .with_child("communities", communities::route_communities())
-        .with_child(
-            "inbox",
-            route_inbox(),
-        )
+        .with_child("inbox", route_inbox())
         .with_child(
             "posts",
             crate::RouteNode::new().with_child_parse::<i64, _>(
@@ -144,7 +141,10 @@ async fn handler_users_get(
     }
 }
 
-async fn inbox_common(ctx: Arc<crate::RouteContext>, req: hyper::Request<hyper::Body>) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+async fn inbox_common(
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let db = ctx.db_pool.get().await?;
 
     let req_activity: activitystreams::activity::ActivityBox = {

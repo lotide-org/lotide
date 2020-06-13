@@ -68,10 +68,15 @@ pub async fn get_or_fetch_user_local_id(
                     .map(|x| x.as_str())
                     .unwrap_or("");
                 let inbox = person.extension.inbox.as_str();
+                let shared_inbox = person
+                    .extension
+                    .get_endpoints()
+                    .and_then(|endpoints| endpoints.get_shared_inbox())
+                    .map(|url| url.as_str());
 
                 Ok(db.query_one(
-                    "INSERT INTO person (username, local, created_local, ap_id, ap_inbox) VALUES ($1, FALSE, localtimestamp, $2, $3) RETURNING id",
-                    &[&username, &ap_id, &inbox],
+                    "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox) VALUES ($1, FALSE, localtimestamp, $2, $3, $4) RETURNING id",
+                    &[&username, &ap_id, &inbox, &shared_inbox],
                 ).await?.get(0))
             }
         }
@@ -531,7 +536,7 @@ async fn send_to_community_followers(
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id];
 
     let stream = db.query_raw(
-        "SELECT ap_inbox FROM community_follow, person WHERE person.id = community_follow.follower AND person.local = FALSE AND community = $1",
+        "SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) FROM community_follow, person WHERE person.id = community_follow.follower AND person.local = FALSE AND community = $1",
         values.iter().map(|s| *s as _)
     ).await?;
 
