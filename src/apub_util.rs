@@ -766,11 +766,14 @@ async fn handle_recieved_reply(
                 }
             } else {
                 let row = db
-                    .query_opt("SELECT id, post FROM reply WHERE ap_id=$1", &[&term_ap_id])
+                    .query_opt("(SELECT id, post FROM reply WHERE ap_id=$1) UNION (SELECT NULL, id FROM post WHERE ap_id=$1) LIMIT 1", &[&term_ap_id])
                     .await?;
-                row.map(|row| ReplyTarget::Comment {
-                    id: row.get(0),
-                    post: row.get(1),
+                row.map(|row| match row.get(0) {
+                    Some(reply_id) => ReplyTarget::Comment {
+                        id: reply_id,
+                        post: row.get(1),
+                    },
+                    None => ReplyTarget::Post { id: row.get(1) },
                 })
             };
 
