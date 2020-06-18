@@ -15,8 +15,7 @@ pub fn route_root() -> crate::RouteNode<()> {
 }
 
 fn route_webfinger() -> crate::RouteNode<()> {
-    crate::RouteNode::new()
-        .with_handler_async("GET", handler_webfinger_get)
+    crate::RouteNode::new().with_handler_async("GET", handler_webfinger_get)
 }
 
 async fn handler_webfinger_get(
@@ -29,7 +28,8 @@ async fn handler_webfinger_get(
         resource: Cow<'a, str>,
     }
 
-    let query: FingerRequestQuery<'_> = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    let query: FingerRequestQuery<'_> =
+        serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
     enum LocalRef<'a> {
         UserID(i64),
@@ -62,7 +62,9 @@ async fn handler_webfinger_get(
         } else {
             None
         }
-    } else if query.resource.starts_with("acct:") && query.resource.ends_with(&format!("@{}", local_hostname)) {
+    } else if query.resource.starts_with("acct:")
+        && query.resource.ends_with(&format!("@{}", local_hostname))
+    {
         let name = &query.resource[5..(query.resource.len() - (local_hostname.len() + 1))];
 
         Some(LocalRef::Name(name))
@@ -74,17 +76,17 @@ async fn handler_webfinger_get(
 
     let found: Option<(LTActorType, i64, Cow<'_, str>)> = match found_ref {
         Some(LocalRef::UserID(id)) => {
-            let row = db.query_opt("SELECT username FROM person WHERE id=$1 AND local", &[&id]).await?;
-            row.map(|row| {
-                (LTActorType::User, id, Cow::Owned(row.get(0)))
-            })
-        },
+            let row = db
+                .query_opt("SELECT username FROM person WHERE id=$1 AND local", &[&id])
+                .await?;
+            row.map(|row| (LTActorType::User, id, Cow::Owned(row.get(0))))
+        }
         Some(LocalRef::CommunityID(id)) => {
-            let row = db.query_opt("SELECT name FROM community WHERE id=$1 AND local", &[&id]).await?;
-            row.map(|row| {
-                (LTActorType::Community, id, Cow::Owned(row.get(0)))
-            })
-        },
+            let row = db
+                .query_opt("SELECT name FROM community WHERE id=$1 AND local", &[&id])
+                .await?;
+            row.map(|row| (LTActorType::Community, id, Cow::Owned(row.get(0))))
+        }
         Some(LocalRef::Name(name)) => {
             let row = db.query_opt("(SELECT FALSE, id FROM person WHERE username=$1 AND local) UNION ALL (SELECT TRUE, id FROM community WHERE name=$1 AND local) LIMIT 1", &[&name]).await?;
             row.map(|row| {
@@ -98,21 +100,23 @@ async fn handler_webfinger_get(
                     name.into(),
                 )
             })
-        },
-        None => None
+        }
+        None => None,
     };
 
     Ok(match found {
-        None => crate::simple_response(hyper::StatusCode::NOT_FOUND, "Nothing found for that query"),
+        None => {
+            crate::simple_response(hyper::StatusCode::NOT_FOUND, "Nothing found for that query")
+        }
         Some((ty, id, name)) => {
             let subject = format!("acct:{}@{}", name, local_hostname);
             let alias = match ty {
                 LTActorType::User => {
                     crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub)
-                },
+                }
                 LTActorType::Community => {
                     crate::apub_util::get_local_community_apub_id(id, &ctx.host_url_apub)
-                },
+                }
             };
 
             let body = serde_json::json!({
@@ -132,6 +136,6 @@ async fn handler_webfinger_get(
             hyper::Response::builder()
                 .header(hyper::header::CONTENT_TYPE, "application/jrd+json")
                 .body(body)?
-        },
+        }
     })
 }
