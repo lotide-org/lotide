@@ -26,7 +26,7 @@ async fn handler_webfinger_get(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     #[derive(Deserialize, Debug)]
     struct FingerRequestQuery<'a> {
-        resource: &'a str,
+        resource: Cow<'a, str>,
     }
 
     let query: FingerRequestQuery<'_> = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
