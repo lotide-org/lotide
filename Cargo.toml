@@ -28,3 +28,4 @@ bytes = "0.5.4"
 either = "1.5.3"
 openssl = "0.10.29"
 hancock = { git = "https://git.sr.ht/~vpzom/hancock", rev = "6ecad6d36" }
+serde_urlencoded = "0.6.1"
