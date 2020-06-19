@@ -444,6 +444,29 @@ pub fn post_to_ap(
     }
 }
 
+pub fn local_post_to_create_ap(
+    post: &crate::PostInfo<'_>,
+    community_ap_id: &str,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Create, crate::Error> {
+    let post_ap = post_to_ap(&post, &community_ap_id, &host_url_apub)?;
+
+    let mut create = activitystreams::activity::Create::new();
+    create
+        .create_props
+        .set_object_base_box(post_ap)?
+        .set_actor_xsd_any_uri(get_local_person_apub_id(
+            post.author.unwrap(),
+            &host_url_apub,
+        ))?;
+    create.object_props.set_id(format!(
+        "{}/create",
+        get_local_post_apub_id(post.id, host_url_apub)
+    ))?;
+
+    Ok(create)
+}
+
 pub fn local_comment_to_ap(
     comment: &crate::CommentInfo,
     post_ap_id: &str,
@@ -561,17 +584,7 @@ pub async fn send_local_post_to_community(
                 }
             };
 
-            let post_ap = post_to_ap(&post, &community_ap_id, &ctx.host_url_apub)?;
-
-            let mut create = activitystreams::activity::Create::new();
-            create.create_props.set_object_base_box(post_ap)?;
-            create
-                .create_props
-                .set_actor_xsd_any_uri(get_local_person_apub_id(
-                    post.author.unwrap(),
-                    &ctx.host_url_apub,
-                ))?;
-
+            let create = local_post_to_create_ap(&post, &community_ap_id, &ctx.host_url_apub)?;
             let body = serde_json::to_vec(&create)?.into();
 
             Ok(Some((

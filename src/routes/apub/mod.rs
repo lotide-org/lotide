@@ -29,7 +29,12 @@ pub fn route_apub() -> crate::RouteNode<()> {
         .with_child(
             "posts",
             crate::RouteNode::new().with_child_parse::<i64, _>(
-                crate::RouteNode::new().with_handler_async("GET", handler_posts_get),
+                crate::RouteNode::new()
+                    .with_handler_async("GET", handler_posts_get)
+                    .with_child(
+                        "create",
+                        crate::RouteNode::new().with_handler_async("GET", handler_posts_create_get),
+                    ),
             ),
         )
 }
@@ -405,6 +410,70 @@ async fn handler_posts_get(
             };
 
             let body = crate::apub_util::post_to_ap(&post_info, &community_ap_id, &ctx.host_url_apub)?;
+
+            let body = serde_json::to_vec(&body)?.into();
+
+            let mut resp = hyper::Response::new(body);
+            resp.headers_mut().insert(
+                hyper::header::CONTENT_TYPE,
+                hyper::header::HeaderValue::from_static(crate::apub_util::ACTIVITY_TYPE),
+            );
+
+            Ok(resp)
+        },
+    }
+}
+
+async fn handler_posts_create_get(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+    let db = ctx.db_pool.get().await?;
+
+    match db
+        .query_opt(
+            "SELECT author, href, content_text, title, created, community, local, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
+            &[&post_id],
+        )
+        .await?
+    {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such post",
+        )),
+        Some(row) => {
+            let local: bool = row.get(6);
+
+            if !local {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested post is not owned by this instance",
+                )));
+            }
+
+            let community_local_id = row.get(5);
+
+            let community_ap_id = match row.get(7) {
+                Some(ap_id) => ap_id,
+                None => {
+                    // assume local (might be a problem?)
+                    crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+                }
+            };
+
+            let post_info = crate::PostInfo {
+                author: row.get(0),
+                community: community_local_id,
+                created: &row.get(4),
+                href: row.get(1),
+                content_text: row.get(2),
+                id: post_id,
+                title: row.get(3),
+            };
+
+            let body = crate::apub_util::local_post_to_create_ap(&post_info, &community_ap_id, &ctx.host_url_apub)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
