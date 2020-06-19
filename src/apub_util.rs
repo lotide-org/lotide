@@ -37,7 +37,13 @@ pub fn get_path_and_query(url: &str) -> Result<String, url::ParseError> {
     Ok(format!("{}{}", url.path(), url.query().unwrap_or("")))
 }
 
-pub const SIG_LIFETIME: u64 = 30;
+pub fn now_http_date() -> hyper::header::HeaderValue {
+    chrono::offset::Utc::now()
+        .format("%a, %d %b %Y %T GMT")
+        .to_string()
+        .parse()
+        .unwrap()
+}
 
 pub fn do_sign(
     key: &openssl::pkey::PKey<openssl::pkey::Private>,
@@ -253,16 +259,20 @@ pub async fn send_community_follow(
 
     {
         if let Ok(path_and_query) = get_path_and_query(&community_inbox) {
-            let signature = hancock::create_signature(
-                &get_local_person_pubkey_apub_id(local_follower, &ctx.host_url_apub),
+            req.headers_mut()
+                .insert(hyper::header::DATE, now_http_date());
+
+            let key_id = get_local_person_pubkey_apub_id(local_follower, &ctx.host_url_apub);
+
+            let signature = hancock::Signature::create_legacy(
+                &key_id,
                 &hyper::Method::POST,
                 &path_and_query,
-                SIG_LIFETIME,
-                &mut Default::default(),
+                req.headers(),
                 |src| do_sign(&user_privkey, &src),
             )?;
 
-            req.headers_mut().insert("Signature", signature);
+            req.headers_mut().insert("Signature", signature.to_header());
         }
     }
 
@@ -361,16 +371,20 @@ pub async fn send_community_follow_accept(
 
     if let Some((path_and_query, mut req)) = val1 {
         if let Ok(path_and_query) = path_and_query {
-            let signature = hancock::create_signature(
-                &get_local_community_pubkey_apub_id(local_community, &ctx.host_url_apub),
+            req.headers_mut()
+                .insert(hyper::header::DATE, now_http_date());
+
+            let key_id = get_local_community_pubkey_apub_id(local_community, &ctx.host_url_apub);
+
+            let signature = hancock::Signature::create_legacy(
+                &key_id,
                 &hyper::Method::POST,
                 &path_and_query,
-                SIG_LIFETIME,
-                &mut Default::default(),
+                req.headers(),
                 |src| do_sign(&community_privkey, &src),
             )?;
 
-            req.headers_mut().insert("Signature", signature);
+            req.headers_mut().insert("Signature", signature.to_header());
         }
 
         let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
@@ -573,16 +587,20 @@ pub async fn send_local_post_to_community(
 
     if let Some((path_and_query, mut req)) = val1 {
         if let Ok(path_and_query) = path_and_query {
-            let signature = hancock::create_signature(
-                &get_local_person_pubkey_apub_id(post.author.unwrap(), &ctx.host_url_apub),
+            req.headers_mut()
+                .insert(hyper::header::DATE, now_http_date());
+
+            let key_id = get_local_person_pubkey_apub_id(post.author.unwrap(), &ctx.host_url_apub);
+
+            let signature = hancock::Signature::create_legacy(
+                &key_id,
                 &hyper::Method::POST,
                 &path_and_query,
-                SIG_LIFETIME,
-                &mut Default::default(),
+                req.headers(),
                 |src| do_sign(&user_privkey, &src),
             )?;
 
-            req.headers_mut().insert("Signature", signature);
+            req.headers_mut().insert("Signature", signature.to_header());
         }
 
         let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
@@ -629,16 +647,20 @@ pub async fn send_comment_to_community(
     };
 
     if let Ok(path_and_query) = get_path_and_query(&community_ap_inbox) {
-        let signature = hancock::create_signature(
-            &get_local_person_pubkey_apub_id(author, &ctx.host_url_apub),
+        req.headers_mut()
+            .insert(hyper::header::DATE, now_http_date());
+
+        let key_id = get_local_person_pubkey_apub_id(author, &ctx.host_url_apub);
+
+        let signature = hancock::Signature::create_legacy(
+            &key_id,
             &hyper::Method::POST,
             &path_and_query,
-            SIG_LIFETIME,
-            &mut Default::default(),
+            req.headers(),
             |src| do_sign(&user_privkey, &src),
         )?;
 
-        req.headers_mut().insert("Signature", signature);
+        req.headers_mut().insert("Signature", signature.to_header());
     }
 
     let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
@@ -692,16 +714,18 @@ async fn send_to_community_followers(
         })
         .map(|(mut req, path_and_query_res)| {
             if let Ok(path_and_query) = path_and_query_res {
-                match hancock::create_signature(
+                req.headers_mut()
+                    .insert(hyper::header::DATE, now_http_date());
+
+                match hancock::Signature::create_legacy(
                     &get_local_community_pubkey_apub_id(community_id, &ctx.host_url_apub),
                     &hyper::Method::POST,
                     &path_and_query,
-                    SIG_LIFETIME,
-                    &mut Default::default(),
+                    req.headers(),
                     |src| do_sign(&community_privkey, &src),
                 ) {
                     Ok(signature) => {
-                        req.headers_mut().insert("Signature", signature);
+                        req.headers_mut().insert("Signature", signature.to_header());
                     }
                     Err(err) => {
                         eprintln!("Failed to create signature: {:?}", err);

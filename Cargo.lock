@@ -462,7 +462,7 @@ dependencies = [
 [[package]]
 name = "hancock"
 version = "0.1.0"
-source = "git+https://git.sr.ht/~vpzom/hancock?rev=6ecad6d36#6ecad6d36736f226e4fe298542cd5f4584af696f"
+source = "git+https://git.sr.ht/~vpzom/hancock?rev=89dc2bc#89dc2bc04a0b331077f4a383b21df5120fa2c17d"
 dependencies = [
  "base64",
  "http",
