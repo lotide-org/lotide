@@ -19,10 +19,14 @@ async fn route_unstable_communities_create(
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let body: CommunitiesCreateBody<'_> = serde_json::from_slice(&body)?;
 
+    let rsa = openssl::rsa::Rsa::generate(crate::KEY_BITS)?;
+    let private_key = rsa.private_key_to_pem()?;
+    let public_key = rsa.public_key_to_pem()?;
+
     let row = db
         .query_one(
-            "INSERT INTO community (name, local) VALUES ($1, TRUE) RETURNING id",
-            &[&body.name],
+            "INSERT INTO community (name, local, private_key, public_key) VALUES ($1, TRUE, $2, $3) RETURNING id",
+            &[&body.name, &private_key, &public_key],
         )
         .await?;
 

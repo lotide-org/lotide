@@ -51,7 +51,7 @@ async fn handler_communities_get(
 
     match db
         .query_opt(
-            "SELECT name, local FROM community WHERE id=$1",
+            "SELECT name, local, public_key FROM community WHERE id=$1",
             &[&community_id],
         )
         .await?
@@ -63,6 +63,15 @@ async fn handler_communities_get(
         Some(row) => {
             let name: String = row.get(0);
             let local: bool = row.get(1);
+            let public_key =
+                row.get::<_, Option<&[u8]>>(2)
+                    .and_then(|bytes| match std::str::from_utf8(bytes) {
+                        Ok(key) => Some(key),
+                        Err(err) => {
+                            eprintln!("Warning: public_key is not UTF-8: {:?}", err);
+                            None
+                        }
+                    });
 
             if !local {
                 return Err(crate::Error::UserError(crate::simple_response(
@@ -71,12 +80,12 @@ async fn handler_communities_get(
                 )));
             }
 
+            let community_ap_id =
+                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub);
+
             let mut info = activitystreams::actor::Group::new();
             info.as_mut()
-                .set_id(crate::apub_util::get_local_community_apub_id(
-                    community_id,
-                    &ctx.host_url_apub,
-                ))?
+                .set_id(community_ap_id.as_ref())?
                 .set_name_xsd_string(name)?;
 
             let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
@@ -92,7 +101,28 @@ async fn handler_communities_get(
 
             let info = info.extend(actor_props);
 
-            let mut resp = hyper::Response::new(serde_json::to_vec(&info)?.into());
+            let key_id = format!(
+                "{}/communities/{}#main-key",
+                ctx.host_url_apub, community_id
+            );
+
+            let body = if let Some(public_key) = public_key {
+                let public_key_ext = crate::apub_util::PublicKeyExtension {
+                    public_key: Some(crate::apub_util::PublicKey {
+                        id: (&key_id).into(),
+                        owner: (&community_ap_id).into(),
+                        public_key_pem: public_key.into(),
+                    }),
+                };
+
+                let info = info.extend(public_key_ext);
+
+                serde_json::to_vec(&info)
+            } else {
+                serde_json::to_vec(&info)
+            }?;
+
+            let mut resp = hyper::Response::new(body.into());
             resp.headers_mut().insert(
                 hyper::header::CONTENT_TYPE,
                 hyper::header::HeaderValue::from_static("application/activity+json"),
