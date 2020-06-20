@@ -272,18 +272,14 @@ async fn handler_communities_inbox_post(
     let (community_id,) = params;
     let db = ctx.db_pool.get().await?;
 
-    let req_activity: activitystreams::activity::ActivityBox = {
-        let body = hyper::body::to_bytes(req.into_body()).await?;
+    let activity = crate::apub_util::verify_incoming_activity(req, &db, &ctx.http_client).await?;
 
-        serde_json::from_slice(&body)?
-    };
-
-    match req_activity.kind() {
+    match activity.kind() {
         Some("Create") => {
-            let req_activity = req_activity
+            let activity = activity
                 .into_concrete::<activitystreams::activity::Create>()
                 .unwrap();
-            let req_obj = req_activity.create_props.object;
+            let req_obj = activity.create_props.object;
             if let activitystreams::activity::properties::ActorAndObjectPropertiesObjectEnum::Term(
                 req_obj,
             ) = req_obj
@@ -335,31 +331,9 @@ async fn handler_communities_inbox_post(
             }
         }
         Some("Follow") => {
-            let req_follow = req_activity
+            let follow = activity
                 .into_concrete::<activitystreams::activity::Follow>()
                 .unwrap();
-
-            let activity_id = req_follow.object_props.id.ok_or_else(|| {
-                crate::Error::UserError(crate::simple_response(
-                    hyper::StatusCode::BAD_REQUEST,
-                    "Missing id in object",
-                ))
-            })?;
-
-            let res = crate::res_to_error(
-                ctx.http_client
-                    .request(
-                        hyper::Request::get(activity_id.as_str())
-                            .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
-                            .body(Default::default())?,
-                    )
-                    .await?,
-            )
-            .await?;
-
-            let body = hyper::body::to_bytes(res.into_body()).await?;
-
-            let follow: activitystreams::activity::Follow = serde_json::from_slice(&body)?;
 
             let follower_ap_id = follow.follow_props.get_actor_xsd_any_uri();
             let target_community = follow.follow_props.get_object_xsd_any_uri();
