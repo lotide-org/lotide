@@ -38,6 +38,12 @@ impl<T: 'static + std::error::Error + Send> From<T> for Error {
     }
 }
 
+#[derive(Debug)]
+pub enum APIDOrLocal {
+    Local,
+    APID(String),
+}
+
 pub struct PostInfo<'a> {
     id: i64,
     author: Option<i64>,
@@ -55,6 +61,7 @@ pub struct CommentInfo {
     parent: Option<i64>,
     content_text: String,
     created: chrono::DateTime<chrono::FixedOffset>,
+    ap_id: APIDOrLocal,
 }
 
 pub const KEY_BITS: u32 = 2048;
@@ -173,25 +180,28 @@ pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 's
     }));
 }
 
-pub fn on_community_add_post<'a>(post: &'a PostInfo<'a>, ctx: Arc<crate::RouteContext>) {
+pub fn on_community_add_post<'a>(
+    community: i64,
+    post_local_id: i64,
+    post_ap_id: &str,
+    ctx: Arc<crate::RouteContext>,
+) {
     println!("on_community_add_post");
-    crate::apub_util::spawn_announce_community_post(post, ctx);
+    crate::apub_util::spawn_announce_community_post(community, post_local_id, post_ap_id, ctx);
 }
 
 pub fn on_community_add_comment(
-    comment: CommentInfo,
-    post_ap_id: String,
-    parent_ap_id: Option<String>,
     community: i64,
+    comment_local_id: i64,
+    comment_ap_id: &str,
     ctx: Arc<crate::RouteContext>,
 ) {
-    crate::spawn_task(crate::apub_util::announce_community_comment(
-        comment,
-        post_ap_id,
-        parent_ap_id,
+    crate::apub_util::spawn_announce_community_comment(
         community,
+        comment_local_id,
+        comment_ap_id,
         ctx,
-    ));
+    );
 }
 
 pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) {
@@ -236,16 +246,17 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                 row.get(5)
             };
 
+            let comment_ap_id = match &comment.ap_id {
+                crate::APIDOrLocal::APID(apid) => Cow::Borrowed(apid),
+                crate::APIDOrLocal::Local => Cow::Owned(
+                    crate::apub_util::get_local_comment_apub_id(comment.id, &ctx.host_url_apub),
+                ),
+            };
+
             if let Some(post_ap_id) = post_ap_id {
                 if community_local {
                     let community = row.get(0);
-                    crate::on_community_add_comment(
-                        comment,
-                        post_ap_id,
-                        parent_ap_id,
-                        community,
-                        ctx,
-                    );
+                    crate::on_community_add_comment(community, comment.id, &comment_ap_id, ctx);
                 } else {
                     crate::apub_util::send_comment_to_community(
                         comment,

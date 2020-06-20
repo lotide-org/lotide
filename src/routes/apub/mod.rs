@@ -288,6 +288,7 @@ async fn handler_comments_get(
                 id: comment_id,
                 post: post_local_id,
                 parent: parent_local_id,
+                ap_id: crate::APIDOrLocal::Local,
             };
 
             let parent_ap_id = match row.get(11) {

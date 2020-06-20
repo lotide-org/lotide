@@ -335,7 +335,12 @@ async fn route_unstable_posts_create(
 
         if let Some(community_local) = community_local {
             if community_local {
-                crate::on_community_add_post(&post, ctx);
+                crate::on_community_add_post(
+                    post.community,
+                    post.id,
+                    &crate::apub_util::get_local_post_apub_id(post.id, &ctx.host_url_apub),
+                    ctx,
+                );
             } else {
                 crate::apub_util::send_local_post_to_community(post, ctx).await?;
             }
@@ -632,6 +637,7 @@ async fn route_unstable_posts_replies_create(
         parent: None,
         content_text: body.content_text.to_owned(),
         created,
+        ap_id: crate::APIDOrLocal::Local,
     };
 
     crate::on_post_add_comment(comment, ctx);
@@ -759,6 +765,7 @@ async fn route_unstable_comments_replies_create(
         parent: Some(parent_id),
         content_text: body.content_text.to_owned(),
         created,
+        ap_id: crate::APIDOrLocal::Local,
     };
 
     crate::on_post_add_comment(info, ctx);

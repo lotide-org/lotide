@@ -406,35 +406,90 @@ pub async fn send_community_follow(
     Ok(())
 }
 
-pub fn spawn_announce_community_post(post: &crate::PostInfo<'_>, ctx: Arc<crate::RouteContext>) {
+pub fn local_community_post_announce_ap(
+    community_id: i64,
+    post_local_id: i64,
+    post_ap_id: &str,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Announce, crate::Error> {
+    let mut announce = activitystreams::activity::Announce::new();
+
+    let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
+
+    announce.object_props.set_id(format!(
+        "{}/posts/{}/announce",
+        community_ap_id, post_local_id,
+    ))?;
+
+    announce
+        .announce_props
+        .set_actor_xsd_any_uri(community_ap_id)?;
+    announce.announce_props.set_object_xsd_any_uri(post_ap_id)?;
+
+    Ok(announce)
+}
+
+pub fn local_community_comment_announce_ap(
+    community_id: i64,
+    comment_local_id: i64,
+    comment_ap_id: &str,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Announce, crate::Error> {
+    let mut announce = activitystreams::activity::Announce::new();
+
+    let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
+
+    announce.object_props.set_id(format!(
+        "{}/comments/{}/announce",
+        community_ap_id, comment_local_id,
+    ))?;
+
+    announce
+        .announce_props
+        .set_actor_xsd_any_uri(community_ap_id)?;
+    announce
+        .announce_props
+        .set_object_xsd_any_uri(comment_ap_id)?;
+
+    Ok(announce)
+}
+
+pub fn spawn_announce_community_post(
+    community: i64,
+    post_local_id: i64,
+    post_ap_id: &str,
+    ctx: Arc<crate::RouteContext>,
+) {
     // since post is borrowed, we can't move it
     // so we convert it to AP form before spawning
-    match local_community_post_to_announce_ap(post, &ctx.host_url_apub) {
+    match local_community_post_announce_ap(community, post_local_id, post_ap_id, &ctx.host_url_apub)
+    {
         Err(err) => {
             eprintln!("Failed to create Announce: {:?}", err);
         }
         Ok(announce) => {
-            crate::spawn_task(send_to_community_followers(post.community, announce, ctx));
+            crate::spawn_task(send_to_community_followers(community, announce, ctx));
         }
     }
 }
 
-pub async fn announce_community_comment(
-    comment: crate::CommentInfo,
-    post_ap_id: String,
-    parent_ap_id: Option<String>,
+pub fn spawn_announce_community_comment(
     community: i64,
+    comment_local_id: i64,
+    comment_ap_id: &str,
     ctx: Arc<crate::RouteContext>,
-) -> Result<(), crate::Error> {
-    let announce = local_community_comment_to_announce_ap(
-        &comment,
-        &post_ap_id,
-        &parent_ap_id,
+) {
+    let announce = local_community_comment_announce_ap(
         community,
+        comment_local_id,
+        comment_ap_id,
         &ctx.host_url_apub,
-    )?;
+    );
 
-    send_to_community_followers(community, announce, ctx).await
+    crate::spawn_task(async move {
+        let announce = announce?;
+        send_to_community_followers(community, announce, ctx).await
+    });
 }
 
 pub async fn send_community_follow_accept(
@@ -611,59 +666,6 @@ pub fn local_comment_to_ap(
         .set_content_xsd_string(comment.content_text.to_owned())?;
 
     Ok(obj)
-}
-
-pub fn local_community_post_to_announce_ap(
-    post: &crate::PostInfo<'_>,
-    host_url_apub: &str,
-) -> Result<activitystreams::activity::Announce, crate::Error> {
-    let community_ap_id = get_local_community_apub_id(post.community, host_url_apub);
-    let post_ap = post_to_ap(post, &community_ap_id, host_url_apub)?;
-
-    let mut announce = activitystreams::activity::Announce::new();
-
-    announce.object_props.set_id(format!(
-        "{}/communities/{}/posts/{}/announce",
-        host_url_apub, post.community, post.id
-    ))?;
-
-    announce
-        .announce_props
-        .set_actor_xsd_any_uri(community_ap_id)?;
-    announce.announce_props.set_object_base_box(post_ap)?;
-
-    Ok(announce)
-}
-
-pub fn local_community_comment_to_announce_ap(
-    comment: &crate::CommentInfo,
-    post_ap_id: &str,
-    parent_ap_id: &Option<String>,
-    community: i64,
-    host_url_apub: &str,
-) -> Result<activitystreams::activity::Announce, crate::Error> {
-    let community_ap_id = get_local_community_apub_id(community, host_url_apub);
-    let comment_ap = local_comment_to_ap(
-        comment,
-        post_ap_id,
-        parent_ap_id.as_deref(),
-        &community_ap_id,
-        host_url_apub,
-    )?;
-
-    let mut announce = activitystreams::activity::Announce::new();
-
-    announce.object_props.set_id(format!(
-        "{}/communities/{}/comments/{}/announce",
-        host_url_apub, community, comment.id
-    ))?;
-
-    announce
-        .announce_props
-        .set_actor_xsd_any_uri(community_ap_id)?;
-    announce.announce_props.set_object_base_box(comment_ap)?;
-
-    Ok(announce)
 }
 
 pub async fn send_local_post_to_community(

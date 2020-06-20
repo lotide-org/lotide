@@ -1,4 +1,5 @@
 use activitystreams::ext::Extensible;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 pub fn route_communities() -> crate::RouteNode<()> {
@@ -143,7 +144,7 @@ async fn handler_communities_comments_announce_get(
 
     match db
         .query_opt(
-            "SELECT reply.author, reply.content_text, reply.post, reply.parent, reply.created, reply.local, post.local, post.ap_id, parent_reply.local, parent_reply.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN reply AS parent_reply ON (reply.parent = parent_reply.id) WHERE reply.id=$1 AND community=$2",
+            "SELECT reply.id, reply.local, reply.ap_id, community.local FROM reply, post, community WHERE reply.post = post.id AND post.community = community.id AND reply.id = $1 AND community.id = $2",
             &[&comment_id, &community_id],
         )
         .await?
@@ -153,45 +154,22 @@ async fn handler_communities_comments_announce_get(
             "No such publish",
         )),
         Some(row) => {
-            let local: bool = row.get(5);
-
-            if !local {
+            let community_local: bool = row.get(3);
+            if !community_local {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::BAD_REQUEST,
-                    "Requested comment is not owned by this instance",
+                    "Requested community is not owned by this instance",
                 )));
             }
 
-            let post_local_id: i64 = row.get(2);
-
-            let post_ap_id = if row.get(6) {
-                crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
+            let comment_local_id = row.get(0);
+            let comment_ap_id = if row.get(1) {
+                Cow::Owned(crate::apub_util::get_local_comment_apub_id(comment_local_id, &ctx.host_url_apub))
             } else {
-                row.get(7)
+                Cow::Borrowed(row.get(2))
             };
 
-            let comment_parent = row.get(3);
-
-            let comment = crate::CommentInfo {
-                author: row.get(0),
-                content_text: row.get(1),
-                post: post_local_id,
-                parent: comment_parent,
-                created: row.get(4),
-                id: comment_id,
-            };
-
-            let parent_ap_id = match row.get(8) {
-                None => None,
-                Some(true) => {
-                    Some(crate::apub_util::get_local_comment_apub_id(comment_parent.unwrap(), &ctx.host_url_apub))
-                },
-                Some(false) => {
-                    row.get(9)
-                },
-            };
-
-            let body = crate::apub_util::local_community_comment_to_announce_ap(&comment, &post_ap_id, &parent_ap_id, community_id, &ctx.host_url_apub)?;
+            let body = crate::apub_util::local_community_comment_announce_ap(community_id, comment_local_id, &comment_ap_id, &ctx.host_url_apub)?;
             let body = serde_json::to_vec(&body)?;
 
             Ok(hyper::Response::builder()
@@ -427,7 +405,7 @@ async fn handler_communities_posts_announce_get(
     let db = ctx.db_pool.get().await?;
 
     match db.query_opt(
-        "SELECT author, href, content_text, title, created, local, (SELECT local FROM community WHERE id=post.community) FROM post WHERE id=$1 AND community=$2",
+        "SELECT post.id, post.local, post.ap_id, community.local FROM post, community WHERE post.community = community.id AND id=$1 AND community=$2",
         &[&post_id, &community_id],
     ).await? {
         None => {
@@ -437,7 +415,7 @@ async fn handler_communities_posts_announce_get(
             ))
         },
         Some(row) => {
-            let community_local: Option<bool> = row.get(6);
+            let community_local: Option<bool> = row.get(3);
             match community_local {
                 None => Ok(crate::simple_response(
                         hyper::StatusCode::NOT_FOUND,
@@ -448,19 +426,17 @@ async fn handler_communities_posts_announce_get(
                         "Requested community is not owned by this instance",
                     )),
                 Some(true) => {
-                    let post = crate::PostInfo {
-                        author: row.get(0),
-                        href: row.get(1),
-                        content_text: row.get(2),
-                        title: row.get(3),
-                        created: &row.get(4),
-
-                        id: post_id,
-                        community: community_id,
+                    let post_local_id = row.get(0);
+                    let post_ap_id = if row.get(1) {
+                        Cow::Owned(crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub))
+                    } else {
+                        Cow::Borrowed(row.get(2))
                     };
 
-                    let body = crate::apub_util::local_community_post_to_announce_ap(
-                        &post,
+                    let body = crate::apub_util::local_community_post_announce_ap(
+                        community_id,
+                        post_local_id,
+                        &post_ap_id,
                         &ctx.host_url_apub,
                     )?;
                     let body = serde_json::to_vec(&body)?;
