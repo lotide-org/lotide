@@ -749,6 +749,36 @@ pub async fn send_local_post_to_community(
     Ok(())
 }
 
+pub fn local_comment_to_create_ap(
+    comment: &crate::CommentInfo,
+    post_ap_id: &str,
+    parent_ap_id: Option<&str>,
+    community_ap_id: &str,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Create, crate::Error> {
+    let comment_ap = local_comment_to_ap(
+        &comment,
+        &post_ap_id,
+        parent_ap_id.as_deref(),
+        &community_ap_id,
+        &host_url_apub,
+    )?;
+
+    let author = comment.author.unwrap();
+
+    let mut create = activitystreams::activity::Create::new();
+    create.object_props.set_id(format!(
+        "{}/create",
+        get_local_comment_apub_id(comment.id, host_url_apub)
+    ))?;
+    create.create_props.set_object_base_box(comment_ap)?;
+    create
+        .create_props
+        .set_actor_xsd_any_uri(get_local_person_apub_id(author, &host_url_apub))?;
+
+    Ok(create)
+}
+
 pub async fn send_comment_to_community(
     comment: crate::CommentInfo,
     community_ap_id: &str,
@@ -757,7 +787,7 @@ pub async fn send_comment_to_community(
     parent_ap_id: Option<String>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let comment_ap = local_comment_to_ap(
+    let create = local_comment_to_create_ap(
         &comment,
         &post_ap_id,
         parent_ap_id.as_deref(),
@@ -766,12 +796,6 @@ pub async fn send_comment_to_community(
     )?;
 
     let author = comment.author.unwrap();
-
-    let mut create = activitystreams::activity::Create::new();
-    create.create_props.set_object_base_box(comment_ap)?;
-    create
-        .create_props
-        .set_actor_xsd_any_uri(get_local_person_apub_id(author, &ctx.host_url_apub))?;
 
     let body = serde_json::to_vec(&create)?.into();
 
