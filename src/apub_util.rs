@@ -1,6 +1,29 @@
+use serde_derive::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 pub const ACTIVITY_TYPE: &'static str = "application/activity+json";
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicKey<'a> {
+    pub id: Cow<'a, str>,
+    pub owner: Cow<'a, str>,
+    pub public_key_pem: Cow<'a, str>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicKeyExtension<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(borrow)]
+    pub public_key: Option<PublicKey<'a>>,
+}
+
+impl<'a, T: activitystreams::actor::Actor> activitystreams::ext::Extension<T>
+    for PublicKeyExtension<'a>
+{
+}
 
 pub fn get_local_post_apub_id(post: i64, host_url_apub: &str) -> String {
     format!("{}/posts/{}", host_url_apub, post)
@@ -54,6 +77,135 @@ pub fn do_sign(
     Ok(signer.sign_to_vec()?)
 }
 
+pub fn do_verify(
+    key: &openssl::pkey::PKey<openssl::pkey::Public>,
+    src: &[u8],
+    sig: &[u8],
+) -> Result<bool, openssl::error::ErrorStack> {
+    let mut verifier = openssl::sign::Verifier::new(openssl::hash::MessageDigest::sha256(), &key)?;
+    verifier.update(&src)?;
+    Ok(verifier.verify(sig)?)
+}
+
+pub enum ActorLocalInfo {
+    User {
+        id: i64,
+        public_key: Option<Vec<u8>>,
+    },
+    Community {
+        id: i64,
+        public_key: Option<Vec<u8>>,
+    },
+}
+
+impl ActorLocalInfo {
+    pub fn public_key(&self) -> Option<&[u8]> {
+        match self {
+            ActorLocalInfo::User { public_key, .. } => public_key.as_deref(),
+            ActorLocalInfo::Community { public_key, .. } => public_key.as_deref(),
+        }
+    }
+}
+
+pub async fn fetch_actor(
+    ap_id: &str,
+    db: &tokio_postgres::Client,
+    http_client: &crate::HttpClient,
+) -> Result<ActorLocalInfo, crate::Error> {
+    let res = crate::res_to_error(
+        http_client
+            .request(
+                hyper::Request::get(ap_id)
+                    .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
+                    .body(Default::default())?,
+            )
+            .await?,
+    )
+    .await?;
+
+    let body = hyper::body::to_bytes(res.into_body()).await?;
+
+    let actor: activitystreams::actor::ActorBox = serde_json::from_slice(&body)?;
+
+    match actor.kind() {
+        Some("Person") => {
+            let person: activitystreams::ext::Ext<
+                activitystreams::ext::Ext<
+                    activitystreams::actor::Person,
+                    activitystreams::actor::properties::ApActorProperties,
+                >,
+                crate::apub_util::PublicKeyExtension<'_>,
+            > = serde_json::from_slice(&body)?;
+
+            let username = person
+                .as_ref()
+                .get_name_xsd_string()
+                .map(|x| x.as_str())
+                .unwrap_or("");
+            let inbox = person.base.extension.inbox.as_str();
+            let shared_inbox = person
+                .base
+                .extension
+                .get_endpoints()
+                .and_then(|endpoints| endpoints.get_shared_inbox())
+                .map(|url| url.as_str());
+            let public_key = person
+                .extension
+                .public_key
+                .as_ref()
+                .map(|key| key.public_key_pem.as_bytes());
+
+            let id = db.query_one(
+                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5 RETURNING id",
+                &[&username, &ap_id, &inbox, &shared_inbox, &public_key],
+            ).await?.get(0);
+
+            Ok(ActorLocalInfo::User {
+                id,
+                public_key: public_key.map(|x| x.to_owned()),
+            })
+        }
+        Some("Group") => {
+            let group: activitystreams::ext::Ext<
+                activitystreams::ext::Ext<
+                    activitystreams::actor::Group,
+                    activitystreams::actor::properties::ApActorProperties,
+                >,
+                crate::apub_util::PublicKeyExtension<'_>,
+            > = serde_json::from_slice(&body)?;
+
+            let name = group
+                .as_ref()
+                .get_name_xsd_string()
+                .map(|x| x.as_str())
+                .unwrap_or("");
+            let inbox = group.base.extension.inbox.as_str();
+            let shared_inbox = group
+                .base
+                .extension
+                .get_endpoints()
+                .and_then(|endpoints| endpoints.get_shared_inbox())
+                .map(|url| url.as_str());
+            let public_key = group
+                .extension
+                .public_key
+                .as_ref()
+                .map(|key| key.public_key_pem.as_bytes());
+
+            let id = db.query_one(
+                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key) VALUES ($1, FALSE, $2, $3, $4, $5) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5 RETURNING id",
+                &[&name, &ap_id, &inbox, &shared_inbox, &public_key],
+            ).await?.get(0);
+
+            Ok(ActorLocalInfo::Community {
+                id,
+                public_key: public_key.map(|x| x.to_owned()),
+            })
+        }
+        _ => Err(crate::Error::InternalStrStatic("Unrecognized actor type")),
+    }
+}
+
 pub async fn get_or_fetch_user_local_id(
     ap_id: &str,
     db: &tokio_postgres::Client,
@@ -78,42 +230,13 @@ pub async fn get_or_fetch_user_local_id(
             None => {
                 // Not known yet, time to fetch
 
-                let res = crate::res_to_error(
-                    http_client
-                        .request(
-                            hyper::Request::get(ap_id)
-                                .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
-                                .body(Default::default())?,
-                        )
-                        .await?,
-                )
-                .await?;
+                let actor = fetch_actor(ap_id, db, http_client).await?;
 
-                println!("{:?}", res);
-
-                let body = hyper::body::to_bytes(res.into_body()).await?;
-
-                let person: activitystreams::ext::Ext<
-                    activitystreams::actor::Person,
-                    activitystreams::actor::properties::ApActorProperties,
-                > = serde_json::from_slice(&body)?;
-
-                let username = person
-                    .as_ref()
-                    .get_name_xsd_string()
-                    .map(|x| x.as_str())
-                    .unwrap_or("");
-                let inbox = person.extension.inbox.as_str();
-                let shared_inbox = person
-                    .extension
-                    .get_endpoints()
-                    .and_then(|endpoints| endpoints.get_shared_inbox())
-                    .map(|url| url.as_str());
-
-                Ok(db.query_one(
-                    "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox) VALUES ($1, FALSE, localtimestamp, $2, $3, $4) RETURNING id",
-                    &[&username, &ap_id, &inbox, &shared_inbox],
-                ).await?.get(0))
+                if let ActorLocalInfo::User { id, .. } = actor {
+                    Ok(id)
+                } else {
+                    Err(crate::Error::InternalStrStatic("Not a Person"))
+                }
             }
         }
     }
@@ -980,4 +1103,130 @@ async fn handle_recieved_reply(
     }
 
     Ok(())
+}
+
+pub async fn check_signature_for_actor(
+    signature: &hyper::header::HeaderValue,
+    request_method: &hyper::Method,
+    request_path_and_query: &str,
+    headers: &hyper::header::HeaderMap,
+    actor_ap_id: &str,
+    db: &tokio_postgres::Client,
+    http_client: &crate::HttpClient,
+) -> Result<bool, crate::Error> {
+    let found_key = db.query_opt("(SELECT public_key FROM person WHERE ap_id=$1) UNION ALL (SELECT public_key FROM community WHERE ap_id=$1) LIMIT 1", &[&actor_ap_id]).await?
+        .and_then(|row| row.get::<_, Option<&[u8]>>(0).map(openssl::pkey::PKey::public_key_from_pem)).transpose()?;
+
+    println!("signature: {:?}", signature);
+
+    let signature = hancock::Signature::parse(signature)?;
+
+    if let Some(key) = found_key {
+        if signature.verify(
+            request_method,
+            request_path_and_query,
+            headers,
+            |bytes, sig| do_verify(&key, bytes, sig),
+        )? {
+            return Ok(true);
+        }
+    }
+
+    // Either no key found or failed to verify
+    // Try fetching the actor/key
+
+    let actor = fetch_actor(actor_ap_id, db, http_client).await?;
+
+    if let Some(key) = actor.public_key() {
+        let key = openssl::pkey::PKey::public_key_from_pem(key)?;
+        Ok(signature.verify(
+            request_method,
+            request_path_and_query,
+            headers,
+            |bytes, sig| do_verify(&key, bytes, sig),
+        )?)
+    } else {
+        Err(crate::Error::InternalStrStatic(
+            "Cannot verify signature, no key found",
+        ))
+    }
+}
+
+pub async fn verify_incoming_activity(
+    mut req: hyper::Request<hyper::Body>,
+    db: &tokio_postgres::Client,
+    http_client: &crate::HttpClient,
+) -> Result<activitystreams::activity::ActivityBox, crate::Error> {
+    let req_body = hyper::body::to_bytes(req.body_mut()).await?;
+
+    match req.headers().get("signature") {
+        None => {
+            let raw_obj_props: activitystreams::object::properties::ObjectProperties =
+                serde_json::from_slice(&req_body)?;
+
+            let ap_id = raw_obj_props.get_id().ok_or_else(|| {
+                crate::Error::InternalStrStatic("Missing id in received activity")
+            })?;
+
+            let res = crate::res_to_error(
+                http_client
+                    .request(
+                        hyper::Request::get(ap_id.as_str())
+                            .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
+                            .body(Default::default())?,
+                    )
+                    .await?,
+            )
+            .await?;
+
+            println!("{:?}", res);
+
+            let res_body = hyper::body::to_bytes(res.into_body()).await?;
+
+            // TODO verify user and activity domains match
+            Ok(serde_json::from_slice(&res_body)?)
+        }
+        Some(signature) => {
+            let raw_activity_props: activitystreams::activity::properties::ActorOptOriginAndTargetProperties = serde_json::from_slice(&req_body)?;
+
+            let actor_ap_id = match raw_activity_props.actor {
+                activitystreams::activity::properties::ActorOptOriginAndTargetPropertiesActorEnum::Term(ref term) => {
+                    match term {
+                        activitystreams::activity::properties::ActorOptOriginAndTargetPropertiesActorTermEnum::XsdAnyUri(uri) => Cow::Borrowed(uri.as_str()),
+                        activitystreams::activity::properties::ActorOptOriginAndTargetPropertiesActorTermEnum::BaseBox(raw_actor) => {
+                            // TODO not this?
+                            Cow::Owned(serde_json::to_value(raw_actor)?.get("id").and_then(serde_json::Value::as_str)
+                                .ok_or_else(|| crate::Error::InternalStrStatic("No id found for actor"))?
+                                .to_owned())
+                        },
+                    }
+                },
+                _ => return Err(crate::Error::InternalStrStatic("Found multiple actors for activity, can't verify signature"))
+            };
+
+            if check_signature_for_actor(
+                signature,
+                req.method(),
+                req.uri()
+                    .path_and_query()
+                    .ok_or(crate::Error::InternalStrStatic(
+                        "Missing path, cannot verify signature",
+                    ))?
+                    .as_str(),
+                &req.headers(),
+                &actor_ap_id,
+                db,
+                http_client,
+            )
+            .await?
+            {
+                Ok(serde_json::from_slice(&req_body)?)
+            } else {
+                Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::FORBIDDEN,
+                    "Signature check failed",
+                )))
+            }
+        }
+    }
 }

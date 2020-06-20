@@ -27,5 +27,5 @@ url = "2.1.1"
 bytes = "0.5.4"
 either = "1.5.3"
 openssl = "0.10.29"
-hancock = { git = "https://git.sr.ht/~vpzom/hancock", rev = "89dc2bc" }
+hancock = { git = "https://git.sr.ht/~vpzom/hancock", rev = "fc8aa0a" }
 serde_urlencoded = "0.6.1"

@@ -1,5 +1,4 @@
 use activitystreams::ext::Extensible;
-use serde_derive::Serialize;
 use std::sync::Arc;
 
 mod communities;
@@ -41,25 +40,6 @@ pub fn route_apub() -> crate::RouteNode<()> {
 
 pub fn route_inbox() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_handler_async("POST", handler_inbox_post)
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PublicKey<'a> {
-    id: &'a str,
-    owner: &'a str,
-    public_key_pem: &'a str,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PublicKeyExtension<'a> {
-    public_key: PublicKey<'a>,
-}
-
-impl<'a, T: activitystreams::actor::Actor> activitystreams::ext::Extension<T>
-    for PublicKeyExtension<'a>
-{
 }
 
 async fn handler_users_get(
@@ -119,13 +99,15 @@ async fn handler_users_get(
 
             let info = info.extend(actor_props);
 
+            let key_id = format!("{}/users/{}#main-key", ctx.host_url_apub, user_id);
+
             let body = if let Some(public_key) = public_key {
-                let public_key_ext = PublicKeyExtension {
-                    public_key: PublicKey {
-                        id: &format!("{}/users/{}#main-key", ctx.host_url_apub, user_id),
-                        owner: &user_ap_id,
-                        public_key_pem: public_key,
-                    },
+                let public_key_ext = crate::apub_util::PublicKeyExtension {
+                    public_key: Some(crate::apub_util::PublicKey {
+                        id: (&key_id).into(),
+                        owner: (&user_ap_id).into(),
+                        public_key_pem: public_key.into(),
+                    }),
                 };
 
                 let info = info.extend(public_key_ext);
@@ -152,42 +134,13 @@ async fn inbox_common(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let db = ctx.db_pool.get().await?;
 
-    let req_activity: activitystreams::activity::ActivityBox = {
-        let body = hyper::body::to_bytes(req.into_body()).await?;
+    let activity = crate::apub_util::verify_incoming_activity(req, &db, &ctx.http_client).await?;
 
-        serde_json::from_slice(&body)?
-    };
-
-    match req_activity.kind() {
+    match activity.kind() {
         Some("Announce") => {
-            let req_activity = req_activity
+            let activity = activity
                 .into_concrete::<activitystreams::activity::Announce>()
                 .unwrap();
-
-            let activity_id = req_activity.object_props.id.ok_or_else(|| {
-                crate::Error::UserError(crate::simple_response(
-                    hyper::StatusCode::BAD_REQUEST,
-                    "Missing id in object",
-                ))
-            })?;
-
-            let activity = {
-                let res = crate::res_to_error(
-                    ctx.http_client
-                        .request(
-                            hyper::Request::get(activity_id.as_str())
-                                .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
-                                .body(Default::default())?,
-                        )
-                        .await?,
-                )
-                .await?;
-
-                let body = hyper::body::to_bytes(res.into_body()).await?;
-                let body: activitystreams::activity::Announce = serde_json::from_slice(&body)?;
-                body
-            };
-
             let community_ap_id = activity.announce_props.get_actor_xsd_any_uri();
 
             // TODO verify that this announce is actually from the community
@@ -235,28 +188,35 @@ async fn inbox_common(
                 };
 
                 if let Some(object_id) = object_id {
-                    let res = crate::res_to_error(
-                        ctx.http_client
-                            .request(
-                                hyper::Request::get(object_id.as_str())
-                                    .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
-                                    .body(Default::default())?,
-                            )
-                            .await?,
-                    )
-                    .await?;
+                    if !object_id.as_str().starts_with(&ctx.host_url_apub) {
+                        // don't need announces for local objects
+                        let res = crate::res_to_error(
+                            ctx.http_client
+                                .request(
+                                    hyper::Request::get(object_id.as_str())
+                                        .header(
+                                            hyper::header::ACCEPT,
+                                            crate::apub_util::ACTIVITY_TYPE,
+                                        )
+                                        .body(Default::default())?,
+                                )
+                                .await?,
+                        )
+                        .await?;
 
-                    let body = hyper::body::to_bytes(res.into_body()).await?;
-                    let obj: activitystreams::object::ObjectBox = serde_json::from_slice(&body)?;
-                    crate::apub_util::handle_recieved_object(
-                        community_local_id,
-                        object_id.as_str(),
-                        obj,
-                        &db,
-                        &ctx.host_url_apub,
-                        &ctx.http_client,
-                    )
-                    .await?;
+                        let body = hyper::body::to_bytes(res.into_body()).await?;
+                        let obj: activitystreams::object::ObjectBox =
+                            serde_json::from_slice(&body)?;
+                        crate::apub_util::handle_recieved_object(
+                            community_local_id,
+                            object_id.as_str(),
+                            obj,
+                            &db,
+                            &ctx.host_url_apub,
+                            &ctx.http_client,
+                        )
+                        .await?;
+                    }
                 }
             }
         }

@@ -27,6 +27,7 @@ pub type RouteNode<P> = trout::Node<
 pub enum Error {
     Internal(Box<dyn std::error::Error + Send>),
     InternalStr(String),
+    InternalStrStatic(&'static str),
     UserError(hyper::Response<hyper::Body>),
     RoutingError(trout::RoutingFailure),
 }
@@ -317,6 +318,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 )
                             }
                             Err(Error::InternalStr(err)) => {
+                                eprintln!("Error: {}", err);
+
+                                simple_response(
+                                    hyper::StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Internal Server Error",
+                                )
+                            }
+                            Err(Error::InternalStrStatic(err)) => {
                                 eprintln!("Error: {}", err);
 
                                 simple_response(
