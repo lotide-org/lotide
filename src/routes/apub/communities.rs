@@ -326,13 +326,22 @@ async fn handler_communities_inbox_post(
 
                     let obj: activitystreams::object::ObjectBox = serde_json::from_slice(&body)?;
 
+                    let community_is_local = {
+                        let row = db
+                            .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
+                            .await?;
+                        match row {
+                            None => false,
+                            Some(row) => row.get(0),
+                        }
+                    };
+
                     crate::apub_util::handle_recieved_object(
                         community_id,
+                        community_is_local,
                         object_id.as_str(),
                         obj,
-                        &db,
-                        &ctx.host_url_apub,
-                        &ctx.http_client,
+                        ctx,
                     )
                     .await?;
                 }

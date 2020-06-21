@@ -914,11 +914,10 @@ async fn send_to_community_followers(
 
 pub async fn handle_recieved_object(
     community_local_id: i64,
+    community_is_local: bool,
     object_id: &str,
     obj: activitystreams::object::ObjectBox,
-    db: &tokio_postgres::Client,
-    host_url_apub: &str,
-    http_client: &crate::HttpClient,
+    ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     println!("recieved object: {:?}", obj);
 
@@ -949,9 +948,8 @@ pub async fn handle_recieved_object(
                 created,
                 author,
                 community_local_id,
-                db,
-                host_url_apub,
-                http_client,
+                community_is_local,
+                ctx,
             )
             .await?;
         }
@@ -973,9 +971,7 @@ pub async fn handle_recieved_object(
                     created,
                     author,
                     in_reply_to,
-                    db,
-                    host_url_apub,
-                    http_client,
+                    ctx,
                 )
                 .await?;
             } else {
@@ -994,9 +990,8 @@ pub async fn handle_recieved_object(
                     created,
                     author,
                     community_local_id,
-                    db,
-                    host_url_apub,
-                    http_client,
+                    community_is_local,
+                    ctx,
                 )
                 .await?;
             }
@@ -1015,21 +1010,28 @@ async fn handle_recieved_post(
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
     author: Option<&str>,
     community_local_id: i64,
-    db: &tokio_postgres::Client,
-    host_url_apub: &str,
-    http_client: &crate::HttpClient,
+    community_is_local: bool,
+    ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
+    let db = ctx.db_pool.get().await?;
     let author = match author {
-        Some(author) => {
-            Some(get_or_fetch_user_local_id(&author, &db, host_url_apub, http_client).await?)
-        }
+        Some(author) => Some(
+            get_or_fetch_user_local_id(&author, &db, &ctx.host_url_apub, &ctx.http_client).await?,
+        ),
         None => None,
     };
 
-    db.execute(
-        "INSERT INTO post (author, href, content_text, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), $6, FALSE, $7) ON CONFLICT (ap_id) DO NOTHING",
+    let row = db.query_opt(
+        "INSERT INTO post (author, href, content_text, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), $6, FALSE, $7) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
         &[&author, &href, &content_text, &title, &created, &community_local_id, &object_id],
     ).await?;
+
+    if community_is_local {
+        if let Some(row) = row {
+            let post_local_id = row.get(0);
+            crate::on_community_add_post(community_local_id, post_local_id, object_id, ctx);
+        }
+    }
 
     Ok(())
 }
@@ -1040,14 +1042,14 @@ async fn handle_recieved_reply(
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
     author: Option<&str>,
     in_reply_to: &activitystreams::object::properties::ObjectPropertiesInReplyToEnum,
-    db: &tokio_postgres::Client,
-    host_url_apub: &str,
-    http_client: &crate::HttpClient,
+    ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
     let author = match author {
-        Some(author) => {
-            Some(get_or_fetch_user_local_id(&author, &db, host_url_apub, http_client).await?)
-        }
+        Some(author) => Some(
+            get_or_fetch_user_local_id(&author, &db, &ctx.host_url_apub, &ctx.http_client).await?,
+        ),
         None => None,
     };
 
@@ -1074,8 +1076,8 @@ async fn handle_recieved_reply(
             }
 
             let term_ap_id = term_ap_id.as_str();
-            let target = if term_ap_id.starts_with(&host_url_apub) {
-                let remaining = &term_ap_id[host_url_apub.len()..];
+            let target = if term_ap_id.starts_with(&ctx.host_url_apub) {
+                let remaining = &term_ap_id[ctx.host_url_apub.len()..];
                 if remaining.starts_with("/posts/") {
                     if let Ok(local_post_id) = remaining[7..].parse() {
                         Some(ReplyTarget::Post { id: local_post_id })
@@ -1120,10 +1122,26 @@ async fn handle_recieved_reply(
                     ReplyTarget::Comment { id, post } => (post, Some(id)),
                 };
 
-                db.execute(
-                    "INSERT INTO reply (post, parent, author, content_text, created, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), FALSE, $6) ON CONFLICT (ap_id) DO NOTHING",
+                let local_community_maybe = {
+                    let row = db.query_opt("SELECT id FROM community WHERE id=(SELECT community FROM post WHERE id=$1) AND local", &[&post]).await?;
+                    row.map(|row| row.get(0))
+                };
+
+                let row = db.query_opt(
+                    "INSERT INTO reply (post, parent, author, content_text, created, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), FALSE, $6) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
                     &[&post, &parent, &author, &content_text, &created, &object_id],
                     ).await?;
+
+                if let Some(row) = row {
+                    if let Some(local_community) = local_community_maybe {
+                        crate::on_community_add_comment(
+                            local_community,
+                            row.get(0),
+                            object_id,
+                            ctx,
+                        );
+                    }
+                }
             }
         }
     }

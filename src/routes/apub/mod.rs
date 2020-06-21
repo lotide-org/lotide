@@ -151,20 +151,20 @@ async fn inbox_common(
 
             // TODO verify that this announce is actually from the community
 
-            let community_local_id: Option<i64> = {
+            let community_local_info: Option<(i64, bool)> = {
                 match community_ap_id {
                     None => None,
                     Some(community_ap_id) => db
                         .query_opt(
-                            "SELECT id FROM community WHERE ap_id=$1",
+                            "SELECT id, local FROM community WHERE ap_id=$1",
                             &[&community_ap_id.as_str()],
                         )
                         .await?
-                        .map(|row| row.get(0)),
+                        .map(|row| (row.get(0), row.get(1))),
                 }
             };
 
-            if let Some(community_local_id) = community_local_id {
+            if let Some((community_local_id, community_is_local)) = community_local_info {
                 let object_id = {
                     if let activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectEnum::Term(
                         req_obj,
@@ -215,11 +215,10 @@ async fn inbox_common(
                             serde_json::from_slice(&body)?;
                         crate::apub_util::handle_recieved_object(
                             community_local_id,
+                            community_is_local,
                             object_id.as_str(),
                             obj,
-                            &db,
-                            &ctx.host_url_apub,
-                            &ctx.http_client,
+                            ctx,
                         )
                         .await?;
                     }
