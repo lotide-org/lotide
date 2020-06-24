@@ -199,8 +199,8 @@ async fn route_unstable_logins_create(
 
     #[derive(Deserialize)]
     struct LoginsCreateBody<'a> {
-        username: &'a str,
-        password: &'a str,
+        username: Cow<'a, str>,
+        password: Cow<'a, str>,
     }
 
     let body: LoginsCreateBody<'_> = serde_json::from_slice(&body)?;
@@ -231,7 +231,8 @@ async fn route_unstable_logins_create(
     let req_password = body.password.to_owned();
 
     let correct =
-        tokio::task::spawn_blocking(move || bcrypt::verify(req_password, &passhash)).await??;
+        tokio::task::spawn_blocking(move || bcrypt::verify(req_password.as_ref(), &passhash))
+            .await??;
 
     if correct {
         let token = insert_token(id, &db).await?;
@@ -718,7 +719,7 @@ async fn route_unstable_posts_replies_create(
 
     #[derive(Deserialize)]
     struct RepliesCreateBody<'a> {
-        content_text: &'a str,
+        content_text: Cow<'a, str>,
     }
 
     let body: RepliesCreateBody<'_> = serde_json::from_slice(&body)?;
@@ -736,7 +737,7 @@ async fn route_unstable_posts_replies_create(
         author: Some(user),
         post: post_id,
         parent: None,
-        content_text: body.content_text.to_owned(),
+        content_text: body.content_text.into_owned(),
         created,
         ap_id: crate::APIDOrLocal::Local,
     };
@@ -935,7 +936,7 @@ async fn route_unstable_comments_replies_create(
 
     #[derive(Deserialize)]
     struct CommentRepliesCreateBody<'a> {
-        content_text: &'a str,
+        content_text: Cow<'a, str>,
     }
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
@@ -965,7 +966,7 @@ async fn route_unstable_comments_replies_create(
         author: Some(user),
         post,
         parent: Some(parent_id),
-        content_text: body.content_text.to_owned(),
+        content_text: body.content_text.into_owned(),
         created,
         ap_id: crate::APIDOrLocal::Local,
     };
@@ -991,7 +992,7 @@ async fn route_unstable_users_create(
 
     #[derive(Deserialize)]
     struct UsersCreateBody<'a> {
-        username: &'a str,
+        username: Cow<'a, str>,
         password: String,
         #[serde(default)]
         login: bool,
