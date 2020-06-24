@@ -29,3 +29,4 @@ either = "1.5.3"
 openssl = "0.10.29"
 hancock = { git = "https://git.sr.ht/~vpzom/hancock", rev = "fc8aa0a" }
 serde_urlencoded = "0.6.1"
+mime = "0.3.16"

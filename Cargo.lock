@@ -680,6 +680,7 @@ dependencies = [
  "headers",
  "hyper",
  "hyper-tls",
+ "mime",
  "openssl",
  "serde",
  "serde_derive",

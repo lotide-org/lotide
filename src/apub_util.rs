@@ -597,7 +597,10 @@ pub fn post_to_ap(
                 .set_to_xsd_any_uri(community_ap_id)?;
 
             if let Some(content) = post.content_text {
-                post_ap.as_mut().set_content_xsd_string(content)?;
+                post_ap
+                    .as_mut()
+                    .set_content_xsd_string(content)?
+                    .set_media_type(mime::TEXT_PLAIN)?;
             }
 
             Ok(post_ap.try_into()?)
@@ -613,6 +616,7 @@ pub fn post_to_ap(
                     &host_url_apub,
                 ))?
                 .set_content_xsd_string(post.content_text.unwrap_or(""))?
+                .set_media_type(mime::TEXT_PLAIN)?
                 .set_summary_xsd_string(post.title)?
                 .set_published(post.created.clone())?
                 .set_to_xsd_any_uri(community_ap_id)?;
