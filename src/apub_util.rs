@@ -749,6 +749,42 @@ pub async fn send_local_post_to_community(
     Ok(())
 }
 
+pub fn local_post_delete_to_ap(
+    post_id: i64,
+    author: i64,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Delete, crate::Error> {
+    let mut delete = activitystreams::activity::Delete::new();
+    let post_ap_id = get_local_post_apub_id(post_id, host_url_apub);
+    delete
+        .object_props
+        .set_id(format!("{}/delete", post_ap_id))?;
+    delete
+        .delete_props
+        .set_actor_xsd_any_uri(get_local_person_apub_id(author, host_url_apub))?;
+    delete.delete_props.set_object_xsd_any_uri(post_ap_id)?;
+
+    Ok(delete)
+}
+
+pub fn local_comment_delete_to_ap(
+    comment_id: i64,
+    author: i64,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Delete, crate::Error> {
+    let mut delete = activitystreams::activity::Delete::new();
+    let comment_ap_id = get_local_comment_apub_id(comment_id, host_url_apub);
+    delete
+        .object_props
+        .set_id(format!("{}/delete", comment_ap_id))?;
+    delete
+        .delete_props
+        .set_actor_xsd_any_uri(get_local_person_apub_id(author, host_url_apub))?;
+    delete.delete_props.set_object_xsd_any_uri(comment_ap_id)?;
+
+    Ok(delete)
+}
+
 pub fn local_comment_to_create_ap(
     comment: &crate::CommentInfo,
     post_ap_id: &str,
@@ -828,6 +864,66 @@ pub async fn send_comment_to_community(
     let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
 
     println!("{:?}", res);
+
+    Ok(())
+}
+
+pub async fn forward_to_community_followers(
+    community_id: i64,
+    body: Vec<u8>,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    use futures::future::{FutureExt, TryFutureExt};
+    use futures::stream::{StreamExt, TryStreamExt};
+
+    const PARALLEL: usize = 4;
+
+    let db = ctx.db_pool.get().await?;
+
+    let inboxes: Vec<_> = {
+        let stream = crate::query_stream(
+            &db,
+            "SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) FROM community_follow, person WHERE person.id = community_follow.follower AND person.local = FALSE AND community = $1",
+            &[&community_id],
+        ).await?;
+
+        stream
+            .try_filter_map(|row| async move {
+                let inbox: Option<String> = row.get(0);
+                Ok(inbox)
+            })
+            .try_collect()
+            .await?
+    };
+
+    futures::stream::iter(
+        inboxes
+            .into_iter()
+            .filter_map(
+                |inbox| match hyper::Request::post(inbox).body(body.clone().into()) {
+                    Err(err) => {
+                        eprintln!("Failed to construct inbox post: {:?}", err);
+
+                        None
+                    }
+                    Ok(req) => Some(req),
+                },
+            )
+            .map(|req| {
+                ctx.http_client
+                    .request(req)
+                    .map_err(crate::Error::from)
+                    .and_then(crate::res_to_error)
+                    .map(|res| {
+                        if let Err(err) = res {
+                            eprintln!("Delivery failed: {:?}", err);
+                        }
+                    })
+            }),
+    )
+    .buffer_unordered(PARALLEL)
+    .for_each(|_| async {})
+    .await;
 
     Ok(())
 }
@@ -1142,6 +1238,40 @@ async fn handle_recieved_reply(
                         );
                     }
                 }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_delete(
+    activity: activitystreams::activity::Delete,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    if let Some(object_id) = activity.delete_props.get_object_xsd_any_uri() {
+        // TODO verify that this actor actually did this and is allowed to
+
+        let row = db.query_opt(
+            "WITH deleted_post AS (UPDATE post SET href=NULL, title='[deleted]', content_text='[deleted]', deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id = post.community AND community.local)), deleted_reply AS (UPDATE reply SET content_text='[deleted]', deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id=(SELECT community FROM post WHERE id=reply.post) AND community.local)) (SELECT * FROM deleted_post) UNION ALL (SELECT * FROM deleted_reply) LIMIT 1",
+            &[&object_id.as_str()],
+            ).await?;
+
+        if let Some(row) = row {
+            // Something was deleted
+            let local_community = row.get(0);
+            if let Some(community_id) = local_community {
+                // Community is local, need to forward delete to followers
+
+                let body = serde_json::to_vec(&activity)?;
+
+                crate::spawn_task(crate::apub_util::forward_to_community_followers(
+                    community_id,
+                    body,
+                    ctx,
+                ));
             }
         }
     }

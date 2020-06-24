@@ -105,6 +105,12 @@ pub async fn query_stream(
     db.query_raw(statement, params).await
 }
 
+pub fn empty_response() -> hyper::Response<hyper::Body> {
+    let mut res = hyper::Response::new((&[][..]).into());
+    *res.status_mut() = hyper::StatusCode::NO_CONTENT;
+    res
+}
+
 pub fn simple_response(
     code: hyper::StatusCode,
     text: impl Into<hyper::Body>,

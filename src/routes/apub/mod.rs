@@ -26,6 +26,11 @@ pub fn route_apub() -> crate::RouteNode<()> {
                         "create",
                         crate::RouteNode::new()
                             .with_handler_async("GET", handler_comments_create_get),
+                    )
+                    .with_child(
+                        "delete",
+                        crate::RouteNode::new()
+                            .with_handler_async("GET", handler_comments_delete_get),
                     ),
             ),
         )
@@ -39,6 +44,10 @@ pub fn route_apub() -> crate::RouteNode<()> {
                     .with_child(
                         "create",
                         crate::RouteNode::new().with_handler_async("GET", handler_posts_create_get),
+                    )
+                    .with_child(
+                        "delete",
+                        crate::RouteNode::new().with_handler_async("GET", handler_posts_delete_get),
                     ),
             ),
         )
@@ -225,6 +234,13 @@ async fn inbox_common(
                 }
             }
         }
+        Some("Delete") => {
+            let activity = activity
+                .into_concrete::<activitystreams::activity::Delete>()
+                .unwrap();
+
+            crate::apub_util::handle_delete(activity, ctx).await?;
+        }
         _ => {}
     }
 
@@ -395,6 +411,63 @@ async fn handler_comments_create_get(
     }
 }
 
+async fn handler_comments_delete_get(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (comment_id,) = params;
+    let db = ctx.db_pool.get().await?;
+
+    match db
+        .query_opt(
+            "SELECT author, local, deleted FROM reply WHERE id=$1",
+            &[&comment_id],
+        )
+        .await?
+    {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such comment",
+        )),
+        Some(row) => {
+            let local: bool = row.get(1);
+            let deleted: bool = row.get(2);
+
+            if !local {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested comment is not owned by this instance",
+                )));
+            }
+            if !deleted {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::NOT_FOUND,
+                    "That comment is not deleted",
+                )));
+            }
+
+            let author = row.get(0);
+
+            let body = crate::apub_util::local_comment_delete_to_ap(
+                comment_id,
+                author,
+                &ctx.host_url_apub,
+            )?;
+
+            let body = serde_json::to_vec(&body)?.into();
+
+            let mut resp = hyper::Response::new(body);
+            resp.headers_mut().insert(
+                hyper::header::CONTENT_TYPE,
+                hyper::header::HeaderValue::from_static(crate::apub_util::ACTIVITY_TYPE),
+            );
+
+            Ok(resp)
+        }
+    }
+}
+
 // sharedInbox
 async fn handler_inbox_post(
     _: (),
@@ -529,5 +602,59 @@ async fn handler_posts_create_get(
 
             Ok(resp)
         },
+    }
+}
+
+async fn handler_posts_delete_get(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+    let db = ctx.db_pool.get().await?;
+
+    match db
+        .query_opt(
+            "SELECT author, local, deleted FROM post WHERE id=$1",
+            &[&post_id],
+        )
+        .await?
+    {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such post",
+        )),
+        Some(row) => {
+            let local: bool = row.get(1);
+            let deleted: bool = row.get(2);
+
+            if !local {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested post is not owned by this instance",
+                )));
+            }
+            if !deleted {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::NOT_FOUND,
+                    "That post is not deleted",
+                )));
+            }
+
+            let author = row.get(0);
+
+            let body =
+                crate::apub_util::local_post_delete_to_ap(post_id, author, &ctx.host_url_apub)?;
+
+            let body = serde_json::to_vec(&body)?.into();
+
+            let mut resp = hyper::Response::new(body);
+            resp.headers_mut().insert(
+                hyper::header::CONTENT_TYPE,
+                hyper::header::HeaderValue::from_static(crate::apub_util::ACTIVITY_TYPE),
+            );
+
+            Ok(resp)
+        }
     }
 }

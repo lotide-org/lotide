@@ -45,6 +45,7 @@ struct RespPostCommentInfo<'a> {
     author: Option<RespMinimalAuthorInfo<'a>>,
     created: Cow<'a, str>,
     content_text: Cow<'a, str>,
+    deleted: bool,
     replies: Option<Vec<RespPostCommentInfo<'a>>>,
 }
 
@@ -77,6 +78,7 @@ pub fn route_api() -> crate::RouteNode<()> {
                     .with_child_parse::<i64, _>(
                         crate::RouteNode::new()
                             .with_handler_async("GET", route_unstable_posts_get)
+                            .with_handler_async("DELETE", route_unstable_posts_delete)
                             .with_child(
                                 "replies",
                                 crate::RouteNode::new().with_handler_async(
@@ -91,6 +93,7 @@ pub fn route_api() -> crate::RouteNode<()> {
                 crate::RouteNode::new().with_child_parse::<i64, _>(
                     crate::RouteNode::new()
                         .with_handler_async("GET", route_unstable_comments_get)
+                        .with_handler_async("DELETE", route_unstable_comments_delete)
                         .with_child(
                             "replies",
                             crate::RouteNode::new()
@@ -270,7 +273,7 @@ async fn route_unstable_posts_list(
     let limit: i64 = 10;
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id ORDER BY created DESC LIMIT $1",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY created DESC LIMIT $1",
         ([limit]).iter().map(|x| x as _),
     ).await?;
 
@@ -398,7 +401,7 @@ async fn get_comments_replies<'a>(
 
     let stream = crate::query_stream(
         db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, person.username, person.local, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY created DESC",
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY created DESC",
         &[&parents],
     ).await?;
 
@@ -411,7 +414,7 @@ async fn get_comments_replies<'a>(
             let parent: i64 = row.get(4);
 
             let author_username: Option<String> = row.get(5);
-            let author = author_username.map(move |author_username| {
+            let author = author_username.map(|author_username| {
                 let author_id: i64 = row.get(1);
                 let author_local: bool = row.get(6);
                 let author_ap_id: Option<&str> = row.get(7);
@@ -435,6 +438,7 @@ async fn get_comments_replies<'a>(
                     author,
                     content_text: content_text.into(),
                     created: created.to_rfc3339().into(),
+                    deleted: row.get(8),
                     replies: None,
                 },
             ))
@@ -461,7 +465,7 @@ async fn get_post_comments<'a>(
 
     let stream = crate::query_stream(
         db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, person.username, person.local, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY created DESC",
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY created DESC",
         &[&post_id],
     ).await?;
 
@@ -473,7 +477,7 @@ async fn get_post_comments<'a>(
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
 
             let author_username: Option<String> = row.get(4);
-            let author = author_username.map(move |author_username| {
+            let author = author_username.map(|author_username| {
                 let author_id: i64 = row.get(1);
                 let author_local: bool = row.get(5);
                 let author_ap_id: Option<&str> = row.get(6);
@@ -497,6 +501,7 @@ async fn get_post_comments<'a>(
                     author,
                     content_text: content_text.into(),
                     created: created.to_rfc3339().into(),
+                    deleted: row.get(7),
                     replies: None,
                 },
             ))
@@ -602,6 +607,102 @@ async fn route_unstable_posts_get(
     }
 }
 
+async fn route_unstable_posts_delete(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let row = db
+        .query_opt(
+            "SELECT author, community FROM post WHERE id=$1 AND deleted=FALSE",
+            &[&post_id],
+        )
+        .await?;
+    match row {
+        None => return Ok(crate::empty_response()), // already gone
+        Some(row) => {
+            let author: Option<i64> = row.get(0);
+            if author != Some(user) {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::FORBIDDEN,
+                    "That's not your post",
+                )));
+            }
+
+            db.execute("UPDATE post SET href=NULL, title='[deleted]', content_text='[deleted]', deleted=TRUE WHERE id=$1", &[&post_id]).await?;
+
+            crate::spawn_task(async move {
+                let community: Option<i64> = row.get(1);
+                if let Some(community) = community {
+                    let delete_ap = crate::apub_util::local_post_delete_to_ap(
+                        post_id,
+                        user,
+                        &ctx.host_url_apub,
+                    )?;
+                    let row = db.query_one("SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox) FROM community WHERE id=$1", &[&community]).await?;
+
+                    let local = row.get(0);
+                    if local {
+                        crate::spawn_task(crate::apub_util::forward_to_community_followers(
+                            community,
+                            serde_json::to_vec(&delete_ap)?,
+                            ctx,
+                        ));
+                    } else {
+                        let community_inbox: Option<&str> = row.get(2);
+
+                        if let Some(community_inbox) = community_inbox {
+                            let mut req = hyper::Request::post(community_inbox)
+                                .header(
+                                    hyper::header::CONTENT_TYPE,
+                                    crate::apub_util::ACTIVITY_TYPE,
+                                )
+                                .body(hyper::Body::from(serde_json::to_vec(&delete_ap)?))?;
+
+                            if let Ok(path_and_query) =
+                                crate::apub_util::get_path_and_query(&community_inbox)
+                            {
+                                let user_privkey =
+                                    crate::apub_util::fetch_or_create_local_user_privkey(user, &db)
+                                        .await?;
+                                req.headers_mut()
+                                    .insert(hyper::header::DATE, crate::apub_util::now_http_date());
+
+                                let key_id = crate::apub_util::get_local_person_pubkey_apub_id(
+                                    user,
+                                    &ctx.host_url_apub,
+                                );
+
+                                let signature = hancock::Signature::create_legacy(
+                                    &key_id,
+                                    &hyper::Method::POST,
+                                    &path_and_query,
+                                    req.headers(),
+                                    |src| crate::apub_util::do_sign(&user_privkey, &src),
+                                )?;
+
+                                req.headers_mut().insert("Signature", signature.to_header());
+                            }
+
+                            crate::res_to_error(ctx.http_client.request(req).await?).await?;
+                        }
+                    }
+                }
+
+                Ok(())
+            });
+
+            Ok(crate::empty_response())
+        }
+    }
+}
+
 async fn route_unstable_posts_replies_create(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
@@ -664,7 +765,7 @@ async fn route_unstable_comments_get(
     let db = ctx.db_pool.get().await?;
 
     let row = db.query_opt(
-        "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, person.username, person.local, person.ap_id, post.title FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+        "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, person.username, person.local, person.ap_id, post.title, reply.deleted FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
         &[&comment_id],
     ).await?;
 
@@ -707,6 +808,7 @@ async fn route_unstable_comments_get(
                     author,
                     content_text: Cow::Borrowed(row.get(2)),
                     created: created.to_rfc3339().into(),
+                    deleted: row.get(9),
                     id: comment_id,
                     replies: None, // TODO fetch replies
                 },
@@ -716,6 +818,106 @@ async fn route_unstable_comments_get(
             Ok(hyper::Response::builder()
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body(serde_json::to_vec(&comment)?.into())?)
+        }
+    }
+}
+
+async fn route_unstable_comments_delete(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (comment_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let row = db
+        .query_opt(
+            "SELECT author, (SELECT community FROM post WHERE id=reply.post) FROM reply WHERE id=$1 AND deleted=FALSE",
+            &[&comment_id],
+        )
+        .await?;
+    match row {
+        None => return Ok(crate::empty_response()), // already gone
+        Some(row) => {
+            let author: Option<i64> = row.get(0);
+            if author != Some(user) {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::FORBIDDEN,
+                    "That's not your post",
+                )));
+            }
+
+            db.execute(
+                "UPDATE reply SET content_text='[deleted]', deleted=TRUE WHERE id=$1",
+                &[&comment_id],
+            )
+            .await?;
+
+            crate::spawn_task(async move {
+                let community: Option<i64> = row.get(1);
+                if let Some(community) = community {
+                    let delete_ap = crate::apub_util::local_comment_delete_to_ap(
+                        comment_id,
+                        user,
+                        &ctx.host_url_apub,
+                    )?;
+                    let row = db.query_one("SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox) FROM community WHERE id=$1", &[&community]).await?;
+
+                    let local = row.get(0);
+                    if local {
+                        crate::spawn_task(crate::apub_util::forward_to_community_followers(
+                            community,
+                            serde_json::to_vec(&delete_ap)?,
+                            ctx,
+                        ));
+                    } else {
+                        let community_inbox: Option<&str> = row.get(2);
+
+                        if let Some(community_inbox) = community_inbox {
+                            let mut req = hyper::Request::post(community_inbox)
+                                .header(
+                                    hyper::header::CONTENT_TYPE,
+                                    crate::apub_util::ACTIVITY_TYPE,
+                                )
+                                .body(hyper::Body::from(serde_json::to_vec(&delete_ap)?))?;
+
+                            if let Ok(path_and_query) =
+                                crate::apub_util::get_path_and_query(&community_inbox)
+                            {
+                                let user_privkey =
+                                    crate::apub_util::fetch_or_create_local_user_privkey(user, &db)
+                                        .await?;
+                                req.headers_mut()
+                                    .insert(hyper::header::DATE, crate::apub_util::now_http_date());
+
+                                let key_id = crate::apub_util::get_local_person_pubkey_apub_id(
+                                    user,
+                                    &ctx.host_url_apub,
+                                );
+
+                                let signature = hancock::Signature::create_legacy(
+                                    &key_id,
+                                    &hyper::Method::POST,
+                                    &path_and_query,
+                                    req.headers(),
+                                    |src| crate::apub_util::do_sign(&user_privkey, &src),
+                                )?;
+
+                                req.headers_mut().insert("Signature", signature.to_header());
+                            }
+
+                            crate::res_to_error(ctx.http_client.request(req).await?).await?;
+                        }
+                    }
+                }
+
+                Ok(())
+            });
+
+            Ok(crate::empty_response())
         }
     }
 }
@@ -835,7 +1037,7 @@ async fn route_unstable_users_me_following_posts_list(
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&user, &limit];
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND community.id IN (SELECT community FROM community_follow WHERE follower=$1) ORDER BY created DESC LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE AND community.id IN (SELECT community FROM community_follow WHERE follower=$1) ORDER BY created DESC LIMIT $2",
         values.iter().map(|s| *s as _)
     ).await?;
 

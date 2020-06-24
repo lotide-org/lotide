@@ -1,0 +1,4 @@
+BEGIN;
+	ALTER TABLE post DROP COLUMN deleted;
+	ALTER TABLE reply DROP COLUMN deleted;
+COMMIT;

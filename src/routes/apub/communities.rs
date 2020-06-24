@@ -399,6 +399,13 @@ async fn handler_communities_inbox_post(
                 }
             }
         }
+        Some("Delete") => {
+            let activity = activity
+                .into_concrete::<activitystreams::activity::Delete>()
+                .unwrap();
+
+            crate::apub_util::handle_delete(activity, ctx).await?;
+        }
         _ => {}
     }
 
