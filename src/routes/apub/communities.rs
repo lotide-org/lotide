@@ -380,14 +380,12 @@ async fn handler_communities_inbox_post(
                             if local {
                                 db.execute("INSERT INTO community_follow (community, follower) VALUES ($1, $2) ON CONFLICT (community, follower) DO NOTHING", &[&community_id, &follower_local_id]).await?;
 
-                                crate::spawn_task(
-                                    crate::apub_util::send_community_follow_accept(
-                                        community_id,
-                                        follower_local_id,
-                                        follow,
-                                        ctx,
-                                    ),
-                                );
+                                crate::spawn_task(crate::apub_util::send_community_follow_accept(
+                                    community_id,
+                                    follower_local_id,
+                                    follow,
+                                    ctx,
+                                ));
                             }
                         } else {
                             eprintln!("Warning: recieved follow for unknown community");
