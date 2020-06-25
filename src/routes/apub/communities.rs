@@ -378,18 +378,16 @@ async fn handler_communities_inbox_post(
                         if let Some(row) = row {
                             let local: bool = row.get(0);
                             if local {
-                                let row_count = db.execute("INSERT INTO community_follow (community, follower) VALUES ($1, $2)", &[&community_id, &follower_local_id]).await?;
+                                db.execute("INSERT INTO community_follow (community, follower) VALUES ($1, $2) ON CONFLICT (community, follower) DO NOTHING", &[&community_id, &follower_local_id]).await?;
 
-                                if row_count > 0 {
-                                    crate::spawn_task(
-                                        crate::apub_util::send_community_follow_accept(
-                                            community_id,
-                                            follower_local_id,
-                                            follow,
-                                            ctx,
-                                        ),
-                                    );
-                                }
+                                crate::spawn_task(
+                                    crate::apub_util::send_community_follow_accept(
+                                        community_id,
+                                        follower_local_id,
+                                        follow,
+                                        ctx,
+                                    ),
+                                );
                             }
                         } else {
                             eprintln!("Warning: recieved follow for unknown community");
