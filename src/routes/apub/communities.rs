@@ -87,7 +87,7 @@ async fn handler_communities_get(
             let mut info = activitystreams::actor::Group::new();
             info.as_mut()
                 .set_id(community_ap_id.as_ref())?
-                .set_name_xsd_string(name)?;
+                .set_name_xsd_string(name.as_ref())?;
 
             let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
 
@@ -99,6 +99,7 @@ async fn handler_communities_get(
                 "{}/communities/{}/followers",
                 ctx.host_url_apub, community_id
             ))?;
+            actor_props.set_preferred_username(name)?;
 
             let info = info.extend(actor_props);
 

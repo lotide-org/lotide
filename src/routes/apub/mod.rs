@@ -103,7 +103,7 @@ async fn handler_users_get(
             let mut info = activitystreams::actor::Person::new();
             info.as_mut()
                 .set_id(user_ap_id.as_ref())?
-                .set_name_xsd_string(username)?;
+                .set_name_xsd_string(username.as_ref())?;
 
             let mut endpoints = activitystreams::endpoint::EndpointProperties::default();
             endpoints.set_shared_inbox(format!("{}/inbox", ctx.host_url_apub))?;
@@ -111,6 +111,7 @@ async fn handler_users_get(
             let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
             actor_props.set_inbox(format!("{}/users/{}/inbox", ctx.host_url_apub, user_id))?;
             actor_props.set_endpoints(endpoints)?;
+            actor_props.set_preferred_username(username)?;
 
             let info = info.extend(actor_props);
 
