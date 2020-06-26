@@ -266,7 +266,7 @@ async fn handler_comments_get(
 
     match db
         .query_opt(
-            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) WHERE reply.id=$1",
+            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
             &[&comment_id],
         )
         .await?
@@ -319,7 +319,35 @@ async fn handler_comments_get(
                 Some(false) => row.get(12),
             };
 
-            let body = crate::apub_util::local_comment_to_ap(&info, &post_ap_id, parent_ap_id.as_deref(), &community_ap_id, &ctx.host_url_apub)?;
+            let post_or_parent_author_ap_id = match parent_local_id {
+                None => {
+                    // no parent comment, use post
+                    match row.get(14) {
+                        Some(post_author_local) => {
+                            if post_author_local {
+                                Some(crate::apub_util::get_local_person_apub_id(row.get(13), &ctx.host_url_apub))
+                            } else {
+                                row.get(15)
+                            }
+                        },
+                        None => None,
+                    }
+                },
+                Some(_) => {
+                    match row.get(17) {
+                        Some(parent_author_local) => {
+                            if parent_author_local {
+                                Some(crate::apub_util::get_local_person_apub_id(row.get(16), &ctx.host_url_apub))
+                            } else {
+                                row.get(18)
+                            }
+                        },
+                        None => None,
+                    }
+                },
+            };
+
+            let body = crate::apub_util::local_comment_to_ap(&info, &post_ap_id, parent_ap_id.as_deref(), post_or_parent_author_ap_id.as_deref(), &community_ap_id, &ctx.host_url_apub)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
@@ -344,7 +372,7 @@ async fn handler_comments_create_get(
 
     match db
         .query_opt(
-            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) WHERE reply.id=$1",
+            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
             &[&comment_id],
         )
         .await?
@@ -397,7 +425,35 @@ async fn handler_comments_create_get(
                 Some(false) => row.get(12),
             };
 
-            let body = crate::apub_util::local_comment_to_create_ap(&info, &post_ap_id, parent_ap_id.as_deref(), &community_ap_id, &ctx.host_url_apub)?;
+            let post_or_parent_author_ap_id = match parent_local_id {
+                None => {
+                    // no parent comment, use post
+                    match row.get(14) {
+                        Some(post_author_local) => {
+                            if post_author_local {
+                                Some(crate::apub_util::get_local_person_apub_id(row.get(13), &ctx.host_url_apub))
+                            } else {
+                                row.get(15)
+                            }
+                        },
+                        None => None,
+                    }
+                },
+                Some(_) => {
+                    match row.get(17) {
+                        Some(parent_author_local) => {
+                            if parent_author_local {
+                                Some(crate::apub_util::get_local_person_apub_id(row.get(16), &ctx.host_url_apub))
+                            } else {
+                                row.get(18)
+                            }
+                        },
+                        None => None,
+                    }
+                },
+            };
+
+            let body = crate::apub_util::local_comment_to_create_ap(&info, &post_ap_id, parent_ap_id.as_deref(), post_or_parent_author_ap_id.as_deref(), &community_ap_id, &ctx.host_url_apub)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
