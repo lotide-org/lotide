@@ -223,10 +223,9 @@ async fn inbox_common(
                         let body = hyper::body::to_bytes(res.into_body()).await?;
                         let obj: activitystreams::object::ObjectBox =
                             serde_json::from_slice(&body)?;
-                        crate::apub_util::handle_recieved_object(
+                        crate::apub_util::handle_recieved_object_for_community(
                             community_local_id,
                             community_is_local,
-                            object_id.as_str(),
                             obj,
                             ctx,
                         )
@@ -234,6 +233,12 @@ async fn inbox_common(
                     }
                 }
             }
+        }
+        Some("Create") => {
+            let activity = activity
+                .into_concrete::<activitystreams::activity::Create>()
+                .unwrap();
+            inbox_common_create(activity, ctx).await?;
         }
         Some("Delete") => {
             let activity = activity
@@ -246,6 +251,56 @@ async fn inbox_common(
     }
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+}
+
+pub async fn inbox_common_create(
+    activity: activitystreams::activity::Create,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    let req_obj = activity.create_props.object;
+    if let activitystreams::activity::properties::ActorAndObjectPropertiesObjectEnum::Term(
+        req_obj,
+    ) = req_obj
+    {
+        let object_id = match req_obj {
+            activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::XsdAnyUri(id) => Some(id),
+            activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::BaseBox(req_obj) => {
+                match req_obj.kind() {
+                    Some("Page") => {
+                        let req_obj = req_obj.into_concrete::<activitystreams::object::Page>().unwrap();
+
+                        Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
+                    },
+                    Some("Note") => {
+                        let req_obj = req_obj.into_concrete::<activitystreams::object::Note>().unwrap();
+
+                        Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
+                    },
+                    _ => None,
+                }
+            }
+        };
+        if let Some(object_id) = object_id {
+            let res = crate::res_to_error(
+                ctx.http_client
+                    .request(
+                        hyper::Request::get(object_id.as_str())
+                            .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
+                            .body(Default::default())?,
+                    )
+                    .await?,
+            )
+            .await?;
+
+            let body = hyper::body::to_bytes(res.into_body()).await?;
+
+            let obj: activitystreams::object::ObjectBox = serde_json::from_slice(&body)?;
+
+            crate::apub_util::handle_recieved_object_for_local_community(obj, ctx).await?;
+        }
+    }
+
+    Ok(())
 }
 
 async fn handler_users_inbox_post(

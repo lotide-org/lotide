@@ -1075,10 +1075,111 @@ async fn send_to_community_followers(
     Ok(())
 }
 
-pub async fn handle_recieved_object(
+pub fn maybe_get_local_user_id_from_uri(uri: &str, host_url_apub: &str) -> Option<i64> {
+    if uri.starts_with(&host_url_apub) {
+        let path = &uri[host_url_apub.len()..];
+        if path.starts_with("/communities/") {
+            if let Ok(local_community_id) = path[13..].parse() {
+                Some(local_community_id)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+pub async fn handle_recieved_object_for_local_community(
+    obj: activitystreams::object::ObjectBox,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    use std::convert::TryInto;
+
+    let (to, in_reply_to, obj_id, obj) = match obj.kind() {
+        Some("Page") => {
+            let obj = obj
+                .into_concrete::<activitystreams::object::Page>()
+                .unwrap();
+            (
+                obj.object_props.to.clone(),
+                None,
+                obj.object_props.id.clone(),
+                obj.try_into().unwrap(),
+            )
+        }
+        Some("Note") => {
+            let obj = obj
+                .into_concrete::<activitystreams::object::Note>()
+                .unwrap();
+            (
+                obj.object_props.to.clone(),
+                obj.object_props.in_reply_to.clone(),
+                obj.object_props.id.clone(),
+                obj.try_into().unwrap(),
+            )
+        }
+        _ => (None, None, None, obj),
+    };
+
+    let local_community_id = match to {
+        None => None,
+        Some(activitystreams::object::properties::ObjectPropertiesToEnum::Term(term)) => match term
+        {
+            activitystreams::object::properties::ObjectPropertiesToTermEnum::XsdAnyUri(uri) => {
+                maybe_get_local_user_id_from_uri(uri.as_str(), &ctx.host_url_apub)
+            }
+            _ => None,
+        },
+        Some(activitystreams::object::properties::ObjectPropertiesToEnum::Array(terms)) => terms
+            .iter()
+            .filter_map(|term| match term {
+                activitystreams::object::properties::ObjectPropertiesToTermEnum::XsdAnyUri(uri) => {
+                    maybe_get_local_user_id_from_uri(uri.as_str(), &ctx.host_url_apub)
+                }
+                _ => None,
+            })
+            .next(),
+    };
+
+    if let Some(local_community_id) = local_community_id {
+        handle_recieved_object_for_community(local_community_id, true, obj, ctx).await?;
+    } else {
+        // not to a community, but might still match as a reply
+        if let Some(in_reply_to) = in_reply_to {
+            if let Some(obj_id) = obj_id {
+                if let Ok(obj) = obj.into_concrete::<activitystreams::object::Note>() {
+                    // TODO deduplicate this?
+
+                    let content_text = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
+                    let created = obj.as_ref().get_published().map(|x| x.as_datetime());
+                    let author = obj
+                        .as_ref()
+                        .get_attributed_to_xsd_any_uri()
+                        .map(|x| x.as_str());
+
+                    handle_recieved_reply(
+                        obj_id.as_ref(),
+                        content_text.unwrap_or(""),
+                        created,
+                        author,
+                        &in_reply_to,
+                        ctx,
+                    )
+                    .await?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_recieved_object_for_community(
     community_local_id: i64,
     community_is_local: bool,
-    object_id: &str,
     obj: activitystreams::object::ObjectBox,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
@@ -1100,21 +1201,22 @@ pub async fn handle_recieved_object(
                 .as_ref()
                 .get_attributed_to_xsd_any_uri()
                 .map(|x| x.as_str());
-            // TODO verify that this post is intended to go to this community
             // TODO verify this post actually came from the specified author
 
-            handle_recieved_post(
-                object_id,
-                title,
-                href,
-                content_text,
-                created,
-                author,
-                community_local_id,
-                community_is_local,
-                ctx,
-            )
-            .await?;
+            if let Some(object_id) = &obj.as_ref().id {
+                handle_recieved_post(
+                    object_id.as_str(),
+                    title,
+                    href,
+                    content_text,
+                    created,
+                    author,
+                    community_local_id,
+                    community_is_local,
+                    ctx,
+                )
+                .await?;
+            }
         }
         Some("Note") => {
             let obj: activitystreams::object::Note = obj.into_concrete().unwrap();
@@ -1125,38 +1227,42 @@ pub async fn handle_recieved_object(
                 .get_attributed_to_xsd_any_uri()
                 .map(|x| x.as_str());
 
-            if let Some(in_reply_to) = &obj.as_ref().in_reply_to {
-                // it's a reply
+            if let Some(object_id) = &obj.as_ref().id {
+                if let Some(in_reply_to) = &obj.as_ref().in_reply_to {
+                    // it's a reply
 
-                handle_recieved_reply(
-                    object_id,
-                    content_text.unwrap_or(""),
-                    created,
-                    author,
-                    in_reply_to,
-                    ctx,
-                )
-                .await?;
-            } else {
-                // not a reply, must be a top-level post
-                let title = obj
-                    .as_ref()
-                    .get_summary_xsd_string()
-                    .map(|x| x.as_str())
-                    .unwrap_or("");
+                    handle_recieved_reply(
+                        object_id.as_ref(),
+                        content_text.unwrap_or(""),
+                        created,
+                        author,
+                        in_reply_to,
+                        ctx,
+                    )
+                    .await?;
+                } else {
+                    // not a reply, must be a top-level post
+                    let title = obj
+                        .as_ref()
+                        .get_summary_xsd_string()
+                        .map(|x| x.as_str())
+                        .unwrap_or("");
 
-                handle_recieved_post(
-                    object_id,
-                    title,
-                    None,
-                    content_text,
-                    created,
-                    author,
-                    community_local_id,
-                    community_is_local,
-                    ctx,
-                )
-                .await?;
+                    if let Some(object_id) = &obj.as_ref().id {
+                        handle_recieved_post(
+                            object_id.as_str(),
+                            title,
+                            None,
+                            content_text,
+                            created,
+                            author,
+                            community_local_id,
+                            community_is_local,
+                            ctx,
+                        )
+                        .await?;
+                    }
+                }
             }
         }
         _ => {}
