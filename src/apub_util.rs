@@ -420,6 +420,12 @@ pub fn local_community_post_announce_ap(
         "{}/posts/{}/announce",
         community_ap_id, post_local_id,
     ))?;
+    announce
+        .object_props
+        .set_to_xsd_any_uri(format!("{}/followers", community_ap_id))?;
+    announce
+        .object_props
+        .set_cc_xsd_any_uri(activitystreams::public())?;
 
     announce
         .announce_props
@@ -594,7 +600,8 @@ pub fn post_to_ap(
                 .set_url_xsd_any_uri(href)?
                 .set_summary_xsd_string(post.title)?
                 .set_published(post.created.clone())?
-                .set_to_xsd_any_uri(community_ap_id)?;
+                .set_to_xsd_any_uri(community_ap_id)?
+                .set_cc_xsd_any_uri(activitystreams::public())?;
 
             if let Some(content) = post.content_text {
                 post_ap
@@ -619,7 +626,8 @@ pub fn post_to_ap(
                 .set_media_type(mime::TEXT_PLAIN)?
                 .set_summary_xsd_string(post.title)?
                 .set_published(post.created.clone())?
-                .set_to_xsd_any_uri(community_ap_id)?;
+                .set_to_xsd_any_uri(community_ap_id)?
+                .set_cc_xsd_any_uri(activitystreams::public())?;
 
             Ok(post_ap.try_into()?)
         }
