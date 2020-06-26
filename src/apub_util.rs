@@ -55,6 +55,14 @@ pub fn get_local_community_pubkey_apub_id(community: i64, host_url_apub: &str) -
     )
 }
 
+pub fn get_local_follow_apub_id(community: i64, follower: i64, host_url_apub: &str) -> String {
+    format!(
+        "{}/followers/{}",
+        get_local_community_apub_id(community, host_url_apub),
+        follower
+    )
+}
+
 pub fn get_path_and_query(url: &str) -> Result<String, url::ParseError> {
     let url = url::Url::parse(&url)?;
     Ok(format!("{}{}", url.path(), url.query().unwrap_or("")))
@@ -498,6 +506,24 @@ pub fn spawn_announce_community_comment(
     });
 }
 
+pub fn community_follow_accept_to_ap(
+    community_ap_id: &str,
+    follower_local_id: i64,
+    follow_ap_id: &str,
+) -> Result<activitystreams::activity::Accept, crate::Error> {
+    let mut accept = activitystreams::activity::Accept::new();
+
+    accept.object_props.set_id(format!(
+        "{}/followers/{}/accept",
+        community_ap_id, follower_local_id
+    ))?;
+
+    accept.accept_props.set_actor_xsd_any_uri(community_ap_id)?;
+    accept.accept_props.set_object_xsd_any_uri(follow_ap_id)?;
+
+    Ok(accept)
+}
+
 pub async fn send_community_follow_accept(
     local_community: i64,
     follower: i64,
@@ -505,6 +531,13 @@ pub async fn send_community_follow_accept(
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
+
+    let follow_ap_id = follow
+        .object_props
+        .get_id()
+        .ok_or(crate::Error::InternalStrStatic(
+            "Missing ID in Follow activity",
+        ))?;
 
     let (val1, community_privkey) = futures::future::try_join(
         async {
@@ -534,11 +567,8 @@ pub async fn send_community_follow_accept(
                 }
             };
 
-            let mut accept = activitystreams::activity::Accept::new();
-
-            accept.accept_props.set_actor_xsd_any_uri(community_ap_id)?;
-            accept.accept_props.set_object_base_box(follow)?;
-
+            let accept =
+                community_follow_accept_to_ap(&community_ap_id, follower, follow_ap_id.as_str())?;
             println!("{:?}", accept);
 
             let body = serde_json::to_vec(&accept)?.into();
