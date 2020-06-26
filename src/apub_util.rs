@@ -911,16 +911,19 @@ pub async fn forward_to_community_followers(
     futures::stream::iter(
         inboxes
             .into_iter()
-            .filter_map(
-                |inbox| match hyper::Request::post(inbox).body(body.clone().into()) {
+            .filter_map(|inbox| {
+                match hyper::Request::post(inbox)
+                    .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
+                    .body(body.clone().into())
+                {
                     Err(err) => {
                         eprintln!("Failed to construct inbox post: {:?}", err);
 
                         None
                     }
                     Ok(req) => Some(req),
-                },
-            )
+                }
+            })
             .map(|req| {
                 ctx.http_client
                     .request(req)
@@ -973,7 +976,10 @@ async fn send_to_community_followers(
         .into_iter()
         .filter_map(|inbox| {
             let path_and_query_res = get_path_and_query(&inbox);
-            match hyper::Request::post(inbox).body(body.clone().into()) {
+            match hyper::Request::post(inbox)
+                .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
+                .body(body.clone().into())
+            {
                 Err(err) => {
                     eprintln!("Failed to construct inbox post: {:?}", err);
 
