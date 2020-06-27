@@ -2,6 +2,41 @@ use crate::routes::api::{RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPo
 use serde_derive::Deserialize;
 use std::sync::Arc;
 
+async fn route_unstable_communities_list(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let rows = db
+        .query("SELECT id, local, ap_id, name FROM community", &[])
+        .await?;
+
+    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
+
+    let output: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            let id = row.get(0);
+            let name = row.get(3);
+            let local = row.get(1);
+            let host = crate::get_actor_host_or_unknown(local, row.get(2), &local_hostname);
+
+            RespMinimalCommunityInfo {
+                id,
+                name,
+                local,
+                host,
+            }
+        })
+        .collect();
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&output)?.into())?)
+}
+
 async fn route_unstable_communities_create(
     _: (),
     ctx: Arc<crate::RouteContext>,
@@ -215,6 +250,7 @@ async fn route_unstable_communities_posts_list(
 
 pub fn route_communities() -> crate::RouteNode<()> {
     crate::RouteNode::new()
+        .with_handler_async("GET", route_unstable_communities_list)
         .with_handler_async("POST", route_unstable_communities_create)
         .with_child_parse::<i64, _>(
             crate::RouteNode::new()
