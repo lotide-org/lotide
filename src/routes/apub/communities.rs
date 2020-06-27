@@ -22,7 +22,14 @@ pub fn route_communities() -> crate::RouteNode<()> {
                     .with_handler_async("GET", handler_communities_followers_list)
                     .with_child_parse::<i64, _>(
                         crate::RouteNode::new()
-                            .with_handler_async("GET", handler_communities_followers_get),
+                            .with_handler_async("GET", handler_communities_followers_get)
+                            .with_child(
+                                "accept",
+                                crate::RouteNode::new().with_handler_async(
+                                    "GET",
+                                    handler_communities_followers_accept_get,
+                                ),
+                            ),
                     ),
             )
             .with_child(
@@ -273,6 +280,66 @@ async fn handler_communities_followers_get(
     }
 }
 
+async fn handler_communities_followers_accept_get(
+    params: (i64, i64),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, user_id) = params;
+    let db = ctx.db_pool.get().await?;
+
+    let row = db.query_opt(
+        "SELECT community.local, community_follow.ap_id, person.id, person.local FROM community_follow, community, person WHERE community_follow.community = community.id AND community_follow.follower = person.id AND community.id = $1 AND person.id = $2",
+        &[&community_id, &user_id],
+    ).await?;
+
+    match row {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such follow",
+        )),
+        Some(row) => {
+            let community_local: bool = row.get(0);
+            if !community_local {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested community is not owned by this instance",
+                )));
+            }
+
+            let follower_local = row.get(3);
+            let follow_ap_id = if follower_local {
+                Cow::Owned(crate::apub_util::get_local_follow_apub_id(
+                    community_id,
+                    row.get(2),
+                    &ctx.host_url_apub,
+                ))
+            } else {
+                let follow_ap_id: Option<&str> = row.get(1);
+                follow_ap_id
+                    .ok_or_else(|| {
+                        crate::Error::InternalStr(format!(
+                            "Missing ap_id for follow ({} / {})",
+                            community_id, user_id
+                        ))
+                    })?
+                    .into()
+            };
+
+            let body = crate::apub_util::community_follow_accept_to_ap(
+                &crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+                user_id,
+                &follow_ap_id,
+            )?;
+            let body = serde_json::to_vec(&body)?.into();
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                .body(body)?)
+        }
+    }
+}
+
 async fn handler_communities_inbox_post(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
@@ -285,68 +352,13 @@ async fn handler_communities_inbox_post(
 
     match activity.kind() {
         Some("Create") => {
-            let activity = activity
-                .into_concrete::<activitystreams::activity::Create>()
-                .unwrap();
-            let req_obj = activity.create_props.object;
-            if let activitystreams::activity::properties::ActorAndObjectPropertiesObjectEnum::Term(
-                req_obj,
-            ) = req_obj
-            {
-                let object_id = match req_obj {
-                    activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::XsdAnyUri(id) => Some(id),
-                    activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::BaseBox(req_obj) => {
-                        match req_obj.kind() {
-                            Some("Page") => {
-                                let req_obj = req_obj.into_concrete::<activitystreams::object::Page>().unwrap();
-
-                                Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
-                            },
-                            Some("Note") => {
-                                let req_obj = req_obj.into_concrete::<activitystreams::object::Note>().unwrap();
-
-                                Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
-                            },
-                            _ => None,
-                        }
-                    }
-                };
-                if let Some(object_id) = object_id {
-                    let res = crate::res_to_error(
-                        ctx.http_client
-                            .request(
-                                hyper::Request::get(object_id.as_str())
-                                    .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
-                                    .body(Default::default())?,
-                            )
-                            .await?,
-                    )
-                    .await?;
-
-                    let body = hyper::body::to_bytes(res.into_body()).await?;
-
-                    let obj: activitystreams::object::ObjectBox = serde_json::from_slice(&body)?;
-
-                    let community_is_local = {
-                        let row = db
-                            .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
-                            .await?;
-                        match row {
-                            None => false,
-                            Some(row) => row.get(0),
-                        }
-                    };
-
-                    crate::apub_util::handle_recieved_object(
-                        community_id,
-                        community_is_local,
-                        object_id.as_str(),
-                        obj,
-                        ctx,
-                    )
-                    .await?;
-                }
-            }
+            super::inbox_common_create(
+                activity
+                    .into_concrete::<activitystreams::activity::Create>()
+                    .unwrap(),
+                ctx,
+            )
+            .await?;
         }
         Some("Follow") => {
             let follow = activity

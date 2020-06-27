@@ -215,23 +215,23 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
     spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
-        let (post_community_row, parent_ap_id) = futures::future::try_join(
+        let res = futures::future::try_join(
             db.query_opt(
-                "SELECT community.id, community.local, community.ap_id, community.ap_inbox, post.local, post.ap_id FROM post, community WHERE post.id = $1 AND post.community = community.id",
+                "SELECT community.id, community.local, community.ap_id, community.ap_inbox, post.local, post.ap_id, person.id, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.id = $1 AND post.community = community.id",
                 &[&comment.post],
             ),
             async {
                 match comment.parent {
                     Some(parent) => {
                         let row = db.query_one(
-                            "SELECT local, ap_id FROM reply WHERE id=$1",
+                            "SELECT reply.local, reply.ap_id, person.id, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE reply.id=$1",
                             &[&parent],
                         ).await?;
 
                         if row.get(0) {
-                            Ok(Some(crate::apub_util::get_local_comment_apub_id(parent, &ctx.host_url_apub)))
+                            Ok(Some((crate::apub_util::get_local_comment_apub_id(parent, &ctx.host_url_apub), Some(crate::apub_util::get_local_person_apub_id(row.get(2), &ctx.host_url_apub)))))
                         } else {
-                            Ok(row.get(1))
+                            Ok(row.get::<_, Option<String>>(1).map(|x| (x, row.get(3))))
                         }
                     },
                     None => Ok(None),
@@ -239,7 +239,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
             }
         ).await?;
 
-        if let Some(row) = post_community_row {
+        if let Some(row) = res.0 {
             let community_local: bool = row.get(1);
             let post_local: bool = row.get(4);
 
@@ -259,6 +259,26 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                 ),
             };
 
+            let (parent_ap_id, post_or_parent_author_ap_id) = match comment.parent {
+                None => (
+                    None,
+                    if post_local {
+                        Some(crate::apub_util::get_local_person_apub_id(
+                            row.get(6),
+                            &ctx.host_url_apub,
+                        ))
+                    } else {
+                        row.get(7)
+                    },
+                ),
+                Some(_) => match res.1 {
+                    None => (None, None),
+                    Some((parent_ap_id, parent_author_ap_id)) => {
+                        (Some(parent_ap_id), parent_author_ap_id)
+                    }
+                },
+            };
+
             if let Some(post_ap_id) = post_ap_id {
                 if community_local {
                     let community = row.get(0);
@@ -270,6 +290,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                         row.get(3),
                         post_ap_id,
                         parent_ap_id,
+                        post_or_parent_author_ap_id.as_deref(),
                         ctx,
                     )
                     .await?;
