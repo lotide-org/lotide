@@ -146,9 +146,11 @@ pub async fn fetch_actor(
             > = serde_json::from_slice(&body)?;
 
             let username = person
-                .as_ref()
-                .get_name_xsd_string()
+                .base
+                .extension
+                .get_preferred_username()
                 .map(|x| x.as_str())
+                .or_else(|| person.as_ref().get_name_xsd_string().map(|x| x.as_str()))
                 .unwrap_or("");
             let inbox = person.base.extension.inbox.as_str();
             let shared_inbox = person
