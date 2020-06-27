@@ -707,7 +707,7 @@ pub fn local_comment_to_ap(
         ))?
         .set_published(comment.created.clone())?
         .set_in_reply_to_xsd_any_uri(parent_ap_id.unwrap_or(post_ap_id))?
-        .set_content_xsd_string(comment.content_text.to_owned())?;
+        .set_content_xsd_string(comment.content_text.clone().unwrap())?;
 
     if let Some(parent_or_post_author_ap_id) = parent_or_post_author_ap_id {
         use std::convert::TryInto;
@@ -1155,7 +1155,8 @@ pub async fn handle_recieved_object_for_local_community(
                 if let Ok(obj) = obj.into_concrete::<activitystreams::object::Note>() {
                     // TODO deduplicate this?
 
-                    let content_text = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
+                    let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
+                    let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
                     let created = obj.as_ref().get_published().map(|x| x.as_datetime());
                     let author = obj
                         .as_ref()
@@ -1164,7 +1165,8 @@ pub async fn handle_recieved_object_for_local_community(
 
                     handle_recieved_reply(
                         obj_id.as_ref(),
-                        content_text.unwrap_or(""),
+                        content.unwrap_or(""),
+                        media_type,
                         created,
                         author,
                         &in_reply_to,
@@ -1196,7 +1198,8 @@ pub async fn handle_recieved_object_for_community(
                 .map(|x| x.as_str())
                 .unwrap_or("");
             let href = obj.as_ref().get_url_xsd_any_uri().map(|x| x.as_str());
-            let content_text = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
+            let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
+            let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
             let created = obj.as_ref().get_published().map(|x| x.as_datetime());
             // TODO support objects here?
             let author = obj
@@ -1210,7 +1213,8 @@ pub async fn handle_recieved_object_for_community(
                     object_id.as_str(),
                     title,
                     href,
-                    content_text,
+                    content,
+                    media_type,
                     created,
                     author,
                     community_local_id,
@@ -1222,7 +1226,8 @@ pub async fn handle_recieved_object_for_community(
         }
         Some("Note") => {
             let obj: activitystreams::object::Note = obj.into_concrete().unwrap();
-            let content_text = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
+            let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
+            let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
             let created = obj.as_ref().get_published().map(|x| x.as_datetime());
             let author = obj
                 .as_ref()
@@ -1235,7 +1240,8 @@ pub async fn handle_recieved_object_for_community(
 
                     handle_recieved_reply(
                         object_id.as_ref(),
-                        content_text.unwrap_or(""),
+                        content.unwrap_or(""),
+                        media_type,
                         created,
                         author,
                         in_reply_to,
@@ -1255,7 +1261,8 @@ pub async fn handle_recieved_object_for_community(
                             object_id.as_str(),
                             title,
                             None,
-                            content_text,
+                            content,
+                            media_type,
                             created,
                             author,
                             community_local_id,
@@ -1277,7 +1284,8 @@ async fn handle_recieved_post(
     object_id: &str,
     title: &str,
     href: Option<&str>,
-    content_text: Option<&str>,
+    content: Option<&str>,
+    media_type: Option<&mime::Mime>,
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
     author: Option<&str>,
     community_local_id: i64,
@@ -1292,9 +1300,16 @@ async fn handle_recieved_post(
         None => None,
     };
 
+    let content_is_html = media_type.is_none() || media_type == Some(&mime::TEXT_HTML);
+    let (content_text, content_html) = if content_is_html {
+        (None, Some(content))
+    } else {
+        (Some(content), None)
+    };
+
     let row = db.query_opt(
-        "INSERT INTO post (author, href, content_text, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), $6, FALSE, $7) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
-        &[&author, &href, &content_text, &title, &created, &community_local_id, &object_id],
+        "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
+        &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id],
     ).await?;
 
     if community_is_local {
@@ -1309,7 +1324,8 @@ async fn handle_recieved_post(
 
 async fn handle_recieved_reply(
     object_id: &str,
-    content_text: &str,
+    content: &str,
+    media_type: Option<&mime::Mime>,
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
     author: Option<&str>,
     in_reply_to: &activitystreams::object::properties::ObjectPropertiesInReplyToEnum,
@@ -1398,9 +1414,16 @@ async fn handle_recieved_reply(
                     row.map(|row| row.get(0))
                 };
 
+                let content_is_html = media_type.is_none() || media_type == Some(&mime::TEXT_HTML);
+                let (content_text, content_html) = if content_is_html {
+                    (None, Some(content))
+                } else {
+                    (Some(content), None)
+                };
+
                 let row = db.query_opt(
-                    "INSERT INTO reply (post, parent, author, content_text, created, local, ap_id) VALUES ($1, $2, $3, $4, COALESCE($5, current_timestamp), FALSE, $6) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
-                    &[&post, &parent, &author, &content_text, &created, &object_id],
+                    "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
+                    &[&post, &parent, &author, &content_text, &content_html, &created, &object_id],
                     ).await?;
 
                 if let Some(row) = row {

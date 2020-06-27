@@ -59,7 +59,7 @@ pub struct CommentInfo {
     author: Option<i64>,
     post: i64,
     parent: Option<i64>,
-    content_text: String,
+    content_text: Option<String>,
     created: chrono::DateTime<chrono::FixedOffset>,
     ap_id: APIDOrLocal,
 }

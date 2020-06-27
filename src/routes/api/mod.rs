@@ -34,6 +34,7 @@ struct RespPostListPost<'a> {
     title: &'a str,
     href: Option<&'a str>,
     content_text: Option<&'a str>,
+    content_html: Option<&'a str>,
     author: Option<&'a RespMinimalAuthorInfo<'a>>,
     created: &'a str,
     community: &'a RespMinimalCommunityInfo<'a>,
@@ -44,7 +45,8 @@ struct RespPostCommentInfo<'a> {
     id: i64,
     author: Option<RespMinimalAuthorInfo<'a>>,
     created: Cow<'a, str>,
-    content_text: Cow<'a, str>,
+    content_text: Option<Cow<'a, str>>,
+    content_html: Option<Cow<'a, str>>,
     deleted: bool,
     replies: Option<Vec<RespPostCommentInfo<'a>>>,
 }
@@ -274,7 +276,7 @@ async fn route_unstable_posts_list(
     let limit: i64 = 10;
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY created DESC LIMIT $1",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY created DESC LIMIT $1",
         ([limit]).iter().map(|x| x as _),
     ).await?;
 
@@ -402,7 +404,7 @@ async fn get_comments_replies<'a>(
 
     let stream = crate::query_stream(
         db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY created DESC",
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY created DESC",
         &[&parents],
     ).await?;
 
@@ -410,15 +412,16 @@ async fn get_comments_replies<'a>(
         .map_err(crate::Error::from)
         .and_then(|row| {
             let id: i64 = row.get(0);
-            let content_text: String = row.get(2);
+            let content_text: Option<String> = row.get(2);
+            let content_html: Option<String> = row.get(5);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
             let parent: i64 = row.get(4);
 
-            let author_username: Option<String> = row.get(5);
+            let author_username: Option<String> = row.get(6);
             let author = author_username.map(|author_username| {
                 let author_id: i64 = row.get(1);
-                let author_local: bool = row.get(6);
-                let author_ap_id: Option<&str> = row.get(7);
+                let author_local: bool = row.get(7);
+                let author_ap_id: Option<&str> = row.get(8);
 
                 RespMinimalAuthorInfo {
                     id: author_id,
@@ -437,9 +440,10 @@ async fn get_comments_replies<'a>(
                 RespPostCommentInfo {
                     id,
                     author,
-                    content_text: content_text.into(),
+                    content_text: content_text.map(From::from),
+                    content_html: content_html.map(From::from),
                     created: created.to_rfc3339().into(),
-                    deleted: row.get(8),
+                    deleted: row.get(9),
                     replies: None,
                 },
             ))
@@ -466,7 +470,7 @@ async fn get_post_comments<'a>(
 
     let stream = crate::query_stream(
         db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY created DESC",
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY created DESC",
         &[&post_id],
     ).await?;
 
@@ -474,14 +478,15 @@ async fn get_post_comments<'a>(
         .map_err(crate::Error::from)
         .and_then(|row| {
             let id: i64 = row.get(0);
-            let content_text: String = row.get(2);
+            let content_text: Option<String> = row.get(2);
+            let content_html: Option<String> = row.get(4);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
 
-            let author_username: Option<String> = row.get(4);
+            let author_username: Option<String> = row.get(5);
             let author = author_username.map(|author_username| {
                 let author_id: i64 = row.get(1);
-                let author_local: bool = row.get(5);
-                let author_ap_id: Option<&str> = row.get(6);
+                let author_local: bool = row.get(6);
+                let author_ap_id: Option<&str> = row.get(7);
 
                 RespMinimalAuthorInfo {
                     id: author_id,
@@ -500,9 +505,10 @@ async fn get_post_comments<'a>(
                 RespPostCommentInfo {
                     id,
                     author,
-                    content_text: content_text.into(),
+                    content_text: content_text.map(From::from),
+                    content_html: content_html.map(From::from),
                     created: created.to_rfc3339().into(),
-                    deleted: row.get(7),
+                    deleted: row.get(8),
                     replies: None,
                 },
             ))
@@ -536,7 +542,7 @@ async fn route_unstable_posts_get(
 
     let (row, comments) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -551,23 +557,24 @@ async fn route_unstable_posts_get(
         Some(row) => {
             let href = row.get(1);
             let content_text = row.get(2);
+            let content_html = row.get(5);
             let title = row.get(3);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
-            let community_id = row.get(5);
-            let community_name = row.get(6);
-            let community_local = row.get(7);
-            let community_ap_id = row.get(8);
+            let community_id = row.get(6);
+            let community_name = row.get(7);
+            let community_local = row.get(8);
+            let community_ap_id = row.get(9);
 
-            let author = match row.get(9) {
+            let author = match row.get(10) {
                 Some(author_username) => {
-                    let author_local = row.get(10);
+                    let author_local = row.get(11);
                     Some(RespMinimalAuthorInfo {
                         id: row.get(0),
                         username: Cow::Borrowed(author_username),
                         local: author_local,
                         host: crate::get_actor_host_or_unknown(
                             author_local,
-                            row.get(11),
+                            row.get(12),
                             &local_hostname,
                         ),
                     })
@@ -591,6 +598,7 @@ async fn route_unstable_posts_get(
                 title,
                 href,
                 content_text,
+                content_html,
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,
@@ -737,7 +745,7 @@ async fn route_unstable_posts_replies_create(
         author: Some(user),
         post: post_id,
         parent: None,
-        content_text: body.content_text.into_owned(),
+        content_text: Some(body.content_text.into_owned()),
         created,
         ap_id: crate::APIDOrLocal::Local,
     };
@@ -766,7 +774,7 @@ async fn route_unstable_comments_get(
     let db = ctx.db_pool.get().await?;
 
     let row = db.query_opt(
-        "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, person.username, person.local, person.ap_id, post.title, reply.deleted FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+        "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
         &[&comment_id],
     ).await?;
 
@@ -779,16 +787,16 @@ async fn route_unstable_comments_get(
         )),
         Some(row) => {
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
-            let author = match row.get(5) {
+            let author = match row.get(6) {
                 Some(author_username) => {
-                    let author_local = row.get(6);
+                    let author_local = row.get(7);
                     Some(RespMinimalAuthorInfo {
                         id: row.get(0),
                         username: Cow::Borrowed(author_username),
                         local: author_local,
                         host: crate::get_actor_host_or_unknown(
                             author_local,
-                            row.get(7),
+                            row.get(8),
                             &local_hostname,
                         ),
                     })
@@ -796,7 +804,7 @@ async fn route_unstable_comments_get(
                 None => None,
             };
 
-            let post = match row.get(8) {
+            let post = match row.get(9) {
                 Some(post_title) => Some(RespMinimalPostInfo {
                     id: row.get(1),
                     title: post_title,
@@ -807,9 +815,10 @@ async fn route_unstable_comments_get(
             let comment = RespCommentInfo {
                 base: RespPostCommentInfo {
                     author,
-                    content_text: Cow::Borrowed(row.get(2)),
+                    content_text: row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
+                    content_html: row.get::<_, Option<&str>>(5).map(Cow::Borrowed),
                     created: created.to_rfc3339().into(),
-                    deleted: row.get(9),
+                    deleted: row.get(10),
                     id: comment_id,
                     replies: None, // TODO fetch replies
                 },
@@ -966,7 +975,7 @@ async fn route_unstable_comments_replies_create(
         author: Some(user),
         post,
         parent: Some(parent_id),
-        content_text: body.content_text.into_owned(),
+        content_text: Some(body.content_text.into_owned()),
         created,
         ap_id: crate::APIDOrLocal::Local,
     };
@@ -1038,7 +1047,7 @@ async fn route_unstable_users_me_following_posts_list(
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&user, &limit];
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE AND community.id IN (SELECT community FROM community_follow WHERE follower=$1) ORDER BY created DESC LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE AND community.id IN (SELECT community FROM community_follow WHERE follower=$1) ORDER BY created DESC LIMIT $2",
         values.iter().map(|s| *s as _)
     ).await?;
 
@@ -1067,17 +1076,18 @@ async fn handle_common_posts_list(
             let author_id: Option<i64> = row.get(1);
             let href: Option<&str> = row.get(2);
             let content_text: Option<&str> = row.get(3);
+            let content_html: Option<&str> = row.get(6);
             let title: &str = row.get(4);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
-            let community_id: i64 = row.get(6);
-            let community_name: &str = row.get(7);
-            let community_local: bool = row.get(8);
-            let community_ap_id: Option<&str> = row.get(9);
+            let community_id: i64 = row.get(7);
+            let community_name: &str = row.get(8);
+            let community_local: bool = row.get(9);
+            let community_ap_id: Option<&str> = row.get(10);
 
             let author = author_id.map(|id| {
-                let author_name: &str = row.get(10);
-                let author_local: bool = row.get(11);
-                let author_ap_id: Option<&str> = row.get(12);
+                let author_name: &str = row.get(11);
+                let author_local: bool = row.get(12);
+                let author_ap_id: Option<&str> = row.get(13);
                 RespMinimalAuthorInfo {
                     id,
                     username: author_name.into(),
@@ -1106,6 +1116,7 @@ async fn handle_common_posts_list(
                 title,
                 href,
                 content_text,
+                content_html,
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,

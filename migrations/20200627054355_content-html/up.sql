@@ -1,0 +1,6 @@
+BEGIN;
+	ALTER TABLE post ADD COLUMN content_html TEXT;
+
+	ALTER TABLE reply ADD COLUMN content_html TEXT;
+	ALTER TABLE reply ALTER COLUMN content_text DROP NOT NULL;
+COMMIT;

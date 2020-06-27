@@ -154,7 +154,7 @@ async fn route_unstable_communities_posts_list(
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id, &limit];
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, person.username, person.local, person.ap_id FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.deleted=FALSE ORDER BY created DESC LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.deleted=FALSE ORDER BY created DESC LIMIT $2",
         values.iter().map(|s| *s as _)
     ).await?;
 
@@ -167,13 +167,14 @@ async fn route_unstable_communities_posts_list(
             let author_id: Option<i64> = row.get(1);
             let href: Option<&str> = row.get(2);
             let content_text: Option<&str> = row.get(3);
+            let content_html: Option<&str> = row.get(6);
             let title: &str = row.get(4);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
 
             let author = author_id.map(|id| {
-                let author_name: &str = row.get(6);
-                let author_local: bool = row.get(7);
-                let author_ap_id: Option<&str> = row.get(8);
+                let author_name: &str = row.get(7);
+                let author_local: bool = row.get(8);
+                let author_ap_id: Option<&str> = row.get(9);
                 RespMinimalAuthorInfo {
                     id,
                     username: author_name.into(),
@@ -194,6 +195,7 @@ async fn route_unstable_communities_posts_list(
                 title,
                 href,
                 content_text,
+                content_html,
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,
