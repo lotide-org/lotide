@@ -722,7 +722,7 @@ async fn route_unstable_posts_delete(
                 )));
             }
 
-            db.execute("UPDATE post SET href=NULL, title='[deleted]', content_text='[deleted]', deleted=TRUE WHERE id=$1", &[&post_id]).await?;
+            db.execute("UPDATE post SET had_href=(href IS NOT NULL), href=NULL, title='[deleted]', content_text='[deleted]', deleted=TRUE WHERE id=$1", &[&post_id]).await?;
 
             crate::spawn_task(async move {
                 let community: Option<i64> = row.get(1);

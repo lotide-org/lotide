@@ -321,7 +321,7 @@ async fn handler_comments_get(
 
     match db
         .query_opt(
-            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
+            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id, reply.deleted FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
             &[&comment_id],
         )
         .await?
@@ -338,6 +338,22 @@ async fn handler_comments_get(
                     hyper::StatusCode::BAD_REQUEST,
                     "Requested comment is not owned by this instance",
                 )));
+            }
+
+            if row.get(19) {
+                let mut body = activitystreams::object::Tombstone::new();
+                body.tombstone_props.set_former_type_xsd_string("Note")?;
+                body.object_props.set_id(crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub))?;
+
+                let body = serde_json::to_vec(&body)?.into();
+
+                let mut resp = hyper::Response::new(body);
+                resp.headers_mut().insert(
+                    hyper::header::CONTENT_TYPE,
+                    hyper::header::HeaderValue::from_static(crate::apub_util::ACTIVITY_TYPE),
+                );
+
+                return Ok(resp);
             }
 
             let post_local_id: i64 = row.get(2);
@@ -427,7 +443,7 @@ async fn handler_comments_create_get(
 
     match db
         .query_opt(
-            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
+            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id, reply.deleted FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
             &[&comment_id],
         )
         .await?
@@ -443,6 +459,13 @@ async fn handler_comments_create_get(
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::BAD_REQUEST,
                     "Requested comment is not owned by this instance",
+                )));
+            }
+
+            if row.get(19) {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::GONE,
+                    "Comment has been deleted",
                 )));
             }
 
@@ -599,7 +622,7 @@ async fn handler_posts_get(
 
     match db
         .query_opt(
-            "SELECT author, href, content_text, title, created, community, local, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
+            "SELECT author, href, content_text, title, created, community, local, deleted, had_href, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
             &[&post_id],
         )
         .await?
@@ -618,9 +641,27 @@ async fn handler_posts_get(
                 )));
             }
 
+            if row.get(7) {
+                let had_href: Option<bool> = row.get(8);
+
+                let mut body = activitystreams::object::Tombstone::new();
+                body.tombstone_props.set_former_type_xsd_string(if had_href == Some(true) { "Page" } else { "Note" })?;
+                body.object_props.set_id(crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub))?;
+
+                let body = serde_json::to_vec(&body)?.into();
+
+                let mut resp = hyper::Response::new(body);
+                resp.headers_mut().insert(
+                    hyper::header::CONTENT_TYPE,
+                    hyper::header::HeaderValue::from_static(crate::apub_util::ACTIVITY_TYPE),
+                );
+
+                return Ok(resp);
+            }
+
             let community_local_id = row.get(5);
 
-            let community_ap_id = match row.get(7) {
+            let community_ap_id = match row.get(9) {
                 Some(ap_id) => ap_id,
                 None => {
                     // assume local (might be a problem?)
@@ -663,7 +704,7 @@ async fn handler_posts_create_get(
 
     match db
         .query_opt(
-            "SELECT author, href, content_text, title, created, community, local, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
+            "SELECT author, href, content_text, title, created, community, local, deleted, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
             &[&post_id],
         )
         .await?
@@ -682,9 +723,16 @@ async fn handler_posts_create_get(
                 )));
             }
 
+            if row.get(7) {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::GONE,
+                    "Post has been deleted",
+                )));
+            }
+
             let community_local_id = row.get(5);
 
-            let community_ap_id = match row.get(7) {
+            let community_ap_id = match row.get(8) {
                 Some(ap_id) => ap_id,
                 None => {
                     // assume local (might be a problem?)
