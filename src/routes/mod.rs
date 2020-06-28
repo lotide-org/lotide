@@ -1,4 +1,4 @@
-use serde_derive::Deserialize;
+use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -18,16 +18,34 @@ fn route_webfinger() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_handler_async("GET", handler_webfinger_get)
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct FingerRequestQuery<'a> {
+    resource: Cow<'a, str>,
+    rel: Option<Cow<'a, str>>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct FingerLink<'a> {
+    rel: Cow<'a, str>,
+    #[serde(rename = "type")]
+    type_: Option<Cow<'a, str>>,
+    href: Option<Cow<'a, str>>,
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct FingerResponse<'a> {
+    subject: Cow<'a, str>,
+    #[serde(default)]
+    aliases: Vec<Cow<'a, str>>,
+    #[serde(default)]
+    links: Vec<FingerLink<'a>>,
+}
+
 async fn handler_webfinger_get(
     _: (),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    #[derive(Deserialize, Debug)]
-    struct FingerRequestQuery<'a> {
-        resource: Cow<'a, str>,
-    }
-
     let query: FingerRequestQuery<'_> =
         serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
@@ -119,17 +137,16 @@ async fn handler_webfinger_get(
                 }
             };
 
-            let body = serde_json::json!({
-                "subject": subject,
-                "aliases": [alias],
-                "links": [
-                    {
-                        "rel": "self",
-                        "type": crate::apub_util::ACTIVITY_TYPE,
-                        "href": alias
-                    }
-                ]
-            });
+            let body = FingerResponse {
+                subject: subject.into(),
+                aliases: vec![(&alias).into()],
+                links: vec![FingerLink {
+                    rel: "self".into(),
+                    type_: Some(crate::apub_util::ACTIVITY_TYPE.into()),
+                    href: Some((&alias).into()),
+                }],
+            };
+
             let body = serde_json::to_vec(&body)?;
             let body = body.into();
 

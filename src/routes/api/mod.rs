@@ -1,3 +1,4 @@
+use super::{FingerRequestQuery, FingerResponse};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -135,6 +136,31 @@ async fn insert_token(
     Ok(token)
 }
 
+enum Lookup<'a> {
+    URI(hyper::Uri),
+    WebFinger { user: &'a str, host: &'a str },
+}
+
+fn parse_lookup<'a>(src: &'a str) -> Result<Lookup<'a>, crate::Error> {
+    if src.starts_with("http") {
+        return Ok(Lookup::URI(src.parse()?));
+    }
+    if let Some(at_idx) = src.rfind('@') {
+        let mut user = &src[..at_idx];
+        let host = &src[(at_idx + 1)..];
+        if user.starts_with("acct:") {
+            user = &user[5..];
+        } else if user.starts_with('@') {
+            user = &user[1..];
+        }
+        return Ok(Lookup::WebFinger { user, host });
+    }
+
+    return Err(crate::Error::InternalStrStatic(
+        "Unrecognized lookup format",
+    ));
+}
+
 async fn route_unstable_actors_lookup(
     params: (String,),
     ctx: Arc<crate::RouteContext>,
@@ -145,12 +171,64 @@ async fn route_unstable_actors_lookup(
 
     let db = ctx.db_pool.get().await?;
 
-    let uri = query.parse::<hyper::Uri>()?;
+    let lookup = parse_lookup(&query)?;
+
+    let uri = match lookup {
+        Lookup::URI(uri) => Some(uri),
+        Lookup::WebFinger { user, host } => {
+            let uri = format!(
+                "https://{}/.well-known/webfinger?{}",
+                host,
+                serde_urlencoded::to_string(FingerRequestQuery {
+                    resource: format!("acct:{}@{}", user, host).into(),
+                    rel: Some("self".into()),
+                })?
+            );
+            println!("{}", uri);
+            let res = ctx
+                .http_client
+                .request(hyper::Request::get(uri).body(Default::default())?)
+                .await?;
+
+            if res.status() == hyper::StatusCode::NOT_FOUND {
+                println!("not found");
+                None
+            } else {
+                let res = crate::res_to_error(res).await?;
+
+                let res = hyper::body::to_bytes(res.into_body()).await?;
+                let res: FingerResponse = serde_json::from_slice(&res)?;
+
+                let mut found_uri = None;
+                for entry in res.links {
+                    if entry.rel == "self"
+                        && entry.type_.as_deref() == Some(crate::apub_util::ACTIVITY_TYPE)
+                    {
+                        if let Some(href) = entry.href {
+                            found_uri = Some(href.parse()?);
+                            break;
+                        }
+                    }
+                }
+
+                found_uri
+            }
+        }
+    };
+
+    let uri = match uri {
+        Some(uri) => uri,
+        None => {
+            return Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body(serde_json::to_vec(&serde_json::json!([]))?.into())?);
+        }
+    };
 
     let res = ctx
         .http_client
         .request(
-            hyper::Request::get(uri)
+            hyper::Request::get(&uri)
                 .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
                 .body(Default::default())?,
         )
@@ -174,7 +252,7 @@ async fn route_unstable_actors_lookup(
     if let Some(name) = name {
         let row = db.query_one(
             "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox) VALUES ($1, FALSE, $2, $3, $4) ON CONFLICT (ap_id) DO UPDATE SET name=$1, ap_inbox=$3, ap_shared_inbox=$4 RETURNING id",
-            &[&name.as_str(), &query, &ap_inbox, &ap_shared_inbox],
+            &[&name.as_str(), &uri.to_string(), &ap_inbox, &ap_shared_inbox],
         )
         .await?;
 
