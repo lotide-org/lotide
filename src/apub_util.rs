@@ -1,3 +1,4 @@
+use crate::ThingLocalRef;
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -876,6 +877,28 @@ pub fn local_comment_to_create_ap(
     Ok(create)
 }
 
+pub fn local_post_like_to_ap(
+    post_local_id: i64,
+    post_ap_id: &str,
+    user: i64,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Like, crate::Error> {
+    let mut like = activitystreams::activity::Like::new();
+    like.like_props.set_object_xsd_any_uri(post_ap_id)?;
+    like.like_props
+        .set_actor_xsd_any_uri(crate::apub_util::get_local_person_apub_id(
+            user,
+            &host_url_apub,
+        ))?;
+    like.object_props.set_id(format!(
+        "{}/likes/{}",
+        crate::apub_util::get_local_post_apub_id(post_local_id, &host_url_apub),
+        user
+    ))?;
+
+    Ok(like)
+}
+
 pub async fn send_comment_to_community(
     comment: crate::CommentInfo,
     community_ap_id: &str,
@@ -933,13 +956,15 @@ pub async fn send_comment_to_community(
 
 pub async fn forward_to_community_followers(
     community_id: i64,
-    body: Vec<u8>,
+    body: impl Into<bytes::Bytes>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     use futures::future::{FutureExt, TryFutureExt};
     use futures::stream::{StreamExt, TryStreamExt};
 
     const PARALLEL: usize = 4;
+
+    let body = body.into();
 
     let db = ctx.db_pool.get().await?;
 
@@ -1436,6 +1461,104 @@ async fn handle_recieved_reply(
                         );
                     }
                 }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn handle_like(
+    activity: activitystreams::activity::Like,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let activity_id = activity.object_props.get_id().map(|x| x.as_str());
+
+    if let Some(actor_id) = activity.like_props.get_actor_xsd_any_uri() {
+        let actor_local_id = get_or_fetch_user_local_id(
+            actor_id.as_str(),
+            &db,
+            &ctx.host_url_apub,
+            &ctx.http_client,
+        )
+        .await?;
+
+        if let Some(object_id) = activity.like_props.get_object_xsd_any_uri() {
+            let object_id = object_id.as_str();
+            let thing_local_ref = if object_id.starts_with(&ctx.host_url_apub) {
+                let remaining = &object_id[ctx.host_url_apub.len()..];
+                if remaining.starts_with("/posts/") {
+                    if let Ok(local_post_id) = remaining[7..].parse() {
+                        Some(ThingLocalRef::Post(local_post_id))
+                    } else {
+                        None
+                    }
+                } else if remaining.starts_with("/comments/") {
+                    if let Ok(local_comment_id) = remaining[10..].parse() {
+                        Some(ThingLocalRef::Comment(local_comment_id))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                let row = db.query_opt(
+                    "(SELECT TRUE, id FROM post WHERE ap_id=$1) UNION ALL (SELECT FALSE, id FROM reply WHERE ap_id=$1) LIMIT 1",
+                    &[&object_id],
+                ).await?;
+
+                if let Some(row) = row {
+                    Some(if row.get(0) {
+                        ThingLocalRef::Post(row.get(1))
+                    } else {
+                        ThingLocalRef::Comment(row.get(1))
+                    })
+                } else {
+                    None
+                }
+            };
+
+            match thing_local_ref {
+                Some(ThingLocalRef::Post(post_local_id)) => {
+                    let row_count = db.execute(
+                        "INSERT INTO post_like (post, person, local, ap_id) VALUES ($1, $2, FALSE, $3)",
+                        &[&post_local_id, &actor_local_id, &activity_id],
+                    ).await?;
+
+                    if row_count > 0 {
+                        let row = db.query_opt("SELECT post.community, community.local FROM post, community WHERE post.community = community.id AND post.id=$1", &[&post_local_id]).await?;
+                        if let Some(row) = row {
+                            let community_local = row.get(1);
+                            if community_local {
+                                let community_id = row.get(0);
+                                let body = serde_json::to_vec(&activity)?;
+                                forward_to_community_followers(community_id, body, ctx).await?;
+                            }
+                        }
+                    }
+                }
+                Some(ThingLocalRef::Comment(comment_local_id)) => {
+                    let row_count = db.execute(
+                        "INSERT INTO reply_like (reply, person, local, ap_id) VALUES ($1, $2, FALSE, $3)",
+                        &[&comment_local_id, &actor_local_id, &activity_id],
+                    ).await?;
+
+                    if row_count > 0 {
+                        let row = db.query_opt("SELECT post.community, community.local FROM reply, post, community WHERE reply.post = post.id AND post.community = community.id AND post.id=$1", &[&comment_local_id]).await?;
+                        if let Some(row) = row {
+                            let community_local = row.get(1);
+                            if community_local {
+                                let community_id = row.get(0);
+                                let body = serde_json::to_vec(&activity)?;
+                                forward_to_community_followers(community_id, body, ctx).await?;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }

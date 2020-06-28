@@ -1,7 +1,7 @@
 use super::{FingerRequestQuery, FingerResponse};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -82,6 +82,11 @@ pub fn route_api() -> crate::RouteNode<()> {
                         crate::RouteNode::new()
                             .with_handler_async("GET", route_unstable_posts_get)
                             .with_handler_async("DELETE", route_unstable_posts_delete)
+                            .with_child(
+                                "like",
+                                crate::RouteNode::new()
+                                    .with_handler_async("POST", route_unstable_posts_like),
+                            )
                             .with_child(
                                 "replies",
                                 crate::RouteNode::new().with_handler_async(
@@ -610,6 +615,7 @@ async fn route_unstable_posts_get(
     struct RespPostInfo<'a> {
         #[serde(flatten)]
         post: &'a RespPostListPost<'a>,
+        score: i64,
         comments: Vec<RespPostCommentInfo<'a>>,
     }
     let (post_id,) = params;
@@ -620,7 +626,7 @@ async fn route_unstable_posts_get(
 
     let (row, comments) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1) FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -685,6 +691,7 @@ async fn route_unstable_posts_get(
             let output = RespPostInfo {
                 post: &post,
                 comments,
+                score: row.get(13),
             };
 
             Ok(hyper::Response::builder()
@@ -788,6 +795,132 @@ async fn route_unstable_posts_delete(
             Ok(crate::empty_response())
         }
     }
+}
+
+async fn route_unstable_posts_like(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let row_count = db.execute(
+        "INSERT INTO post_like (post, person, local) VALUES ($1, $2, TRUE) ON CONFLICT (post, person) DO NOTHING",
+        &[&post_id, &user],
+    ).await?;
+
+    if row_count > 0 {
+        crate::spawn_task(async move {
+            let row = db.query_opt(
+                "SELECT post.local, post.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(post_author.ap_shared_inbox, post_author.ap_inbox) FROM post LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) WHERE post.id = $1",
+                &[&post_id],
+            ).await?;
+            if let Some(row) = row {
+                let post_local = row.get(0);
+                let post_ap_id: &str = &if post_local {
+                    Cow::Owned(crate::apub_util::get_local_post_apub_id(
+                        post_id,
+                        &ctx.host_url_apub,
+                    ))
+                } else {
+                    Cow::Borrowed(row.get(1))
+                };
+
+                let mut inboxes = HashSet::new();
+
+                if !post_local {
+                    let author_inbox: Option<&str> = row.get(6);
+                    if let Some(inbox) = author_inbox {
+                        inboxes.insert(inbox);
+                    }
+                }
+
+                let community_local: Option<bool> = row.get(3);
+
+                if community_local == Some(false) {
+                    if let Some(inbox) = row.get(5) {
+                        inboxes.insert(inbox);
+                    }
+                }
+
+                let like = crate::apub_util::local_post_like_to_ap(
+                    post_id,
+                    post_ap_id,
+                    user,
+                    &ctx.host_url_apub,
+                )?;
+
+                let body = bytes::Bytes::from(serde_json::to_vec(&like)?);
+
+                if !inboxes.is_empty() {
+                    let user_privkey = Arc::new(
+                        crate::apub_util::fetch_or_create_local_user_privkey(user, &db).await?,
+                    );
+                    futures::future::try_join_all(inboxes.into_iter().map(|inbox| {
+                        let ctx = ctx.clone();
+                        let user_privkey = user_privkey.clone();
+                        let body = body.clone();
+                        async move {
+                            let mut req = hyper::Request::post(inbox)
+                                .header(
+                                    hyper::header::CONTENT_TYPE,
+                                    crate::apub_util::ACTIVITY_TYPE,
+                                )
+                                .body(body.into())?;
+
+                            {
+                                if let Ok(path_and_query) =
+                                    crate::apub_util::get_path_and_query(&inbox)
+                                {
+                                    req.headers_mut().insert(
+                                        hyper::header::DATE,
+                                        crate::apub_util::now_http_date(),
+                                    );
+
+                                    let key_id = crate::apub_util::get_local_person_pubkey_apub_id(
+                                        user,
+                                        &ctx.host_url_apub,
+                                    );
+
+                                    let signature = hancock::Signature::create_legacy(
+                                        &key_id,
+                                        &hyper::Method::POST,
+                                        &path_and_query,
+                                        req.headers(),
+                                        |src| crate::apub_util::do_sign(&user_privkey, &src),
+                                    )?;
+
+                                    req.headers_mut().insert("Signature", signature.to_header());
+                                }
+                            }
+
+                            let res =
+                                crate::res_to_error(ctx.http_client.request(req).await?).await?;
+
+                            println!("{:?}", res);
+
+                            Ok::<_, crate::Error>(())
+                        }
+                    }))
+                    .await?;
+                }
+
+                if community_local == Some(true) {
+                    let community_local_id = row.get(2);
+                    crate::apub_util::forward_to_community_followers(community_local_id, body, ctx)
+                        .await?;
+                }
+            }
+
+            Ok(())
+        });
+    }
+
+    Ok(crate::empty_response())
 }
 
 async fn route_unstable_posts_replies_create(

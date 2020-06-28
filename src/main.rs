@@ -44,6 +44,11 @@ pub enum APIDOrLocal {
     APID(String),
 }
 
+pub enum ThingLocalRef {
+    Post(i64),
+    Comment(i64),
+}
+
 pub struct PostInfo<'a> {
     id: i64,
     author: Option<i64>,

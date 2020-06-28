@@ -1,4 +1,5 @@
 use activitystreams::ext::Extensible;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 mod communities;
@@ -48,6 +49,13 @@ pub fn route_apub() -> crate::RouteNode<()> {
                     .with_child(
                         "delete",
                         crate::RouteNode::new().with_handler_async("GET", handler_posts_delete_get),
+                    )
+                    .with_child(
+                        "likes",
+                        crate::RouteNode::new().with_child_parse::<i64, _>(
+                            crate::RouteNode::new()
+                                .with_handler_async("GET", handler_posts_likes_get),
+                        ),
                     ),
             ),
         )
@@ -246,6 +254,12 @@ async fn inbox_common(
                 .unwrap();
 
             crate::apub_util::handle_delete(activity, ctx).await?;
+        }
+        Some("Like") => {
+            let activity = activity
+                .into_concrete::<activitystreams::activity::Like>()
+                .unwrap();
+            crate::apub_util::handle_like(activity, ctx).await?;
         }
         _ => {}
     }
@@ -816,5 +830,62 @@ async fn handler_posts_delete_get(
 
             Ok(resp)
         }
+    }
+}
+
+async fn handler_posts_likes_get(
+    params: (i64, i64),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id, user_id) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let like_row = db
+        .query_opt(
+            "SELECT local FROM post_like WHERE post=$1 AND person=$2",
+            &[&post_id, &user_id],
+        )
+        .await?;
+    if let Some(like_row) = like_row {
+        let local = like_row.get(0);
+
+        if local {
+            let row = db
+                .query_one("SELECT local, ap_id FROM post WHERE id=$1", &[&post_id])
+                .await?;
+            let post_local = row.get(0);
+            let post_ap_id = if post_local {
+                Cow::Owned(crate::apub_util::get_local_post_apub_id(
+                    post_id,
+                    &ctx.host_url_apub,
+                ))
+            } else {
+                Cow::Borrowed(row.get(1))
+            };
+
+            let like = crate::apub_util::local_post_like_to_ap(
+                post_id,
+                &post_ap_id,
+                user_id,
+                &ctx.host_url_apub,
+            )?;
+            let body = serde_json::to_vec(&like)?.into();
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                .body(body)?)
+        } else {
+            Ok(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Requested like is not owned by this instance",
+            ))
+        }
+    } else {
+        Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such like",
+        ))
     }
 }

@@ -415,6 +415,13 @@ async fn handler_communities_inbox_post(
 
             crate::apub_util::handle_delete(activity, ctx).await?;
         }
+        Some("Like") => {
+            let activity = activity
+                .into_concrete::<activitystreams::activity::Like>()
+                .unwrap();
+
+            crate::apub_util::handle_like(activity, ctx).await?;
+        }
         _ => {}
     }
 
