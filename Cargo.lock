@@ -462,7 +462,8 @@ dependencies = [
 [[package]]
 name = "hancock"
 version = "0.1.0"
-source = "git+https://git.sr.ht/~vpzom/hancock?rev=fc8aa0a#fc8aa0abaa6d5e93f4883a2dfc7ff37561241801"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5af35c546c1b7c3fcd9b67975bf751df67698595f4b7c6c5189759a9d71a2a3"
 dependencies = [
  "base64",
  "http",
