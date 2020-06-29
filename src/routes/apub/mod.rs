@@ -158,7 +158,13 @@ async fn inbox_common(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let db = ctx.db_pool.get().await?;
 
-    let activity = crate::apub_util::verify_incoming_activity(req, &db, &ctx.http_client).await?;
+    let activity = crate::apub_util::verify_incoming_activity(
+        req,
+        &db,
+        &ctx.http_client,
+        ctx.apub_proxy_rewrites,
+    )
+    .await?;
 
     match activity.kind() {
         Some("Announce") => {

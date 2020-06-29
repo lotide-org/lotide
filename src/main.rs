@@ -12,6 +12,7 @@ pub struct RouteContext {
     db_pool: DbPool,
     host_url_apub: String,
     http_client: HttpClient,
+    apub_proxy_rewrites: bool,
 }
 
 pub type RouteNode<P> = trout::Node<
@@ -312,6 +313,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host_url_apub =
         std::env::var("HOST_URL_ACTIVITYPUB").expect("Missing HOST_URL_ACTIVITYPUB");
 
+    let apub_proxy_rewrites = match std::env::var("APUB_PROXY_REWRITES") {
+        Ok(value) => value.parse().expect("Failed to parse APUB_PROXY_REWRITES"),
+        Err(std::env::VarError::NotPresent) => false,
+        Err(other) => Err(other).expect("Failed to parse APUB_PROXY_REWRITES"),
+    };
+
     let db_pool = deadpool_postgres::Pool::new(
         deadpool_postgres::Manager::new(
             std::env::var("DATABASE_URL")
@@ -333,6 +340,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_pool,
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
+        apub_proxy_rewrites,
     });
 
     let server = hyper::Server::bind(&(std::net::Ipv6Addr::UNSPECIFIED, port).into()).serve(

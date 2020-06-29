@@ -1651,6 +1651,7 @@ pub async fn verify_incoming_activity(
     mut req: hyper::Request<hyper::Body>,
     db: &tokio_postgres::Client,
     http_client: &crate::HttpClient,
+    apub_proxy_rewrites: bool,
 ) -> Result<activitystreams::activity::ActivityBox, crate::Error> {
     let req_body = hyper::body::to_bytes(req.body_mut()).await?;
 
@@ -1699,15 +1700,29 @@ pub async fn verify_incoming_activity(
                 _ => return Err(crate::Error::InternalStrStatic("Found multiple actors for activity, can't verify signature"))
             };
 
+            let path_and_query = req
+                .uri()
+                .path_and_query()
+                .ok_or(crate::Error::InternalStrStatic(
+                    "Missing path, cannot verify signature",
+                ))?
+                .as_str();
+
+            // path ends up wrong with our recommended proxy config
+            let path_and_query = if apub_proxy_rewrites {
+                req.headers()
+                    .get("x-forwarded-path")
+                    .map(|x| x.to_str())
+                    .transpose()?
+            } else {
+                None
+            }
+            .unwrap_or(path_and_query);
+
             if check_signature_for_actor(
                 signature,
                 req.method(),
-                req.uri()
-                    .path_and_query()
-                    .ok_or(crate::Error::InternalStrStatic(
-                        "Missing path, cannot verify signature",
-                    ))?
-                    .as_str(),
+                path_and_query,
                 &req.headers(),
                 &actor_ap_id,
                 db,

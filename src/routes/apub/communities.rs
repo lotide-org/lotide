@@ -348,7 +348,13 @@ async fn handler_communities_inbox_post(
     let (community_id,) = params;
     let db = ctx.db_pool.get().await?;
 
-    let activity = crate::apub_util::verify_incoming_activity(req, &db, &ctx.http_client).await?;
+    let activity = crate::apub_util::verify_incoming_activity(
+        req,
+        &db,
+        &ctx.http_client,
+        ctx.apub_proxy_rewrites,
+    )
+    .await?;
 
     match activity.kind() {
         Some("Create") => {
