@@ -899,6 +899,28 @@ pub fn local_post_like_to_ap(
     Ok(like)
 }
 
+pub fn local_comment_like_to_ap(
+    comment_local_id: i64,
+    comment_ap_id: &str,
+    user: i64,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Like, crate::Error> {
+    let mut like = activitystreams::activity::Like::new();
+    like.like_props.set_object_xsd_any_uri(comment_ap_id)?;
+    like.like_props
+        .set_actor_xsd_any_uri(crate::apub_util::get_local_person_apub_id(
+            user,
+            &host_url_apub,
+        ))?;
+    like.object_props.set_id(format!(
+        "{}/likes/{}",
+        crate::apub_util::get_local_comment_apub_id(comment_local_id, &host_url_apub),
+        user
+    ))?;
+
+    Ok(like)
+}
+
 pub async fn send_comment_to_community(
     comment: crate::CommentInfo,
     community_ap_id: &str,

@@ -32,6 +32,13 @@ pub fn route_apub() -> crate::RouteNode<()> {
                         "delete",
                         crate::RouteNode::new()
                             .with_handler_async("GET", handler_comments_delete_get),
+                    )
+                    .with_child(
+                        "likes",
+                        crate::RouteNode::new().with_child_parse::<i64, _>(
+                            crate::RouteNode::new()
+                                .with_handler_async("GET", handler_comments_likes_get),
+                        ),
                     ),
             ),
         )
@@ -620,6 +627,66 @@ async fn handler_comments_delete_get(
 
             Ok(resp)
         }
+    }
+}
+
+async fn handler_comments_likes_get(
+    params: (i64, i64),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (comment_id, user_id) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let like_row = db
+        .query_opt(
+            "SELECT local FROM reply_like WHERE reply=$1 AND person=$2",
+            &[&comment_id, &user_id],
+        )
+        .await?;
+    if let Some(like_row) = like_row {
+        let local = like_row.get(0);
+
+        if local {
+            let row = db
+                .query_one(
+                    "SELECT local, ap_id FROM comment WHERE id=$1",
+                    &[&comment_id],
+                )
+                .await?;
+            let comment_local = row.get(0);
+            let comment_ap_id = if comment_local {
+                Cow::Owned(crate::apub_util::get_local_comment_apub_id(
+                    comment_id,
+                    &ctx.host_url_apub,
+                ))
+            } else {
+                Cow::Borrowed(row.get(1))
+            };
+
+            let like = crate::apub_util::local_comment_like_to_ap(
+                comment_id,
+                &comment_ap_id,
+                user_id,
+                &ctx.host_url_apub,
+            )?;
+            let body = serde_json::to_vec(&like)?.into();
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                .body(body)?)
+        } else {
+            Ok(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Requested like is not owned by this instance",
+            ))
+        }
+    } else {
+        Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such like",
+        ))
     }
 }
 

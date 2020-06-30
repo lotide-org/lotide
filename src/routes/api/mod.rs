@@ -103,6 +103,11 @@ pub fn route_api() -> crate::RouteNode<()> {
                         .with_handler_async("GET", route_unstable_comments_get)
                         .with_handler_async("DELETE", route_unstable_comments_delete)
                         .with_child(
+                            "like",
+                            crate::RouteNode::new()
+                                .with_handler_async("POST", route_unstable_comments_like),
+                        )
+                        .with_child(
                             "replies",
                             crate::RouteNode::new()
                                 .with_handler_async("POST", route_unstable_comments_replies_create),
@@ -487,7 +492,7 @@ async fn get_comments_replies<'a>(
 
     let stream = crate::query_stream(
         db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY created DESC",
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC",
         &[&parents],
     ).await?;
 
@@ -553,7 +558,7 @@ async fn get_post_comments<'a>(
 
     let stream = crate::query_stream(
         db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY created DESC",
+        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC",
         &[&post_id],
     ).await?;
 
@@ -1141,6 +1146,132 @@ async fn route_unstable_comments_delete(
             Ok(crate::empty_response())
         }
     }
+}
+
+async fn route_unstable_comments_like(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (comment_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let row_count = db.execute(
+        "INSERT INTO reply_like (reply, person, local) VALUES ($1, $2, TRUE) ON CONFLICT (reply, person) DO NOTHING",
+        &[&comment_id, &user],
+    ).await?;
+
+    if row_count > 0 {
+        crate::spawn_task(async move {
+            let row = db.query_opt(
+                "SELECT reply.local, reply.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(comment_author.ap_shared_inbox, comment_author.ap_inbox) FROM reply LEFT OUTER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS comment_author ON (comment_author.id = post.author) WHERE reply.id = $1",
+                &[&comment_id],
+            ).await?;
+            if let Some(row) = row {
+                let comment_local = row.get(0);
+                let comment_ap_id: &str = &if comment_local {
+                    Cow::Owned(crate::apub_util::get_local_comment_apub_id(
+                        comment_id,
+                        &ctx.host_url_apub,
+                    ))
+                } else {
+                    Cow::Borrowed(row.get(1))
+                };
+
+                let mut inboxes = HashSet::new();
+
+                if !comment_local {
+                    let author_inbox: Option<&str> = row.get(6);
+                    if let Some(inbox) = author_inbox {
+                        inboxes.insert(inbox);
+                    }
+                }
+
+                let community_local: Option<bool> = row.get(3);
+
+                if community_local == Some(false) {
+                    if let Some(inbox) = row.get(5) {
+                        inboxes.insert(inbox);
+                    }
+                }
+
+                let like = crate::apub_util::local_comment_like_to_ap(
+                    comment_id,
+                    comment_ap_id,
+                    user,
+                    &ctx.host_url_apub,
+                )?;
+
+                let body = bytes::Bytes::from(serde_json::to_vec(&like)?);
+
+                if !inboxes.is_empty() {
+                    let user_privkey = Arc::new(
+                        crate::apub_util::fetch_or_create_local_user_privkey(user, &db).await?,
+                    );
+                    futures::future::try_join_all(inboxes.into_iter().map(|inbox| {
+                        let ctx = ctx.clone();
+                        let user_privkey = user_privkey.clone();
+                        let body = body.clone();
+                        async move {
+                            let mut req = hyper::Request::post(inbox)
+                                .header(
+                                    hyper::header::CONTENT_TYPE,
+                                    crate::apub_util::ACTIVITY_TYPE,
+                                )
+                                .body(body.into())?;
+
+                            {
+                                if let Ok(path_and_query) =
+                                    crate::apub_util::get_path_and_query(&inbox)
+                                {
+                                    req.headers_mut().insert(
+                                        hyper::header::DATE,
+                                        crate::apub_util::now_http_date(),
+                                    );
+
+                                    let key_id = crate::apub_util::get_local_person_pubkey_apub_id(
+                                        user,
+                                        &ctx.host_url_apub,
+                                    );
+
+                                    let signature = hancock::Signature::create_legacy(
+                                        &key_id,
+                                        &hyper::Method::POST,
+                                        &path_and_query,
+                                        req.headers(),
+                                        |src| crate::apub_util::do_sign(&user_privkey, &src),
+                                    )?;
+
+                                    req.headers_mut().insert("Signature", signature.to_header());
+                                }
+                            }
+
+                            let res =
+                                crate::res_to_error(ctx.http_client.request(req).await?).await?;
+
+                            println!("{:?}", res);
+
+                            Ok::<_, crate::Error>(())
+                        }
+                    }))
+                    .await?;
+                }
+
+                if community_local == Some(true) {
+                    let community_local_id = row.get(2);
+                    crate::apub_util::forward_to_community_followers(community_local_id, body, ctx)
+                        .await?;
+                }
+            }
+
+            Ok(())
+        });
+    }
+
+    Ok(crate::empty_response())
 }
 
 async fn route_unstable_comments_replies_create(
