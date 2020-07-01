@@ -127,6 +127,9 @@ pub fn route_api() -> crate::RouteNode<()> {
                                 route_unstable_users_me_following_posts_list,
                             ),
                         ),
+                    )
+                    .with_child_parse::<i64, _>(
+                        crate::RouteNode::new().with_handler_async("GET", route_unstable_users_get),
                     ),
             ),
     )
@@ -1396,6 +1399,47 @@ async fn route_unstable_users_me_following_posts_list(
     let posts = handle_common_posts_list(stream, &ctx.host_url_apub).await?;
 
     let body = serde_json::to_vec(&posts)?;
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body.into())?)
+}
+
+async fn route_unstable_users_get(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (user_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let row = db
+        .query_opt(
+            "SELECT username, local, ap_id FROM person WHERE id=$1",
+            &[&user_id],
+        )
+        .await?;
+
+    let row = row.ok_or_else(|| {
+        crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such user",
+        ))
+    })?;
+
+    let local = row.get(1);
+
+    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
+
+    let info = RespMinimalAuthorInfo {
+        id: user_id,
+        local,
+        username: Cow::Borrowed(row.get(0)),
+        host: crate::get_actor_host_or_unknown(local, row.get(2), &local_hostname),
+    };
+
+    let body = serde_json::to_vec(&info)?;
 
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
