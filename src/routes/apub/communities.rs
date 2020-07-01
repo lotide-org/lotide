@@ -375,6 +375,16 @@ async fn handler_communities_inbox_post(
             let target_community = follow.follow_props.get_object_xsd_any_uri();
 
             if let Some(follower_ap_id) = follower_ap_id {
+                let activity_ap_id = follow
+                    .object_props
+                    .get_id()
+                    .ok_or(crate::Error::InternalStrStatic("Missing activitity ID"))?;
+
+                crate::apub_util::require_containment(
+                    activity_ap_id.as_url(),
+                    follower_ap_id.as_url(),
+                )?;
+
                 let follower_local_id = crate::apub_util::get_or_fetch_user_local_id(
                     follower_ap_id.as_str(),
                     &db,

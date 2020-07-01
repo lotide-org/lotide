@@ -178,24 +178,29 @@ async fn inbox_common(
             let activity = activity
                 .into_concrete::<activitystreams::activity::Announce>()
                 .unwrap();
-            let community_ap_id = activity.announce_props.get_actor_xsd_any_uri();
+            let activity_id = activity
+                .object_props
+                .get_id()
+                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
-            // TODO verify that this announce is actually from the community
+            let community_ap_id = activity.announce_props.get_actor_xsd_any_uri().ok_or(
+                crate::Error::InternalStrStatic("Missing actor for Announce"),
+            )?;
 
-            let community_local_info: Option<(i64, bool)> = {
-                match community_ap_id {
-                    None => None,
-                    Some(community_ap_id) => db
-                        .query_opt(
-                            "SELECT id, local FROM community WHERE ap_id=$1",
-                            &[&community_ap_id.as_str()],
-                        )
-                        .await?
-                        .map(|row| (row.get(0), row.get(1))),
-                }
-            };
+            let community_local_info = db
+                .query_opt(
+                    "SELECT id, local FROM community WHERE ap_id=$1",
+                    &[&community_ap_id.as_str()],
+                )
+                .await?
+                .map(|row| (row.get(0), row.get(1)));
 
             if let Some((community_local_id, community_is_local)) = community_local_info {
+                crate::apub_util::require_containment(
+                    activity_id.as_url(),
+                    community_ap_id.as_url(),
+                )?;
+
                 let object_id = {
                     if let activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectEnum::Term(
                         req_obj,

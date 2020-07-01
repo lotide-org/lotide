@@ -116,6 +116,18 @@ impl ActorLocalInfo {
     }
 }
 
+#[derive(Clone, Debug, thiserror::Error)]
+#[error("Incoming object failed containment check")]
+pub struct NotContained;
+
+pub fn require_containment(object_id: &url::Url, actor_id: &url::Url) -> Result<(), NotContained> {
+    if object_id.host() == actor_id.host() && object_id.port() == actor_id.port() {
+        Ok(())
+    } else {
+        Err(NotContained)
+    }
+}
+
 pub async fn fetch_actor(
     ap_id: &str,
     db: &tokio_postgres::Client,
@@ -1205,10 +1217,13 @@ pub async fn handle_recieved_object_for_local_community(
                     let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
                     let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
                     let created = obj.as_ref().get_published().map(|x| x.as_datetime());
-                    let author = obj
-                        .as_ref()
-                        .get_attributed_to_xsd_any_uri()
-                        .map(|x| x.as_str());
+                    let author = obj.as_ref().get_attributed_to_xsd_any_uri();
+
+                    if let Some(author) = author {
+                        require_containment(obj_id.as_url(), author.as_url())?;
+                    }
+
+                    let author = author.map(|x| x.as_str());
 
                     handle_recieved_reply(
                         obj_id.as_ref(),
@@ -1249,13 +1264,14 @@ pub async fn handle_recieved_object_for_community(
             let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
             let created = obj.as_ref().get_published().map(|x| x.as_datetime());
             // TODO support objects here?
-            let author = obj
-                .as_ref()
-                .get_attributed_to_xsd_any_uri()
-                .map(|x| x.as_str());
-            // TODO verify this post actually came from the specified author
-
+            let author = obj.as_ref().get_attributed_to_xsd_any_uri();
             if let Some(object_id) = &obj.as_ref().id {
+                if let Some(author) = author {
+                    require_containment(object_id.as_url(), author.as_url())?;
+                }
+
+                let author = author.map(|x| x.as_str());
+
                 handle_recieved_post(
                     object_id.as_str(),
                     title,
@@ -1496,9 +1512,14 @@ pub async fn handle_like(
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
 
-    let activity_id = activity.object_props.get_id().map(|x| x.as_str());
+    let activity_id = activity
+        .object_props
+        .get_id()
+        .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
     if let Some(actor_id) = activity.like_props.get_actor_xsd_any_uri() {
+        require_containment(activity_id.as_url(), actor_id.as_url())?;
+
         let actor_local_id = get_or_fetch_user_local_id(
             actor_id.as_str(),
             &db,
@@ -1547,7 +1568,7 @@ pub async fn handle_like(
                 Some(ThingLocalRef::Post(post_local_id)) => {
                     let row_count = db.execute(
                         "INSERT INTO post_like (post, person, local, ap_id) VALUES ($1, $2, FALSE, $3)",
-                        &[&post_local_id, &actor_local_id, &activity_id],
+                        &[&post_local_id, &actor_local_id, &activity_id.as_str()],
                     ).await?;
 
                     if row_count > 0 {
@@ -1565,7 +1586,7 @@ pub async fn handle_like(
                 Some(ThingLocalRef::Comment(comment_local_id)) => {
                     let row_count = db.execute(
                         "INSERT INTO reply_like (reply, person, local, ap_id) VALUES ($1, $2, FALSE, $3)",
-                        &[&comment_local_id, &actor_local_id, &activity_id],
+                        &[&comment_local_id, &actor_local_id, &activity_id.as_str()],
                     ).await?;
 
                     if row_count > 0 {
