@@ -10,6 +10,7 @@ pub type HttpClient = hyper::Client<hyper_tls::HttpsConnector<hyper::client::Htt
 
 pub struct RouteContext {
     db_pool: DbPool,
+    host_url_api: String,
     host_url_apub: String,
     http_client: HttpClient,
     apub_proxy_rewrites: bool,
@@ -313,6 +314,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host_url_apub =
         std::env::var("HOST_URL_ACTIVITYPUB").expect("Missing HOST_URL_ACTIVITYPUB");
 
+    let host_url_api = std::env::var("HOST_URL_API").expect("Missing HOST_URL_API");
+
     let apub_proxy_rewrites = match std::env::var("APUB_PROXY_REWRITES") {
         Ok(value) => value.parse().expect("Failed to parse APUB_PROXY_REWRITES"),
         Err(std::env::VarError::NotPresent) => false,
@@ -338,6 +341,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let routes = Arc::new(routes::route_root());
     let context = Arc::new(RouteContext {
         db_pool,
+        host_url_api,
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
         apub_proxy_rewrites,

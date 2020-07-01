@@ -1,4 +1,4 @@
-use super::{FingerRequestQuery, FingerResponse};
+use crate::routes::well_known::{FingerRequestQuery, FingerResponse};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -71,6 +71,10 @@ pub fn route_api() -> crate::RouteNode<()> {
                         crate::RouteNode::new()
                             .with_handler_async("GET", route_unstable_logins_current_get),
                     ),
+            )
+            .with_child(
+                "nodeinfo/2.0",
+                crate::RouteNode::new().with_handler_async("GET", route_unstable_nodeinfo_20_get),
             )
             .with_child("communities", communities::route_communities())
             .with_child(
@@ -354,6 +358,64 @@ async fn route_unstable_logins_current_get(
 
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body)?)
+}
+
+async fn route_unstable_nodeinfo_20_get(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let local_posts = {
+        let row = db
+            .query_one("SELECT COUNT(*) FROM post WHERE local", &[])
+            .await?;
+        row.get::<_, i64>(0)
+    };
+    let local_comments = {
+        let row = db
+            .query_one("SELECT COUNT(*) FROM reply WHERE local", &[])
+            .await?;
+        row.get::<_, i64>(0)
+    };
+    let local_users = {
+        let row = db
+            .query_one("SELECT COUNT(*) FROM person WHERE local", &[])
+            .await?;
+        row.get::<_, i64>(0)
+    };
+
+    let body = serde_json::json!({
+        "version": "2.0",
+        "software": {
+            "name": "lotide",
+            "version": env!("CARGO_PKG_VERSION")
+        },
+        "protocols": ["activitypub"],
+        "services": {
+            "inbound": [],
+            "outbound": []
+        },
+        "openRegistrations": true,
+        "usage": {
+            "users": {
+                "total": local_users,
+            },
+            "localPosts": local_posts,
+            "localComments": local_comments
+        },
+        "metadata": {}
+    });
+
+    let body = serde_json::to_vec(&body)?.into();
+
+    Ok(hyper::Response::builder()
+        .header(
+            hyper::header::CONTENT_TYPE,
+            "application/json; profile=http://nodeinfo.diaspora.software/ns/schema/2.0#",
+        )
         .body(body)?)
 }
 
