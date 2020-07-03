@@ -1567,7 +1567,7 @@ pub async fn handle_like(
             match thing_local_ref {
                 Some(ThingLocalRef::Post(post_local_id)) => {
                     let row_count = db.execute(
-                        "INSERT INTO post_like (post, person, local, ap_id) VALUES ($1, $2, FALSE, $3)",
+                        "INSERT INTO post_like (post, person, local, ap_id) VALUES ($1, $2, FALSE, $3) ON CONFLICT (ap_id) DO NOTHING",
                         &[&post_local_id, &actor_local_id, &activity_id.as_str()],
                     ).await?;
 
@@ -1585,7 +1585,7 @@ pub async fn handle_like(
                 }
                 Some(ThingLocalRef::Comment(comment_local_id)) => {
                     let row_count = db.execute(
-                        "INSERT INTO reply_like (reply, person, local, ap_id) VALUES ($1, $2, FALSE, $3)",
+                        "INSERT INTO reply_like (reply, person, local, ap_id) VALUES ($1, $2, FALSE, $3) ON CONFLICT (ap_id) DO NOTHING",
                         &[&comment_local_id, &actor_local_id, &activity_id.as_str()],
                     ).await?;
 
