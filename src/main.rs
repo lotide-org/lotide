@@ -1,19 +1,35 @@
+use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 use trout::hyper::RoutingFailureExtHyper;
 
 mod apub_util;
 mod routes;
+mod tasks;
+mod worker;
 
 pub type DbPool = deadpool_postgres::Pool;
 pub type HttpClient = hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>;
 
+pub struct BaseContext {
+    pub db_pool: DbPool,
+    pub host_url_api: String,
+    pub host_url_apub: String,
+    pub http_client: HttpClient,
+    pub apub_proxy_rewrites: bool,
+}
+
 pub struct RouteContext {
-    db_pool: DbPool,
-    host_url_api: String,
-    host_url_apub: String,
-    http_client: HttpClient,
-    apub_proxy_rewrites: bool,
+    base: Arc<BaseContext>,
+    worker_trigger: tokio::sync::mpsc::Sender<()>,
+}
+
+impl std::ops::Deref for RouteContext {
+    type Target = BaseContext;
+
+    fn deref(&self) -> &BaseContext {
+        &self.base
+    }
 }
 
 pub type RouteNode<P> = trout::Node<
@@ -44,6 +60,12 @@ impl<T: 'static + std::error::Error + Send> From<T> for Error {
 pub enum APIDOrLocal {
     Local,
     APID(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ActorLocalRef {
+    Person(i64),
+    Community(i64),
 }
 
 pub enum ThingLocalRef {
@@ -339,12 +361,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let routes = Arc::new(routes::route_root());
-    let context = Arc::new(RouteContext {
+    let base_context = Arc::new(BaseContext {
         db_pool,
         host_url_api,
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
         apub_proxy_rewrites,
+    });
+
+    let worker_trigger = worker::start_worker(base_context.clone());
+
+    let context = Arc::new(RouteContext {
+        base: base_context,
+        worker_trigger,
     });
 
     let server = hyper::Server::bind(&(std::net::Ipv6Addr::UNSPECIFIED, port).into()).serve(
