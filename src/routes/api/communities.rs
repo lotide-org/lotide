@@ -131,9 +131,7 @@ async fn route_unstable_communities_follow(
     let row_count = db.execute("INSERT INTO community_follow (community, follower) VALUES ($1, $2) ON CONFLICT DO NOTHING", &[&community, &user]).await?;
 
     if row_count > 0 {
-        crate::spawn_task(crate::apub_util::send_community_follow(
-            community, user, ctx,
-        ));
+        crate::apub_util::spawn_enqueue_send_community_follow(community, user, ctx);
     }
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))

@@ -482,13 +482,13 @@ async fn route_unstable_posts_create(
         let created = res_row.get(1);
         let community_local: Option<bool> = res_row.get(2);
 
-        let post = crate::PostInfo {
+        let post = crate::PostInfoOwned {
             id,
             author: Some(user),
-            content_text: body.content_text.as_deref(),
-            href: body.href.as_deref(),
-            title: &body.title,
-            created: &created,
+            content_text: body.content_text,
+            href: body.href,
+            title: body.title,
+            created,
             community: body.community,
         };
 
@@ -501,7 +501,7 @@ async fn route_unstable_posts_create(
                     ctx,
                 );
             } else {
-                crate::apub_util::send_local_post_to_community(post, ctx).await?;
+                crate::apub_util::spawn_enqueue_send_local_post_to_community(post, ctx);
             }
         }
 
@@ -813,48 +813,25 @@ async fn route_unstable_posts_delete(
 
                     let local = row.get(0);
                     if local {
-                        crate::spawn_task(crate::apub_util::forward_to_community_followers(
-                            community,
-                            serde_json::to_vec(&delete_ap)?,
-                            ctx,
-                        ));
+                        crate::spawn_task(
+                            crate::apub_util::enqueue_forward_to_community_followers(
+                                community,
+                                serde_json::to_string(&delete_ap)?,
+                                ctx,
+                            ),
+                        );
                     } else {
-                        let community_inbox: Option<&str> = row.get(2);
+                        let community_inbox: Option<String> = row.get(2);
 
                         if let Some(community_inbox) = community_inbox {
-                            let mut req = hyper::Request::post(community_inbox)
-                                .header(
-                                    hyper::header::CONTENT_TYPE,
-                                    crate::apub_util::ACTIVITY_TYPE,
-                                )
-                                .body(hyper::Body::from(serde_json::to_vec(&delete_ap)?))?;
-
-                            if let Ok(path_and_query) =
-                                crate::apub_util::get_path_and_query(&community_inbox)
-                            {
-                                let user_privkey =
-                                    crate::apub_util::fetch_or_create_local_user_privkey(user, &db)
-                                        .await?;
-                                req.headers_mut()
-                                    .insert(hyper::header::DATE, crate::apub_util::now_http_date());
-
-                                let key_id = crate::apub_util::get_local_person_pubkey_apub_id(
-                                    user,
-                                    &ctx.host_url_apub,
-                                );
-
-                                let signature = hancock::Signature::create_legacy(
-                                    &key_id,
-                                    &hyper::Method::POST,
-                                    &path_and_query,
-                                    req.headers(),
-                                    |src| crate::apub_util::do_sign(&user_privkey, &src),
-                                )?;
-
-                                req.headers_mut().insert("Signature", signature.to_header());
-                            }
-
-                            crate::res_to_error(ctx.http_client.request(req).await?).await?;
+                            crate::spawn_task(async move {
+                                ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                                    inbox: community_inbox.into(),
+                                    sign_as: Some(crate::ActorLocalRef::Person(user)),
+                                    object: serde_json::to_string(&delete_ap)?,
+                                })
+                                .await
+                            });
                         }
                     }
                 }
@@ -924,65 +901,25 @@ async fn route_unstable_posts_like(
                     &ctx.host_url_apub,
                 )?;
 
-                let body = bytes::Bytes::from(serde_json::to_vec(&like)?);
+                let body = serde_json::to_string(&like)?;
 
-                if !inboxes.is_empty() {
-                    let user_privkey = Arc::new(
-                        crate::apub_util::fetch_or_create_local_user_privkey(user, &db).await?,
-                    );
-                    futures::future::try_join_all(inboxes.into_iter().map(|inbox| {
-                        let ctx = ctx.clone();
-                        let user_privkey = user_privkey.clone();
-                        let body = body.clone();
-                        async move {
-                            let mut req = hyper::Request::post(inbox)
-                                .header(
-                                    hyper::header::CONTENT_TYPE,
-                                    crate::apub_util::ACTIVITY_TYPE,
-                                )
-                                .body(body.into())?;
-
-                            {
-                                if let Ok(path_and_query) =
-                                    crate::apub_util::get_path_and_query(&inbox)
-                                {
-                                    req.headers_mut().insert(
-                                        hyper::header::DATE,
-                                        crate::apub_util::now_http_date(),
-                                    );
-
-                                    let key_id = crate::apub_util::get_local_person_pubkey_apub_id(
-                                        user,
-                                        &ctx.host_url_apub,
-                                    );
-
-                                    let signature = hancock::Signature::create_legacy(
-                                        &key_id,
-                                        &hyper::Method::POST,
-                                        &path_and_query,
-                                        req.headers(),
-                                        |src| crate::apub_util::do_sign(&user_privkey, &src),
-                                    )?;
-
-                                    req.headers_mut().insert("Signature", signature.to_header());
-                                }
-                            }
-
-                            let res =
-                                crate::res_to_error(ctx.http_client.request(req).await?).await?;
-
-                            println!("{:?}", res);
-
-                            Ok::<_, crate::Error>(())
-                        }
-                    }))
+                for inbox in inboxes {
+                    ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                        inbox: inbox.into(),
+                        sign_as: Some(crate::ActorLocalRef::Person(user)),
+                        object: (&body).into(),
+                    })
                     .await?;
                 }
 
                 if community_local == Some(true) {
                     let community_local_id = row.get(2);
-                    crate::apub_util::forward_to_community_followers(community_local_id, body, ctx)
-                        .await?;
+                    crate::apub_util::enqueue_forward_to_community_followers(
+                        community_local_id,
+                        body,
+                        ctx,
+                    )
+                    .await?;
                 }
             }
 
@@ -1157,50 +1094,27 @@ async fn route_unstable_comments_delete(
                     )?;
                     let row = db.query_one("SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox) FROM community WHERE id=$1", &[&community]).await?;
 
+                    let body = serde_json::to_string(&delete_ap)?;
+
                     let local = row.get(0);
                     if local {
-                        crate::spawn_task(crate::apub_util::forward_to_community_followers(
-                            community,
-                            serde_json::to_vec(&delete_ap)?,
-                            ctx,
-                        ));
+                        crate::spawn_task(
+                            crate::apub_util::enqueue_forward_to_community_followers(
+                                community, body, ctx,
+                            ),
+                        );
                     } else {
-                        let community_inbox: Option<&str> = row.get(2);
+                        let community_inbox: Option<String> = row.get(2);
 
                         if let Some(community_inbox) = community_inbox {
-                            let mut req = hyper::Request::post(community_inbox)
-                                .header(
-                                    hyper::header::CONTENT_TYPE,
-                                    crate::apub_util::ACTIVITY_TYPE,
-                                )
-                                .body(hyper::Body::from(serde_json::to_vec(&delete_ap)?))?;
-
-                            if let Ok(path_and_query) =
-                                crate::apub_util::get_path_and_query(&community_inbox)
-                            {
-                                let user_privkey =
-                                    crate::apub_util::fetch_or_create_local_user_privkey(user, &db)
-                                        .await?;
-                                req.headers_mut()
-                                    .insert(hyper::header::DATE, crate::apub_util::now_http_date());
-
-                                let key_id = crate::apub_util::get_local_person_pubkey_apub_id(
-                                    user,
-                                    &ctx.host_url_apub,
-                                );
-
-                                let signature = hancock::Signature::create_legacy(
-                                    &key_id,
-                                    &hyper::Method::POST,
-                                    &path_and_query,
-                                    req.headers(),
-                                    |src| crate::apub_util::do_sign(&user_privkey, &src),
-                                )?;
-
-                                req.headers_mut().insert("Signature", signature.to_header());
-                            }
-
-                            crate::res_to_error(ctx.http_client.request(req).await?).await?;
+                            crate::spawn_task(async move {
+                                ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                                    inbox: community_inbox.into(),
+                                    sign_as: Some(crate::ActorLocalRef::Person(user)),
+                                    object: body,
+                                })
+                                .await
+                            });
                         }
                     }
                 }
@@ -1270,65 +1184,25 @@ async fn route_unstable_comments_like(
                     &ctx.host_url_apub,
                 )?;
 
-                let body = bytes::Bytes::from(serde_json::to_vec(&like)?);
+                let body = serde_json::to_string(&like)?;
 
-                if !inboxes.is_empty() {
-                    let user_privkey = Arc::new(
-                        crate::apub_util::fetch_or_create_local_user_privkey(user, &db).await?,
-                    );
-                    futures::future::try_join_all(inboxes.into_iter().map(|inbox| {
-                        let ctx = ctx.clone();
-                        let user_privkey = user_privkey.clone();
-                        let body = body.clone();
-                        async move {
-                            let mut req = hyper::Request::post(inbox)
-                                .header(
-                                    hyper::header::CONTENT_TYPE,
-                                    crate::apub_util::ACTIVITY_TYPE,
-                                )
-                                .body(body.into())?;
-
-                            {
-                                if let Ok(path_and_query) =
-                                    crate::apub_util::get_path_and_query(&inbox)
-                                {
-                                    req.headers_mut().insert(
-                                        hyper::header::DATE,
-                                        crate::apub_util::now_http_date(),
-                                    );
-
-                                    let key_id = crate::apub_util::get_local_person_pubkey_apub_id(
-                                        user,
-                                        &ctx.host_url_apub,
-                                    );
-
-                                    let signature = hancock::Signature::create_legacy(
-                                        &key_id,
-                                        &hyper::Method::POST,
-                                        &path_and_query,
-                                        req.headers(),
-                                        |src| crate::apub_util::do_sign(&user_privkey, &src),
-                                    )?;
-
-                                    req.headers_mut().insert("Signature", signature.to_header());
-                                }
-                            }
-
-                            let res =
-                                crate::res_to_error(ctx.http_client.request(req).await?).await?;
-
-                            println!("{:?}", res);
-
-                            Ok::<_, crate::Error>(())
-                        }
-                    }))
+                for inbox in inboxes {
+                    ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                        inbox: inbox.into(),
+                        sign_as: Some(crate::ActorLocalRef::Person(user)),
+                        object: (&body).into(),
+                    })
                     .await?;
                 }
 
                 if community_local == Some(true) {
                     let community_local_id = row.get(2);
-                    crate::apub_util::forward_to_community_followers(community_local_id, body, ctx)
-                        .await?;
+                    crate::apub_util::enqueue_forward_to_community_followers(
+                        community_local_id,
+                        body,
+                        ctx,
+                    )
+                    .await?;
                 }
             }
 
