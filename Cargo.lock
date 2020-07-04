@@ -682,6 +682,7 @@ dependencies = [
  "headers",
  "hyper",
  "hyper-tls",
+ "lazy_static",
  "mime",
  "openssl",
  "postgres-types",
@@ -693,6 +694,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "trout",
+ "unic-char-range",
  "url",
  "uuid",
 ]
@@ -1441,6 +1443,12 @@ name = "typenum"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "373c8a200f9e67a0c95e62a4f52fbf80c23b4381c05a17845531982fa99e6b33"
+
+[[package]]
+name = "unic-char-range"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0398022d5f700414f6b899e10b8348231abf9173fa93144cbc1a43b9793c1fbc"
 
 [[package]]
 name = "unicode-bidi"

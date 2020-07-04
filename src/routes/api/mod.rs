@@ -7,6 +7,14 @@ use std::sync::Arc;
 
 mod communities;
 
+lazy_static::lazy_static! {
+    static ref USERNAME_ALLOWED_CHARS: HashSet<char> = {
+        use unic_char_range::chars;
+        chars!('a'..'z').into_iter().chain(chars!('A'..'Z')).chain(chars!('0'..'9')).chain(std::iter::once('_'))
+            .collect()
+    };
+}
+
 #[derive(Serialize)]
 struct RespMinimalAuthorInfo<'a> {
     id: i64,
@@ -1289,6 +1297,15 @@ async fn route_unstable_users_create(
     }
 
     let body: UsersCreateBody<'_> = serde_json::from_slice(&body)?;
+
+    for ch in body.username.chars() {
+        if !USERNAME_ALLOWED_CHARS.contains(&ch) {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Username contains disallowed characters",
+            )));
+        }
+    }
 
     let req_password = body.password;
     let passhash =

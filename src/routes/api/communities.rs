@@ -54,6 +54,15 @@ async fn route_unstable_communities_create(
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let body: CommunitiesCreateBody<'_> = serde_json::from_slice(&body)?;
 
+    for ch in body.name.chars() {
+        if !super::USERNAME_ALLOWED_CHARS.contains(&ch) {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Community name contains disallowed characters",
+            )));
+        }
+    }
+
     let rsa = openssl::rsa::Rsa::generate(crate::KEY_BITS)?;
     let private_key = rsa.private_key_to_pem()?;
     let public_key = rsa.public_key_to_pem()?;
