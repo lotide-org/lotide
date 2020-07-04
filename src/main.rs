@@ -24,6 +24,26 @@ pub struct RouteContext {
     worker_trigger: tokio::sync::mpsc::Sender<()>,
 }
 
+impl RouteContext {
+    pub async fn enqueue_task<T: crate::tasks::TaskDef>(
+        &self,
+        task: &T,
+    ) -> Result<(), crate::Error> {
+        let db = self.db_pool.get().await?;
+        db.execute(
+            "INSERT INTO task (kind, params, max_attempts, created_at) VALUES ($1, $2, $3, current_timestamp)",
+            &[&T::kind(), &tokio_postgres::types::Json(task), &T::max_attempts()],
+        ).await?;
+
+        match self.worker_trigger.clone().try_send(()) {
+            Ok(_) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                Err(crate::Error::InternalStrStatic("Worker channel closed"))
+            }
+        }
+    }
+}
+
 impl std::ops::Deref for RouteContext {
     type Target = BaseContext;
 
@@ -80,7 +100,32 @@ pub struct PostInfo<'a> {
     content_text: Option<&'a str>,
     title: &'a str,
     created: &'a chrono::DateTime<chrono::FixedOffset>,
+    #[allow(dead_code)]
     community: i64,
+}
+
+pub struct PostInfoOwned {
+    id: i64,
+    author: Option<i64>,
+    href: Option<String>,
+    content_text: Option<String>,
+    title: String,
+    created: chrono::DateTime<chrono::FixedOffset>,
+    community: i64,
+}
+
+impl<'a> Into<PostInfo<'a>> for &'a PostInfoOwned {
+    fn into(self) -> PostInfo<'a> {
+        PostInfo {
+            id: self.id,
+            author: self.author,
+            href: self.href.as_deref(),
+            content_text: self.content_text.as_deref(),
+            title: &self.title,
+            created: &self.created,
+            community: self.community,
+        }
+    }
 }
 
 pub struct CommentInfo {
@@ -122,6 +167,11 @@ pub fn get_actor_host_or_unknown<'a>(
     local_hostname: &'a str,
 ) -> Cow<'a, str> {
     get_actor_host(local, ap_id, local_hostname).unwrap_or(Cow::Borrowed("[unknown]"))
+}
+
+pub fn get_path_and_query(url: &str) -> Result<String, url::ParseError> {
+    let url = url::Url::parse(&url)?;
+    Ok(format!("{}{}", url.path(), url.query().unwrap_or("")))
 }
 
 pub async fn query_stream(
@@ -313,7 +363,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                     let community = row.get(0);
                     crate::on_community_add_comment(community, comment.id, &comment_ap_id, ctx);
                 } else {
-                    crate::apub_util::send_comment_to_community(
+                    crate::apub_util::spawn_enqueue_send_comment_to_community(
                         comment,
                         row.get(2),
                         row.get(3),
@@ -321,8 +371,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                         parent_ap_id,
                         post_or_parent_author_ap_id.as_deref(),
                         ctx,
-                    )
-                    .await?;
+                    );
                 }
             }
         }

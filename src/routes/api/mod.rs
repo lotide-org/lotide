@@ -482,13 +482,13 @@ async fn route_unstable_posts_create(
         let created = res_row.get(1);
         let community_local: Option<bool> = res_row.get(2);
 
-        let post = crate::PostInfo {
+        let post = crate::PostInfoOwned {
             id,
             author: Some(user),
-            content_text: body.content_text.as_deref(),
-            href: body.href.as_deref(),
-            title: &body.title,
-            created: &created,
+            content_text: body.content_text,
+            href: body.href,
+            title: body.title,
+            created,
             community: body.community,
         };
 
@@ -501,7 +501,7 @@ async fn route_unstable_posts_create(
                     ctx,
                 );
             } else {
-                crate::apub_util::send_local_post_to_community(post, ctx).await?;
+                crate::apub_util::spawn_enqueue_send_local_post_to_community(post, ctx);
             }
         }
 
@@ -819,42 +819,17 @@ async fn route_unstable_posts_delete(
                             ctx,
                         ));
                     } else {
-                        let community_inbox: Option<&str> = row.get(2);
+                        let community_inbox: Option<String> = row.get(2);
 
                         if let Some(community_inbox) = community_inbox {
-                            let mut req = hyper::Request::post(community_inbox)
-                                .header(
-                                    hyper::header::CONTENT_TYPE,
-                                    crate::apub_util::ACTIVITY_TYPE,
-                                )
-                                .body(hyper::Body::from(serde_json::to_vec(&delete_ap)?))?;
-
-                            if let Ok(path_and_query) =
-                                crate::apub_util::get_path_and_query(&community_inbox)
-                            {
-                                let user_privkey =
-                                    crate::apub_util::fetch_or_create_local_user_privkey(user, &db)
-                                        .await?;
-                                req.headers_mut()
-                                    .insert(hyper::header::DATE, crate::apub_util::now_http_date());
-
-                                let key_id = crate::apub_util::get_local_person_pubkey_apub_id(
-                                    user,
-                                    &ctx.host_url_apub,
-                                );
-
-                                let signature = hancock::Signature::create_legacy(
-                                    &key_id,
-                                    &hyper::Method::POST,
-                                    &path_and_query,
-                                    req.headers(),
-                                    |src| crate::apub_util::do_sign(&user_privkey, &src),
-                                )?;
-
-                                req.headers_mut().insert("Signature", signature.to_header());
-                            }
-
-                            crate::res_to_error(ctx.http_client.request(req).await?).await?;
+                            crate::spawn_task(async move {
+                                ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                                    inbox: community_inbox.into(),
+                                    sign_as: Some(crate::ActorLocalRef::Person(user)),
+                                    object: serde_json::to_string(&delete_ap)?,
+                                })
+                                .await
+                            });
                         }
                     }
                 }
@@ -943,9 +918,7 @@ async fn route_unstable_posts_like(
                                 .body(body.into())?;
 
                             {
-                                if let Ok(path_and_query) =
-                                    crate::apub_util::get_path_and_query(&inbox)
-                                {
+                                if let Ok(path_and_query) = crate::get_path_and_query(&inbox) {
                                     req.headers_mut().insert(
                                         hyper::header::DATE,
                                         crate::apub_util::now_http_date(),
@@ -1175,8 +1148,7 @@ async fn route_unstable_comments_delete(
                                 )
                                 .body(hyper::Body::from(serde_json::to_vec(&delete_ap)?))?;
 
-                            if let Ok(path_and_query) =
-                                crate::apub_util::get_path_and_query(&community_inbox)
+                            if let Ok(path_and_query) = crate::get_path_and_query(&community_inbox)
                             {
                                 let user_privkey =
                                     crate::apub_util::fetch_or_create_local_user_privkey(user, &db)
@@ -1289,9 +1261,7 @@ async fn route_unstable_comments_like(
                                 .body(body.into())?;
 
                             {
-                                if let Ok(path_and_query) =
-                                    crate::apub_util::get_path_and_query(&inbox)
-                                {
+                                if let Ok(path_and_query) = crate::get_path_and_query(&inbox) {
                                     req.headers_mut().insert(
                                         hyper::header::DATE,
                                         crate::apub_util::now_http_date(),
