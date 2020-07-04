@@ -25,8 +25,11 @@ async fn run_worker(
         let row = db
             .query_opt(
                 "UPDATE task SET state='running' WHERE id=(\
-                SELECT id FROM task WHERE state='pending' FOR UPDATE SKIP LOCKED LIMIT 1\
-            ) RETURNING id, kind, params",
+                    SELECT id FROM task \
+                        WHERE state='pending' \
+                        AND (attempted_at IS NULL OR attempted_at + (EXP(attempts) * INTERVAL '20 SECONDS') < current_timestamp) \
+                        FOR UPDATE SKIP LOCKED LIMIT 1\
+                    ) RETURNING id, kind, params",
                 &[],
             )
             .await?;
@@ -39,14 +42,22 @@ async fn run_worker(
             let result = perform_task(&ctx, kind, params).await;
             if let Err(err) = result {
                 let err = format!("{:?}", err);
-                db.execute("UPDATE task SET state=(CASE WHEN attempts + 1 < max_attempts THEN 'pending'::lt_task_state ELSE 'failed'::lt_task_state END), attempts = attempts + 1, latest_error=$2 WHERE id=$1", &[&task_id, &err]).await?;
+                db.execute(
+                    "UPDATE task \
+                        SET state=(CASE WHEN attempts + 1 < max_attempts THEN 'pending'::lt_task_state ELSE 'failed'::lt_task_state END), attempts = attempts + 1, latest_error=$2, attempted_at=current_timestamp \
+                        WHERE id=$1",
+                    &[&task_id, &err],
+                ).await?;
             } else {
                 db.execute("UPDATE task SET state='completed', completed_at=current_timestamp, attempts = attempts + 1 WHERE id=$1", &[&task_id]).await?;
             }
         } else {
-            recv.recv()
-                .await
-                .expect("All task triggers have been dropped");
+            match tokio::time::timeout(std::time::Duration::from_secs(60), recv.recv()).await {
+                Err(tokio::time::Elapsed { .. }) => {}
+                Ok(recv_res) => recv_res.ok_or(crate::Error::InternalStrStatic(
+                    "Worker trigger senders lost",
+                ))?,
+            }
         }
     }
 }
