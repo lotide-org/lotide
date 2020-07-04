@@ -813,11 +813,13 @@ async fn route_unstable_posts_delete(
 
                     let local = row.get(0);
                     if local {
-                        crate::spawn_task(crate::apub_util::enqueue_forward_to_community_followers(
-                            community,
-                            serde_json::to_string(&delete_ap)?,
-                            ctx,
-                        ));
+                        crate::spawn_task(
+                            crate::apub_util::enqueue_forward_to_community_followers(
+                                community,
+                                serde_json::to_string(&delete_ap)?,
+                                ctx,
+                            ),
+                        );
                     } else {
                         let community_inbox: Option<String> = row.get(2);
 
@@ -906,13 +908,18 @@ async fn route_unstable_posts_like(
                         inbox: inbox.into(),
                         sign_as: Some(crate::ActorLocalRef::Person(user)),
                         object: (&body).into(),
-                    }).await?;
+                    })
+                    .await?;
                 }
 
                 if community_local == Some(true) {
                     let community_local_id = row.get(2);
-                    crate::apub_util::enqueue_forward_to_community_followers(community_local_id, body, ctx)
-                        .await?;
+                    crate::apub_util::enqueue_forward_to_community_followers(
+                        community_local_id,
+                        body,
+                        ctx,
+                    )
+                    .await?;
                 }
             }
 
@@ -1091,11 +1098,11 @@ async fn route_unstable_comments_delete(
 
                     let local = row.get(0);
                     if local {
-                        crate::spawn_task(crate::apub_util::enqueue_forward_to_community_followers(
-                            community,
-                            body,
-                            ctx,
-                        ));
+                        crate::spawn_task(
+                            crate::apub_util::enqueue_forward_to_community_followers(
+                                community, body, ctx,
+                            ),
+                        );
                     } else {
                         let community_inbox: Option<String> = row.get(2);
 
@@ -1184,13 +1191,18 @@ async fn route_unstable_comments_like(
                         inbox: inbox.into(),
                         sign_as: Some(crate::ActorLocalRef::Person(user)),
                         object: (&body).into(),
-                    }).await?;
+                    })
+                    .await?;
                 }
 
                 if community_local == Some(true) {
                     let community_local_id = row.get(2);
-                    crate::apub_util::enqueue_forward_to_community_followers(community_local_id, body, ctx)
-                        .await?;
+                    crate::apub_util::enqueue_forward_to_community_followers(
+                        community_local_id,
+                        body,
+                        ctx,
+                    )
+                    .await?;
                 }
             }
 

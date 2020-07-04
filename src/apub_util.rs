@@ -486,7 +486,9 @@ pub fn spawn_announce_community_post(
             eprintln!("Failed to create Announce: {:?}", err);
         }
         Ok(announce) => {
-            crate::spawn_task(enqueue_send_to_community_followers(community, announce, ctx));
+            crate::spawn_task(enqueue_send_to_community_followers(
+                community, announce, ctx,
+            ));
         }
     }
 }
@@ -911,7 +913,8 @@ pub async fn enqueue_forward_to_community_followers(
         actor: crate::ActorLocalRef::Community(community_id),
         sign: false,
         object: body,
-    }).await
+    })
+    .await
 }
 
 async fn enqueue_send_to_community_followers(
@@ -923,7 +926,8 @@ async fn enqueue_send_to_community_followers(
         actor: crate::ActorLocalRef::Community(community_id),
         sign: true,
         object: serde_json::to_string(&announce)?,
-    }).await
+    })
+    .await
 }
 
 pub fn maybe_get_local_user_id_from_uri(uri: &str, host_url_apub: &str) -> Option<i64> {
@@ -1368,7 +1372,8 @@ pub async fn handle_like(
                             if community_local {
                                 let community_id = row.get(0);
                                 let body = serde_json::to_string(&activity)?;
-                                enqueue_forward_to_community_followers(community_id, body, ctx).await?;
+                                enqueue_forward_to_community_followers(community_id, body, ctx)
+                                    .await?;
                             }
                         }
                     }
@@ -1386,7 +1391,8 @@ pub async fn handle_like(
                             if community_local {
                                 let community_id = row.get(0);
                                 let body = serde_json::to_string(&activity)?;
-                                enqueue_forward_to_community_followers(community_id, body, ctx).await?;
+                                enqueue_forward_to_community_followers(community_id, body, ctx)
+                                    .await?;
                             }
                         }
                     }
