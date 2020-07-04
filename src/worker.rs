@@ -39,7 +39,7 @@ async fn run_worker(
             let result = perform_task(&ctx, kind, params).await;
             if let Err(err) = result {
                 let err = format!("{:?}", err);
-                db.execute("UPDATE task SET state=(CASE WHEN attempts + 1 < max_attempts THEN 'pending' ELSE 'failed' END), attempts = attempts + 1, last_error=$2 WHERE id=$1", &[&task_id, &err]).await?;
+                db.execute("UPDATE task SET state=(CASE WHEN attempts + 1 < max_attempts THEN 'pending'::lt_task_state ELSE 'failed'::lt_task_state END), attempts = attempts + 1, latest_error=$2 WHERE id=$1", &[&task_id, &err]).await?;
             } else {
                 db.execute("UPDATE task SET state='completed', completed_at=current_timestamp, attempts = attempts + 1 WHERE id=$1", &[&task_id]).await?;
             }
@@ -59,8 +59,12 @@ async fn perform_task(
     use crate::tasks::TaskDef;
 
     match kind {
-        "deliver_to_inbox" => {
+        crate::tasks::DeliverToInbox::KIND => {
             let def: crate::tasks::DeliverToInbox = serde_json::from_value(params)?;
+            def.perform(ctx).await?;
+        }
+        crate::tasks::DeliverToFollowers::KIND => {
+            let def: crate::tasks::DeliverToFollowers = serde_json::from_value(params)?;
             def.perform(ctx).await?;
         }
         _ => {

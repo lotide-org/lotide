@@ -410,7 +410,7 @@ pub fn spawn_enqueue_send_community_follow(
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: (&community_inbox).into(),
             sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
-            object: serde_json::to_string(&follow)?,
+            object: serde_json::to_string(&follow)?.into(),
         })
         .await?;
 
@@ -486,7 +486,7 @@ pub fn spawn_announce_community_post(
             eprintln!("Failed to create Announce: {:?}", err);
         }
         Ok(announce) => {
-            crate::spawn_task(send_to_community_followers(community, announce, ctx));
+            crate::spawn_task(enqueue_send_to_community_followers(community, announce, ctx));
         }
     }
 }
@@ -506,7 +506,7 @@ pub fn spawn_announce_community_comment(
 
     crate::spawn_task(async move {
         let announce = announce?;
-        send_to_community_followers(community, announce, ctx).await
+        enqueue_send_to_community_followers(community, announce, ctx).await
     });
 }
 
@@ -578,7 +578,7 @@ pub fn spawn_enqueue_send_community_follow_accept(
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: (&follower_inbox).into(),
             sign_as: Some(crate::ActorLocalRef::Community(local_community)),
-            object: body,
+            object: body.into(),
         })
         .await?;
 
@@ -748,7 +748,7 @@ pub fn spawn_enqueue_send_local_post_to_community(
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: (&community_inbox).into(),
             sign_as: Some(crate::ActorLocalRef::Person(post.author.unwrap())),
-            object: serde_json::to_string(&create)?,
+            object: serde_json::to_string(&create)?.into(),
         })
         .await?;
 
@@ -894,7 +894,7 @@ pub fn spawn_enqueue_send_comment_to_community(
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: community_ap_inbox.into(),
             sign_as: Some(crate::ActorLocalRef::Person(author)),
-            object: serde_json::to_string(&create)?,
+            object: serde_json::to_string(&create)?.into(),
         })
         .await?;
 
@@ -902,152 +902,28 @@ pub fn spawn_enqueue_send_comment_to_community(
     });
 }
 
-pub async fn forward_to_community_followers(
+pub async fn enqueue_forward_to_community_followers(
     community_id: i64,
-    body: impl Into<bytes::Bytes>,
+    body: String,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    use futures::future::{FutureExt, TryFutureExt};
-    use futures::stream::{StreamExt, TryStreamExt};
-
-    const PARALLEL: usize = 4;
-
-    let body = body.into();
-
-    let db = ctx.db_pool.get().await?;
-
-    let inboxes: Vec<_> = {
-        let stream = crate::query_stream(
-            &db,
-            "SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) FROM community_follow, person WHERE person.id = community_follow.follower AND person.local = FALSE AND community = $1",
-            &[&community_id],
-        ).await?;
-
-        stream
-            .try_filter_map(|row| async move {
-                let inbox: Option<String> = row.get(0);
-                Ok(inbox)
-            })
-            .try_collect()
-            .await?
-    };
-
-    futures::stream::iter(
-        inboxes
-            .into_iter()
-            .filter_map(|inbox| {
-                match hyper::Request::post(inbox)
-                    .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
-                    .body(body.clone().into())
-                {
-                    Err(err) => {
-                        eprintln!("Failed to construct inbox post: {:?}", err);
-
-                        None
-                    }
-                    Ok(req) => Some(req),
-                }
-            })
-            .map(|req| {
-                ctx.http_client
-                    .request(req)
-                    .map_err(crate::Error::from)
-                    .and_then(crate::res_to_error)
-                    .map(|res| {
-                        if let Err(err) = res {
-                            eprintln!("Delivery failed: {:?}", err);
-                        }
-                    })
-            }),
-    )
-    .buffer_unordered(PARALLEL)
-    .for_each(|_| async {})
-    .await;
-
-    Ok(())
+    ctx.enqueue_task(&crate::tasks::DeliverToFollowers {
+        actor: crate::ActorLocalRef::Community(community_id),
+        sign: false,
+        object: body,
+    }).await
 }
 
-async fn send_to_community_followers(
+async fn enqueue_send_to_community_followers(
     community_id: i64,
     announce: activitystreams::activity::Announce,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    use futures::future::{FutureExt, TryFutureExt};
-    use futures::stream::{StreamExt, TryStreamExt};
-
-    let db = ctx.db_pool.get().await?;
-
-    let ((inboxes, body), community_privkey) = futures::future::try_join(
-        async {
-            let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id];
-
-            let stream = db.query_raw(
-                "SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) FROM community_follow, person WHERE person.id = community_follow.follower AND person.local = FALSE AND community = $1",
-                values.iter().map(|s| *s as _)
-            ).await?;
-
-            let inboxes: std::collections::HashSet<String> =
-                stream.map_ok(|row| row.get(0)).try_collect().await?;
-
-            let body: bytes::Bytes = serde_json::to_vec(&announce)?.into();
-
-            Ok((inboxes, body))
-        },
-        fetch_or_create_local_community_privkey(community_id, &db),
-    ).await?;
-
-    let requests: futures::stream::FuturesUnordered<_> = inboxes
-        .into_iter()
-        .filter_map(|inbox| {
-            let path_and_query_res = crate::get_path_and_query(&inbox);
-            match hyper::Request::post(inbox)
-                .header(hyper::header::CONTENT_TYPE, ACTIVITY_TYPE)
-                .body(body.clone().into())
-            {
-                Err(err) => {
-                    eprintln!("Failed to construct inbox post: {:?}", err);
-
-                    None
-                }
-                Ok(req) => Some((req, path_and_query_res)),
-            }
-        })
-        .map(|(mut req, path_and_query_res)| {
-            if let Ok(path_and_query) = path_and_query_res {
-                req.headers_mut()
-                    .insert(hyper::header::DATE, now_http_date());
-
-                match hancock::Signature::create_legacy(
-                    &get_local_community_pubkey_apub_id(community_id, &ctx.host_url_apub),
-                    &hyper::Method::POST,
-                    &path_and_query,
-                    req.headers(),
-                    |src| do_sign(&community_privkey, &src),
-                ) {
-                    Ok(signature) => {
-                        req.headers_mut().insert("Signature", signature.to_header());
-                    }
-                    Err(err) => {
-                        eprintln!("Failed to create signature: {:?}", err);
-                    }
-                }
-            }
-
-            ctx.http_client
-                .request(req)
-                .map_err(crate::Error::from)
-                .and_then(crate::res_to_error)
-                .map(|res| {
-                    if let Err(err) = res {
-                        eprintln!("Delivery failed: {:?}", err);
-                    }
-                })
-        })
-        .collect();
-
-    requests.collect::<()>().await;
-
-    Ok(())
+    ctx.enqueue_task(&crate::tasks::DeliverToFollowers {
+        actor: crate::ActorLocalRef::Community(community_id),
+        sign: true,
+        object: serde_json::to_string(&announce)?,
+    }).await
 }
 
 pub fn maybe_get_local_user_id_from_uri(uri: &str, host_url_apub: &str) -> Option<i64> {
@@ -1491,8 +1367,8 @@ pub async fn handle_like(
                             let community_local = row.get(1);
                             if community_local {
                                 let community_id = row.get(0);
-                                let body = serde_json::to_vec(&activity)?;
-                                forward_to_community_followers(community_id, body, ctx).await?;
+                                let body = serde_json::to_string(&activity)?;
+                                enqueue_forward_to_community_followers(community_id, body, ctx).await?;
                             }
                         }
                     }
@@ -1509,8 +1385,8 @@ pub async fn handle_like(
                             let community_local = row.get(1);
                             if community_local {
                                 let community_id = row.get(0);
-                                let body = serde_json::to_vec(&activity)?;
-                                forward_to_community_followers(community_id, body, ctx).await?;
+                                let body = serde_json::to_string(&activity)?;
+                                enqueue_forward_to_community_followers(community_id, body, ctx).await?;
                             }
                         }
                     }
@@ -1543,9 +1419,9 @@ pub async fn handle_delete(
             if let Some(community_id) = local_community {
                 // Community is local, need to forward delete to followers
 
-                let body = serde_json::to_vec(&activity)?;
+                let body = serde_json::to_string(&activity)?;
 
-                crate::spawn_task(crate::apub_util::forward_to_community_followers(
+                crate::spawn_task(crate::apub_util::enqueue_forward_to_community_followers(
                     community_id,
                     body,
                     ctx,

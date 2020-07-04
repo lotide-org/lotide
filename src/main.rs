@@ -32,7 +32,7 @@ impl RouteContext {
         let db = self.db_pool.get().await?;
         db.execute(
             "INSERT INTO task (kind, params, max_attempts, created_at) VALUES ($1, $2, $3, current_timestamp)",
-            &[&T::kind(), &tokio_postgres::types::Json(task), &T::max_attempts()],
+            &[&T::KIND, &tokio_postgres::types::Json(task), &T::MAX_ATTEMPTS],
         ).await?;
 
         match self.worker_trigger.clone().try_send(()) {
