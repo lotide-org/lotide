@@ -232,23 +232,10 @@ async fn inbox_common(
                 if let Some(object_id) = object_id {
                     if !object_id.as_str().starts_with(&ctx.host_url_apub) {
                         // don't need announces for local objects
-                        let res = crate::res_to_error(
-                            ctx.http_client
-                                .request(
-                                    hyper::Request::get(object_id.as_str())
-                                        .header(
-                                            hyper::header::ACCEPT,
-                                            crate::apub_util::ACTIVITY_TYPE,
-                                        )
-                                        .body(Default::default())?,
-                                )
-                                .await?,
-                        )
-                        .await?;
-
-                        let body = hyper::body::to_bytes(res.into_body()).await?;
-                        let obj: activitystreams::object::ObjectBox =
-                            serde_json::from_slice(&body)?;
+                        let body =
+                            crate::apub_util::fetch_ap_object(object_id.as_str(), &ctx.http_client)
+                                .await?;
+                        let obj: activitystreams::object::ObjectBox = serde_json::from_value(body)?;
                         crate::apub_util::handle_recieved_object_for_community(
                             community_local_id,
                             community_is_local,
@@ -313,20 +300,9 @@ pub async fn inbox_common_create(
             }
         };
         if let Some(object_id) = object_id {
-            let res = crate::res_to_error(
-                ctx.http_client
-                    .request(
-                        hyper::Request::get(object_id.as_str())
-                            .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
-                            .body(Default::default())?,
-                    )
-                    .await?,
-            )
-            .await?;
-
-            let body = hyper::body::to_bytes(res.into_body()).await?;
-
-            let obj: activitystreams::object::ObjectBox = serde_json::from_slice(&body)?;
+            let body =
+                crate::apub_util::fetch_ap_object(object_id.as_str(), &ctx.http_client).await?;
+            let obj: activitystreams::object::ObjectBox = serde_json::from_value(body)?;
 
             crate::apub_util::handle_recieved_object_for_local_community(obj, ctx).await?;
         }

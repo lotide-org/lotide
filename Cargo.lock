@@ -680,6 +680,7 @@ dependencies = [
  "futures",
  "hancock",
  "headers",
+ "http",
  "hyper",
  "hyper-tls",
  "lazy_static",

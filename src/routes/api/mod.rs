@@ -250,21 +250,14 @@ async fn route_unstable_actors_lookup(
         }
     };
 
-    let res = ctx
-        .http_client
-        .request(
-            hyper::Request::get(&uri)
-                .header(hyper::header::ACCEPT, crate::apub_util::ACTIVITY_TYPE)
-                .body(Default::default())?,
-        )
-        .await?;
+    let uri_str = uri.to_string();
 
-    let body = hyper::body::to_bytes(res.into_body()).await?;
+    let body = crate::apub_util::fetch_ap_object(&uri_str, &ctx.http_client).await?;
 
     let group: activitystreams::ext::Ext<
         activitystreams::actor::Group,
         activitystreams::actor::properties::ApActorProperties,
-    > = serde_json::from_slice(&body)?;
+    > = serde_json::from_value(body)?;
 
     let name = group.as_ref().get_name_xsd_string();
     let ap_inbox = group.extension.get_inbox().as_str();
@@ -277,7 +270,7 @@ async fn route_unstable_actors_lookup(
     if let Some(name) = name {
         let row = db.query_one(
             "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox) VALUES ($1, FALSE, $2, $3, $4) ON CONFLICT (ap_id) DO UPDATE SET name=$1, ap_inbox=$3, ap_shared_inbox=$4 RETURNING id",
-            &[&name.as_str(), &uri.to_string(), &ap_inbox, &ap_shared_inbox],
+            &[&name.as_str(), &group.as_ref().id.as_ref().unwrap().as_str(), &ap_inbox, &ap_shared_inbox],
         )
         .await?;
 

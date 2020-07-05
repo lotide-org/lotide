@@ -1,6 +1,7 @@
 use crate::ThingLocalRef;
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::convert::TryFrom;
 use std::sync::Arc;
 
 pub const ACTIVITY_TYPE: &'static str = "application/activity+json";
@@ -17,7 +18,6 @@ pub struct PublicKey<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct PublicKeyExtension<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(borrow)]
     pub public_key: Option<PublicKey<'a>>,
 }
 
@@ -123,27 +123,53 @@ pub fn require_containment(object_id: &url::Url, actor_id: &url::Url) -> Result<
     }
 }
 
-pub async fn fetch_actor(
+pub async fn fetch_ap_object(
     ap_id: &str,
+    http_client: &crate::HttpClient,
+) -> Result<serde_json::Value, crate::Error> {
+    let mut current_id = hyper::Uri::try_from(ap_id)?;
+    for _ in 0..3u8 {
+        // avoid infinite loop in malicious or broken cases
+        let res = crate::res_to_error(
+            http_client
+                .request(
+                    hyper::Request::get(&current_id)
+                        .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
+                        .body(Default::default())?,
+                )
+                .await?,
+        )
+        .await?;
+
+        let body = hyper::body::to_bytes(res.into_body()).await?;
+        let body: serde_json::Value = serde_json::from_slice(&body)?;
+
+        current_id = match body.get("id") {
+            None => return Err(crate::Error::InternalStrStatic("Missing id in object")),
+            Some(body_id) => match body_id {
+                serde_json::Value::String(body_id) => {
+                    if current_id == body_id.as_ref() {
+                        return Ok(body);
+                    }
+
+                    TryFrom::try_from(body_id)?
+                }
+                _ => return Err(crate::Error::InternalStrStatic("id was not a string")),
+            },
+        }
+    }
+
+    Err(crate::Error::InternalStrStatic("Recursion depth exceeded"))
+}
+
+pub async fn fetch_actor(
+    req_ap_id: &str,
     db: &tokio_postgres::Client,
     http_client: &crate::HttpClient,
 ) -> Result<ActorLocalInfo, crate::Error> {
-    let res = crate::res_to_error(
-        http_client
-            .request(
-                hyper::Request::get(ap_id)
-                    .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
-                    .body(Default::default())?,
-            )
-            .await?,
-    )
-    .await?;
+    let obj = fetch_ap_object(req_ap_id, http_client).await?;
 
-    let body = hyper::body::to_bytes(res.into_body()).await?;
-
-    let actor: activitystreams::actor::ActorBox = serde_json::from_slice(&body)?;
-
-    match actor.kind() {
+    match obj.get("type").and_then(serde_json::Value::as_str) {
         Some("Person") => {
             let person: activitystreams::ext::Ext<
                 activitystreams::ext::Ext<
@@ -151,8 +177,9 @@ pub async fn fetch_actor(
                     activitystreams::actor::properties::ApActorProperties,
                 >,
                 crate::apub_util::PublicKeyExtension<'_>,
-            > = serde_json::from_slice(&body)?;
+            > = serde_json::from_value(obj)?;
 
+            let ap_id = person.base.base.object_props.id.as_ref().unwrap().as_str();
             let username = person
                 .base
                 .extension
@@ -190,8 +217,9 @@ pub async fn fetch_actor(
                     activitystreams::actor::properties::ApActorProperties,
                 >,
                 crate::apub_util::PublicKeyExtension<'_>,
-            > = serde_json::from_slice(&body)?;
+            > = serde_json::from_value(obj)?;
 
+            let ap_id = group.base.base.object_props.id.as_ref().unwrap().as_str();
             let name = group
                 .as_ref()
                 .get_name_xsd_string()
@@ -1503,23 +1531,9 @@ pub async fn verify_incoming_activity(
                 crate::Error::InternalStrStatic("Missing id in received activity")
             })?;
 
-            let res = crate::res_to_error(
-                http_client
-                    .request(
-                        hyper::Request::get(ap_id.as_str())
-                            .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
-                            .body(Default::default())?,
-                    )
-                    .await?,
-            )
-            .await?;
+            let res_body = fetch_ap_object(ap_id.as_str(), http_client).await?;
 
-            println!("{:?}", res);
-
-            let res_body = hyper::body::to_bytes(res.into_body()).await?;
-
-            // TODO verify user and activity domains match
-            Ok(serde_json::from_slice(&res_body)?)
+            Ok(serde_json::from_value(res_body)?)
         }
         Some(signature) => {
             let raw_activity_props: activitystreams::activity::properties::ActorOptOriginAndTargetProperties = serde_json::from_slice(&req_body)?;
