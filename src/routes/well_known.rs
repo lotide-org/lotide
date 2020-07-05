@@ -122,7 +122,7 @@ async fn handler_webfinger_get(
             row.map(|row| (LTActorType::Community, id, Cow::Owned(row.get(0))))
         }
         Some(LocalRef::Name(name)) => {
-            let row = db.query_opt("(SELECT FALSE, id FROM person WHERE username=$1 AND local) UNION ALL (SELECT TRUE, id FROM community WHERE name=$1 AND local) LIMIT 1", &[&name]).await?;
+            let row = db.query_opt("(SELECT FALSE, id, username FROM person WHERE LOWER(username)=LOWER($1) AND local) UNION ALL (SELECT TRUE, id, name FROM community WHERE LOWER(name)=LOWER($1) AND local) LIMIT 1", &[&name]).await?;
             row.map(|row| {
                 (
                     if row.get(0) {
@@ -131,7 +131,7 @@ async fn handler_webfinger_get(
                         LTActorType::User
                     },
                     row.get(1),
-                    name.into(),
+                    Cow::Owned(row.get(2)),
                 )
             })
         }

@@ -305,7 +305,7 @@ async fn route_unstable_logins_create(
 
     let row = db
         .query_opt(
-            "SELECT id, passhash FROM person WHERE username=$1 AND local",
+            "SELECT id, passhash FROM person WHERE LOWER(username)=LOWER($1) AND local",
             &[&body.username],
         )
         .await?
