@@ -259,7 +259,12 @@ async fn route_unstable_actors_lookup(
         activitystreams::actor::properties::ApActorProperties,
     > = serde_json::from_value(body)?;
 
-    let name = group.as_ref().get_name_xsd_string();
+    let name = group
+        .extension
+        .get_preferred_username()
+        .map(|x| x.as_str())
+        .or_else(|| group.as_ref().get_name_xsd_string().map(|x| x.as_str()))
+        .unwrap_or("");
     let ap_inbox = group.extension.get_inbox().as_str();
     let ap_shared_inbox = group
         .extension
@@ -267,23 +272,17 @@ async fn route_unstable_actors_lookup(
         .and_then(|endpoints| endpoints.get_shared_inbox())
         .map(|x| x.as_str());
 
-    if let Some(name) = name {
-        let row = db.query_one(
-            "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox) VALUES ($1, FALSE, $2, $3, $4) ON CONFLICT (ap_id) DO UPDATE SET name=$1, ap_inbox=$3, ap_shared_inbox=$4 RETURNING id",
-            &[&name.as_str(), &group.as_ref().id.as_ref().unwrap().as_str(), &ap_inbox, &ap_shared_inbox],
-        )
-        .await?;
+    let row = db.query_one(
+        "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox) VALUES ($1, FALSE, $2, $3, $4) ON CONFLICT (ap_id) DO UPDATE SET name=$1, ap_inbox=$3, ap_shared_inbox=$4 RETURNING id",
+        &[&name, &group.as_ref().id.as_ref().unwrap().as_str(), &ap_inbox, &ap_shared_inbox],
+    )
+    .await?;
 
-        let new_id: i64 = row.get(0);
+    let new_id: i64 = row.get(0);
 
-        Ok(hyper::Response::builder()
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(serde_json::to_vec(&serde_json::json!([{ "id": new_id }]))?.into())?)
-    } else {
-        Ok(hyper::Response::builder()
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(serde_json::to_vec(&serde_json::json!([]))?.into())?)
-    }
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&serde_json::json!([{ "id": new_id }]))?.into())?)
 }
 
 async fn route_unstable_logins_create(

@@ -221,9 +221,11 @@ pub async fn fetch_actor(
 
             let ap_id = group.base.base.object_props.id.as_ref().unwrap().as_str();
             let name = group
-                .as_ref()
-                .get_name_xsd_string()
+                .base
+                .extension
+                .get_preferred_username()
                 .map(|x| x.as_str())
+                .or_else(|| group.as_ref().get_name_xsd_string().map(|x| x.as_str()))
                 .unwrap_or("");
             let inbox = group.base.extension.inbox.as_str();
             let shared_inbox = group
