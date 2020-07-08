@@ -16,6 +16,15 @@ lazy_static::lazy_static! {
 }
 
 #[derive(Serialize)]
+struct Empty {}
+
+#[derive(Deserialize)]
+struct MaybeIncludeYour {
+    #[serde(default)]
+    pub include_your: bool,
+}
+
+#[derive(Serialize)]
 struct RespMinimalAuthorInfo<'a> {
     id: i64,
     username: Cow<'a, str>,
@@ -58,6 +67,7 @@ struct RespPostCommentInfo<'a> {
     content_html: Option<Cow<'a, str>>,
     deleted: bool,
     replies: Option<Vec<RespPostCommentInfo<'a>>>,
+    your_vote: Option<Option<Empty>>,
 }
 
 pub fn route_api() -> crate::RouteNode<()> {
@@ -513,6 +523,7 @@ async fn route_unstable_posts_create(
 
 async fn apply_comments_replies<'a, T>(
     comments: &mut Vec<(T, RespPostCommentInfo<'a>)>,
+    include_your_for: Option<i64>,
     depth: u8,
     db: &tokio_postgres::Client,
     local_hostname: &'a str,
@@ -522,7 +533,8 @@ async fn apply_comments_replies<'a, T>(
             .iter()
             .map(|(_, comment)| comment.id)
             .collect::<Vec<_>>();
-        let mut replies = get_comments_replies_box(&ids, depth - 1, db, local_hostname).await?;
+        let mut replies =
+            get_comments_replies_box(&ids, include_your_for, depth - 1, db, local_hostname).await?;
 
         for (_, comment) in comments {
             comment.replies = Some(replies.remove(&comment.id).unwrap_or_else(Vec::new));
@@ -534,6 +546,7 @@ async fn apply_comments_replies<'a, T>(
 
 fn get_comments_replies_box<'a: 'b, 'b>(
     parents: &'b [i64],
+    include_your_for: Option<i64>,
     depth: u8,
     db: &'b tokio_postgres::Client,
     local_hostname: &'a str,
@@ -544,22 +557,39 @@ fn get_comments_replies_box<'a: 'b, 'b>(
             + 'b,
     >,
 > {
-    Box::pin(get_comments_replies(parents, depth, db, local_hostname))
+    Box::pin(get_comments_replies(
+        parents,
+        include_your_for,
+        depth,
+        db,
+        local_hostname,
+    ))
 }
 
 async fn get_comments_replies<'a>(
     parents: &[i64],
+    include_your_for: Option<i64>,
     depth: u8,
     db: &tokio_postgres::Client,
     local_hostname: &'a str,
 ) -> Result<HashMap<i64, Vec<RespPostCommentInfo<'a>>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let stream = crate::query_stream(
-        db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC",
-        &[&parents],
-    ).await?;
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted";
+    let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
+        if include_your_for.is_some() {
+            (
+                ", EXISTS(SELECT 1 FROM reply_like WHERE reply = reply.id AND person = $2)",
+                vec![&parents, &include_your_for],
+            )
+        } else {
+            ("", vec![&parents])
+        };
+    let sql3 = " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC";
+
+    let sql: &str = &format!("{}{}{}", sql1, sql2, sql3);
+
+    let stream = crate::query_stream(db, sql, &values).await?;
 
     let mut comments: Vec<_> = stream
         .map_err(crate::Error::from)
@@ -598,13 +628,17 @@ async fn get_comments_replies<'a>(
                     created: created.to_rfc3339().into(),
                     deleted: row.get(9),
                     replies: None,
+                    your_vote: match include_your_for {
+                        None => None,
+                        Some(_) => Some(if row.get(10) { Some(Empty {}) } else { None }),
+                    },
                 },
             ))
         })
         .try_collect()
         .await?;
 
-    apply_comments_replies(&mut comments, depth, db, local_hostname).await?;
+    apply_comments_replies(&mut comments, include_your_for, depth, db, local_hostname).await?;
 
     let mut result = HashMap::new();
     for (parent, comment) in comments {
@@ -616,16 +650,27 @@ async fn get_comments_replies<'a>(
 
 async fn get_post_comments<'a>(
     post_id: i64,
+    include_your_for: Option<i64>,
     db: &tokio_postgres::Client,
     local_hostname: &'a str,
 ) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let stream = crate::query_stream(
-        db,
-        "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC",
-        &[&post_id],
-    ).await?;
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted";
+    let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
+        if include_your_for.is_some() {
+            (
+                ", EXISTS(SELECT 1 FROM reply_like WHERE reply = reply.id AND person = $2)",
+                vec![&post_id, &include_your_for],
+            )
+        } else {
+            ("", vec![&post_id])
+        };
+    let sql3 = " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC";
+
+    let sql: &str = &format!("{}{}{}", sql1, sql2, sql3);
+
+    let stream = crate::query_stream(db, sql, &values[..]).await?;
 
     let mut comments: Vec<_> = stream
         .map_err(crate::Error::from)
@@ -663,13 +708,17 @@ async fn get_post_comments<'a>(
                     created: created.to_rfc3339().into(),
                     deleted: row.get(8),
                     replies: None,
+                    your_vote: match include_your_for {
+                        None => None,
+                        Some(_) => Some(if row.get(9) { Some(Empty {}) } else { None }),
+                    },
                 },
             ))
         })
         .try_collect()
         .await?;
 
-    apply_comments_replies(&mut comments, 2, db, local_hostname).await?;
+    apply_comments_replies(&mut comments, include_your_for, 2, db, local_hostname).await?;
 
     Ok(comments.into_iter().map(|(_, comment)| comment).collect())
 }
@@ -677,9 +726,20 @@ async fn get_post_comments<'a>(
 async fn route_unstable_posts_get(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
+    req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     use futures::future::TryFutureExt;
+
+    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
+    let db = ctx.db_pool.get().await?;
+
+    let include_your_for = if query.include_your {
+        let user = crate::require_login(&req, &db).await?;
+        Some(user)
+    } else {
+        None
+    };
 
     #[derive(Serialize)]
     struct RespPostInfo<'a> {
@@ -687,20 +747,32 @@ async fn route_unstable_posts_get(
         post: &'a RespPostListPost<'a>,
         score: i64,
         comments: Vec<RespPostCommentInfo<'a>>,
+        your_vote: Option<Option<Empty>>,
     }
-    let (post_id,) = params;
 
-    let db = ctx.db_pool.get().await?;
+    let (post_id,) = params;
 
     let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
 
-    let (row, comments) = futures::future::try_join(
+    let (row, comments, your_vote) = futures::future::try_join3(
         db.query_opt(
             "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1) FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
-        get_post_comments(post_id, &db, &local_hostname),
+        get_post_comments(post_id, include_your_for, &db, &local_hostname),
+        async {
+            if let Some(user) = include_your_for {
+                let row = db.query_opt("SELECT 1 FROM post_like WHERE post=$1 AND person=$2", &[&post_id, &user]).await?;
+                if row.is_some() {
+                    Ok(Some(Some(Empty {})))
+                } else {
+                    Ok(Some(None))
+                }
+            } else {
+                Ok(None)
+            }
+        }
     ).await?;
 
     match row {
@@ -762,11 +834,14 @@ async fn route_unstable_posts_get(
                 post: &post,
                 comments,
                 score: row.get(13),
+                your_vote,
             };
+
+            let output = serde_json::to_vec(&output)?;
 
             Ok(hyper::Response::builder()
                 .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(serde_json::to_vec(&output)?.into())?)
+                .body(output.into())?)
         }
     }
 }
@@ -978,8 +1053,12 @@ async fn route_unstable_posts_replies_create(
 async fn route_unstable_comments_get(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
+    req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    use futures::future::TryFutureExt;
+
+    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
     #[derive(Serialize)]
     struct RespCommentInfo<'a> {
         #[serde(flatten)]
@@ -991,9 +1070,25 @@ async fn route_unstable_comments_get(
 
     let db = ctx.db_pool.get().await?;
 
-    let row = db.query_opt(
-        "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
-        &[&comment_id],
+    let (row, your_vote) = futures::future::try_join(
+        db.query_opt(
+            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+            &[&comment_id],
+        )
+        .map_err(crate::Error::from),
+        async {
+            Ok(if query.include_your {
+                let user = crate::require_login(&req, &db).await?;
+                let row = db.query_opt(
+                    "SELECT 1 FROM comment_like WHERE comment=$1 AND person=$2",
+                    &[&comment_id, &user],
+                ).await?;
+
+                Some(row.map(|_| Empty {}))
+            } else {
+                None
+            })
+        },
     ).await?;
 
     let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
@@ -1030,7 +1125,7 @@ async fn route_unstable_comments_get(
                 None => None,
             };
 
-            let comment = RespCommentInfo {
+            let output = RespCommentInfo {
                 base: RespPostCommentInfo {
                     author,
                     content_text: row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
@@ -1039,13 +1134,16 @@ async fn route_unstable_comments_get(
                     deleted: row.get(10),
                     id: comment_id,
                     replies: None, // TODO fetch replies
+                    your_vote,
                 },
                 post,
             };
 
+            let output = serde_json::to_vec(&output)?;
+
             Ok(hyper::Response::builder()
                 .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(serde_json::to_vec(&comment)?.into())?)
+                .body(output.into())?)
         }
     }
 }

@@ -1,6 +1,15 @@
-use crate::routes::api::{RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost};
-use serde_derive::Deserialize;
+use crate::routes::api::{
+    Empty, MaybeIncludeYour, RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost,
+};
+use serde_derive::{Deserialize, Serialize};
 use std::sync::Arc;
+
+#[derive(Serialize)]
+struct RespCommunityInfo<'a> {
+    #[serde(flatten)]
+    base: &'a RespMinimalCommunityInfo<'a>,
+    your_follow: Option<Option<Empty>>,
+}
 
 async fn route_unstable_communities_list(
     _: (),
@@ -86,37 +95,55 @@ async fn route_unstable_communities_create(
 async fn route_unstable_communities_get(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
+    req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community_id,) = params;
+
+    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
     let db = ctx.db_pool.get().await?;
 
-    let row = db
-        .query_opt(
-            "SELECT name, local, ap_id FROM community WHERE id=$1",
-            &[&community_id],
-        )
-        .await?
+    let row = {
+        (if query.include_your {
+            let user = crate::require_login(&req, &db).await?;
+            db.query_opt(
+                "SELECT name, local, ap_id, EXISTS(SELECT 1 FROM community_follow WHERE community=community.id AND follower=$2) FROM community WHERE id=$1",
+                &[&community_id, &user],
+            ).await?
+        } else {
+            db.query_opt(
+                "SELECT name, local, ap_id FROM community WHERE id=$1",
+                &[&community_id],
+            ).await?
+        })
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
                 "No such community",
             ))
-        })?;
+        })?
+    };
 
     let community_local = row.get(1);
 
-    let info = RespMinimalCommunityInfo {
-        id: community_id,
-        name: row.get(0),
-        local: community_local,
-        host: if community_local {
-            crate::get_url_host(&ctx.host_url_apub).unwrap().into()
+    let info = RespCommunityInfo {
+        base: &RespMinimalCommunityInfo {
+            id: community_id,
+            name: row.get(0),
+            local: community_local,
+            host: if community_local {
+                crate::get_url_host(&ctx.host_url_apub).unwrap().into()
+            } else {
+                match row.get::<_, Option<&str>>(2).and_then(crate::get_url_host) {
+                    Some(host) => host.into(),
+                    None => "[unknown]".into(),
+                }
+            },
+        },
+        your_follow: if query.include_your {
+            Some(if row.get(3) { Some(Empty {}) } else { None })
         } else {
-            match row.get::<_, Option<&str>>(2).and_then(crate::get_url_host) {
-                Some(host) => host.into(),
-                None => "[unknown]".into(),
-            }
+            None
         },
     };
 
