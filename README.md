@@ -11,3 +11,4 @@ Might disappear or get wiped occasionally.
 
  - https://a.tide.tk
  - https://b.tide.tk
+ - https://c.tide.tk
