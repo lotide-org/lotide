@@ -30,8 +30,24 @@ pub fn get_local_post_apub_id(post: i64, host_url_apub: &str) -> String {
     format!("{}/posts/{}", host_url_apub, post)
 }
 
+pub fn get_local_post_like_apub_id(post_local_id: i64, user: i64, host_url_apub: &str) -> String {
+    format!(
+        "{}/likes/{}",
+        crate::apub_util::get_local_post_apub_id(post_local_id, &host_url_apub),
+        user,
+    )
+}
+
 pub fn get_local_comment_apub_id(comment: i64, host_url_apub: &str) -> String {
     format!("{}/comments/{}", host_url_apub, comment)
+}
+
+pub fn get_local_comment_like_apub_id(comment_local_id: i64, user: i64, host_url_apub: &str) -> String {
+    format!(
+        "{}/likes/{}",
+        crate::apub_util::get_local_comment_apub_id(comment_local_id, &host_url_apub),
+        user
+    )
 }
 
 pub fn get_local_person_apub_id(person: i64, host_url_apub: &str) -> String {
@@ -869,13 +885,32 @@ pub fn local_post_like_to_ap(
             user,
             &host_url_apub,
         ))?;
-    like.object_props.set_id(format!(
-        "{}/likes/{}",
-        crate::apub_util::get_local_post_apub_id(post_local_id, &host_url_apub),
-        user
+    like.object_props.set_id(get_local_post_like_apub_id(
+        post_local_id,
+        user,
+        &host_url_apub,
     ))?;
 
     Ok(like)
+}
+
+pub fn local_post_like_undo_to_ap(
+    undo_id: uuid::Uuid,
+    post_local_id: i64,
+    user: i64,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Undo, crate::Error> {
+    let like_ap_id = get_local_post_like_apub_id(post_local_id, user, &host_url_apub);
+
+    let mut undo = activitystreams::activity::Undo::new();
+    undo.undo_props
+        .set_object_xsd_any_uri(like_ap_id.as_ref())?;
+    undo.undo_props
+        .set_actor_xsd_any_uri(get_local_person_apub_id(user, &host_url_apub))?;
+    undo.object_props
+        .set_id(format!("{}/post_like_undos/{}", host_url_apub, undo_id,))?;
+
+    Ok(undo)
 }
 
 pub fn local_comment_like_to_ap(
@@ -891,13 +926,28 @@ pub fn local_comment_like_to_ap(
             user,
             &host_url_apub,
         ))?;
-    like.object_props.set_id(format!(
-        "{}/likes/{}",
-        crate::apub_util::get_local_comment_apub_id(comment_local_id, &host_url_apub),
-        user
-    ))?;
+    like.object_props.set_id(get_local_comment_like_apub_id(comment_local_id, user, &host_url_apub))?;
 
     Ok(like)
+}
+
+pub fn local_comment_like_undo_to_ap(
+    undo_id: uuid::Uuid,
+    comment_local_id: i64,
+    user: i64,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Undo, crate::Error> {
+    let like_ap_id = get_local_comment_like_apub_id(comment_local_id, user, &host_url_apub);
+
+    let mut undo = activitystreams::activity::Undo::new();
+    undo.undo_props
+        .set_object_xsd_any_uri(like_ap_id.as_ref())?;
+    undo.undo_props
+        .set_actor_xsd_any_uri(get_local_person_apub_id(user, &host_url_apub))?;
+    undo.object_props
+        .set_id(format!("{}/comment_like_undos/{}", host_url_apub, undo_id,))?;
+
+    Ok(undo)
 }
 
 pub fn spawn_enqueue_send_comment_to_community(
