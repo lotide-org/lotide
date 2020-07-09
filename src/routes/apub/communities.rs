@@ -438,6 +438,12 @@ async fn handler_communities_inbox_post(
 
             crate::apub_util::handle_like(activity, ctx).await?;
         }
+        Some("Undo") => {
+            let activity = activity
+                .into_concrete::<activitystreams::activity::Undo>()
+                .unwrap();
+            crate::apub_util::handle_undo(activity, ctx).await?;
+        }
         _ => {}
     }
 

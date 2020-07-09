@@ -42,7 +42,11 @@ pub fn get_local_comment_apub_id(comment: i64, host_url_apub: &str) -> String {
     format!("{}/comments/{}", host_url_apub, comment)
 }
 
-pub fn get_local_comment_like_apub_id(comment_local_id: i64, user: i64, host_url_apub: &str) -> String {
+pub fn get_local_comment_like_apub_id(
+    comment_local_id: i64,
+    user: i64,
+    host_url_apub: &str,
+) -> String {
     format!(
         "{}/likes/{}",
         crate::apub_util::get_local_comment_apub_id(comment_local_id, &host_url_apub),
@@ -926,7 +930,11 @@ pub fn local_comment_like_to_ap(
             user,
             &host_url_apub,
         ))?;
-    like.object_props.set_id(get_local_comment_like_apub_id(comment_local_id, user, &host_url_apub))?;
+    like.object_props.set_id(get_local_comment_like_apub_id(
+        comment_local_id,
+        user,
+        &host_url_apub,
+    ))?;
 
     Ok(like)
 }
@@ -1460,7 +1468,7 @@ pub async fn handle_like(
                 }
                 Some(ThingLocalRef::Comment(comment_local_id)) => {
                     let row_count = db.execute(
-                        "INSERT INTO reply_like (reply, person, local, ap_id) VALUES ($1, $2, FALSE, $3) ON CONFLICT (post, person) DO NOTHING",
+                        "INSERT INTO reply_like (reply, person, local, ap_id) VALUES ($1, $2, FALSE, $3) ON CONFLICT (reply, person) DO NOTHING",
                         &[&comment_local_id, &actor_local_id, &activity_id.as_str()],
                     ).await?;
 
@@ -1515,6 +1523,43 @@ pub async fn handle_delete(
             }
         }
     }
+
+    Ok(())
+}
+
+pub async fn handle_undo(
+    activity: activitystreams::activity::Undo,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    let activity_id = activity
+        .object_props
+        .get_id()
+        .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
+
+    let actor_id =
+        activity
+            .undo_props
+            .get_actor_xsd_any_uri()
+            .ok_or(crate::Error::InternalStrStatic(
+                "Missing actor for activity",
+            ))?;
+
+    let object_id = activity
+        .undo_props
+        .get_object_xsd_any_uri()
+        .ok_or(crate::Error::InternalStrStatic("Missing object for Undo"))?;
+
+    require_containment(activity_id.as_url(), actor_id.as_url())?;
+    require_containment(object_id.as_url(), actor_id.as_url())?;
+
+    let object_id = object_id.as_str();
+
+    let db = ctx.db_pool.get().await?;
+
+    db.execute("DELETE FROM post_like WHERE ap_id=$1", &[&object_id])
+        .await?;
+    db.execute("DELETE FROM reply_like WHERE ap_id=$1", &[&object_id])
+        .await?;
 
     Ok(())
 }
