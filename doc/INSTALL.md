@@ -12,7 +12,9 @@ Set these environment variables:
 
 To build lotide, run `cargo build --release` in the lotide directory. A `lotide` binary will appear in `./target/release`.
 
-hitide can be build the same way, except that it currently requires a nightly version of Rust.
+hitide can be built the same way, except that it currently requires a nightly version of Rust.
+
+To set up the database, run `migrant setup`, then `migrant apply -a`.
 
 ### Recommended proxy setup:
 This is written for Nginx, but it should be possible to adapt it to other proxy servers. Replace `c_backend_1` and `c_hitide_1` with your actual hostnames.

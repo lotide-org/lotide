@@ -6,6 +6,9 @@ To track progress and report issues, visit the [issue tracker](https://todo.sr.h
 
 See [hitide](https://git.sr.ht/~vpzom/hitide) for the frontend code.
 
+## Installation
+See details in [INSTALL.md](https://git.sr.ht/~vpzom/lotide/tree/master/doc/INSTALL.md)
+
 ## Test/Demo Instances
 Might disappear or get wiped occasionally.
 
