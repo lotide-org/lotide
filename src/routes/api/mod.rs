@@ -67,6 +67,7 @@ struct RespPostCommentInfo<'a> {
     content_html: Option<Cow<'a, str>>,
     deleted: bool,
     replies: Option<Vec<RespPostCommentInfo<'a>>>,
+    has_replies: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     your_vote: Option<Option<Empty>>,
 }
@@ -539,16 +540,37 @@ async fn apply_comments_replies<'a, T>(
     db: &tokio_postgres::Client,
     local_hostname: &'a str,
 ) -> Result<(), crate::Error> {
+    let ids = comments
+        .iter()
+        .map(|(_, comment)| comment.id)
+        .collect::<Vec<_>>();
     if depth > 0 {
-        let ids = comments
-            .iter()
-            .map(|(_, comment)| comment.id)
-            .collect::<Vec<_>>();
         let mut replies =
             get_comments_replies_box(&ids, include_your_for, depth - 1, db, local_hostname).await?;
 
         for (_, comment) in comments {
-            comment.replies = Some(replies.remove(&comment.id).unwrap_or_else(Vec::new));
+            let current = replies.remove(&comment.id).unwrap_or_else(Vec::new);
+            comment.has_replies = !current.is_empty();
+            comment.replies = Some(current);
+        }
+    } else {
+        use futures::stream::TryStreamExt;
+
+        let stream = crate::query_stream(
+            &db,
+            "SELECT DISTINCT parent FROM reply WHERE parent = ANY($1)",
+            &[&ids],
+        )
+        .await?;
+
+        let with_replies: HashSet<i64> = stream
+            .map_err(crate::Error::from)
+            .map_ok(|row| row.get::<_, i64>(0))
+            .try_collect()
+            .await?;
+
+        for (_, comment) in comments {
+            comment.has_replies = with_replies.contains(&comment.id);
         }
     }
 
@@ -639,6 +661,7 @@ async fn get_comments_replies<'a>(
                     created: created.to_rfc3339().into(),
                     deleted: row.get(9),
                     replies: None,
+                    has_replies: false,
                     your_vote: match include_your_for {
                         None => None,
                         Some(_) => Some(if row.get(10) { Some(Empty {}) } else { None }),
@@ -719,6 +742,7 @@ async fn get_post_comments<'a>(
                     created: created.to_rfc3339().into(),
                     deleted: row.get(8),
                     replies: None,
+                    has_replies: false,
                     your_vote: match include_your_for {
                         None => None,
                         Some(_) => Some(if row.get(9) { Some(Empty {}) } else { None }),
@@ -1259,6 +1283,7 @@ async fn route_unstable_comments_get(
                     created: created.to_rfc3339().into(),
                     deleted: row.get(10),
                     id: comment_id,
+                    has_replies: !replies.is_empty(),
                     replies: Some(replies),
                     your_vote,
                 },
