@@ -67,6 +67,7 @@ struct RespPostCommentInfo<'a> {
     content_html: Option<Cow<'a, str>>,
     deleted: bool,
     replies: Option<Vec<RespPostCommentInfo<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     your_vote: Option<Option<Empty>>,
 }
 
@@ -110,6 +111,11 @@ pub fn route_api() -> crate::RouteNode<()> {
                                     .with_handler_async("POST", route_unstable_posts_like),
                             )
                             .with_child(
+                                "unlike",
+                                crate::RouteNode::new()
+                                    .with_handler_async("POST", route_unstable_posts_unlike),
+                            )
+                            .with_child(
                                 "replies",
                                 crate::RouteNode::new().with_handler_async(
                                     "POST",
@@ -128,6 +134,11 @@ pub fn route_api() -> crate::RouteNode<()> {
                             "like",
                             crate::RouteNode::new()
                                 .with_handler_async("POST", route_unstable_comments_like),
+                        )
+                        .with_child(
+                            "unlike",
+                            crate::RouteNode::new()
+                                .with_handler_async("POST", route_unstable_comments_unlike),
                         )
                         .with_child(
                             "replies",
@@ -747,6 +758,7 @@ async fn route_unstable_posts_get(
         post: &'a RespPostListPost<'a>,
         score: i64,
         comments: Vec<RespPostCommentInfo<'a>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         your_vote: Option<Option<Empty>>,
     }
 
@@ -1005,6 +1017,108 @@ async fn route_unstable_posts_like(
     Ok(crate::empty_response())
 }
 
+async fn route_unstable_posts_unlike(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+
+    let mut db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let new_undo = {
+        let trans = db.transaction().await?;
+
+        let row_count = trans
+            .execute(
+                "DELETE FROM post_like WHERE post=$1 AND person=$2",
+                &[&post_id, &user],
+            )
+            .await?;
+
+        let new_undo = if row_count > 0 {
+            let id = uuid::Uuid::new_v4();
+            trans
+                .execute(
+                    "INSERT INTO local_post_like_undo (id, post, person) VALUES ($1, $2, $3)",
+                    &[&id, &post_id, &user],
+                )
+                .await?;
+
+            Some(id)
+        } else {
+            None
+        };
+
+        trans.commit().await?;
+
+        new_undo
+    };
+
+    if let Some(new_undo) = new_undo {
+        crate::spawn_task(async move {
+            let row = db.query_opt(
+                "SELECT post.local, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(post_author.ap_shared_inbox, post_author.ap_inbox) FROM post LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) WHERE post.id = $1",
+                &[&post_id],
+            ).await?;
+            if let Some(row) = row {
+                let post_local: bool = row.get(0);
+
+                let mut inboxes = HashSet::new();
+
+                if !post_local {
+                    let author_inbox: Option<&str> = row.get(5);
+                    if let Some(inbox) = author_inbox {
+                        inboxes.insert(inbox);
+                    }
+                }
+
+                let community_local: Option<bool> = row.get(2);
+
+                if community_local == Some(false) {
+                    if let Some(inbox) = row.get(4) {
+                        inboxes.insert(inbox);
+                    }
+                }
+
+                let undo = crate::apub_util::local_post_like_undo_to_ap(
+                    new_undo,
+                    post_id,
+                    user,
+                    &ctx.host_url_apub,
+                )?;
+
+                let body = serde_json::to_string(&undo)?;
+
+                for inbox in inboxes {
+                    ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                        inbox: inbox.into(),
+                        sign_as: Some(crate::ActorLocalRef::Person(user)),
+                        object: (&body).into(),
+                    })
+                    .await?;
+                }
+
+                if community_local == Some(true) {
+                    let community_local_id = row.get(1);
+                    crate::apub_util::enqueue_forward_to_community_followers(
+                        community_local_id,
+                        body,
+                        ctx,
+                    )
+                    .await?;
+                }
+            }
+
+            Ok(())
+        });
+    }
+
+    Ok(crate::empty_response())
+}
+
 async fn route_unstable_posts_replies_create(
     params: (i64,),
     ctx: Arc<crate::RouteContext>,
@@ -1244,7 +1358,7 @@ async fn route_unstable_comments_like(
     if row_count > 0 {
         crate::spawn_task(async move {
             let row = db.query_opt(
-                "SELECT reply.local, reply.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(comment_author.ap_shared_inbox, comment_author.ap_inbox) FROM reply LEFT OUTER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS comment_author ON (comment_author.id = post.author) WHERE reply.id = $1",
+                "SELECT reply.local, reply.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(comment_author.ap_shared_inbox, comment_author.ap_inbox) FROM reply LEFT OUTER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS comment_author ON (comment_author.id = reply.author) WHERE reply.id = $1",
                 &[&comment_id],
             ).await?;
             if let Some(row) = row {
@@ -1283,6 +1397,108 @@ async fn route_unstable_comments_like(
                 )?;
 
                 let body = serde_json::to_string(&like)?;
+
+                for inbox in inboxes {
+                    ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                        inbox: inbox.into(),
+                        sign_as: Some(crate::ActorLocalRef::Person(user)),
+                        object: (&body).into(),
+                    })
+                    .await?;
+                }
+
+                if community_local == Some(true) {
+                    let community_local_id = row.get(2);
+                    crate::apub_util::enqueue_forward_to_community_followers(
+                        community_local_id,
+                        body,
+                        ctx,
+                    )
+                    .await?;
+                }
+            }
+
+            Ok(())
+        });
+    }
+
+    Ok(crate::empty_response())
+}
+
+async fn route_unstable_comments_unlike(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (comment_id,) = params;
+
+    let mut db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let new_undo = {
+        let trans = db.transaction().await?;
+
+        let row_count = trans
+            .execute(
+                "DELETE FROM reply_like WHERE reply=$1 AND person=$2",
+                &[&comment_id, &user],
+            )
+            .await?;
+
+        let new_undo = if row_count > 0 {
+            let id = uuid::Uuid::new_v4();
+            trans
+                .execute(
+                    "INSERT INTO local_reply_like_undo (id, reply, person) VALUES ($1, $2, $3)",
+                    &[&id, &comment_id, &user],
+                )
+                .await?;
+
+            Some(id)
+        } else {
+            None
+        };
+
+        trans.commit().await?;
+
+        new_undo
+    };
+
+    if let Some(new_undo) = new_undo {
+        crate::spawn_task(async move {
+            let row = db.query_opt(
+                "SELECT reply.local, reply.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(comment_author.ap_shared_inbox, comment_author.ap_inbox) FROM reply LEFT OUTER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS comment_author ON (comment_author.id = reply.author) WHERE reply.id = $1",
+                &[&comment_id],
+            ).await?;
+            if let Some(row) = row {
+                let comment_local: bool = row.get(0);
+
+                let mut inboxes = HashSet::new();
+
+                if !comment_local {
+                    let author_inbox: Option<&str> = row.get(6);
+                    if let Some(inbox) = author_inbox {
+                        inboxes.insert(inbox);
+                    }
+                }
+
+                let community_local: Option<bool> = row.get(3);
+
+                if community_local == Some(false) {
+                    if let Some(inbox) = row.get(5) {
+                        inboxes.insert(inbox);
+                    }
+                }
+
+                let undo = crate::apub_util::local_comment_like_undo_to_ap(
+                    new_undo,
+                    comment_id,
+                    user,
+                    &ctx.host_url_apub,
+                )?;
+
+                let body = serde_json::to_string(&undo)?;
 
                 for inbox in inboxes {
                     ctx.enqueue_task(&crate::tasks::DeliverToInbox {

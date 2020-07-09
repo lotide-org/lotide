@@ -42,6 +42,12 @@ pub fn route_apub() -> crate::RouteNode<()> {
                     ),
             ),
         )
+        .with_child(
+            "comment_like_undos",
+            crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
+                crate::RouteNode::new().with_handler_async("GET", handler_comment_like_undos_get),
+            ),
+        )
         .with_child("communities", communities::route_communities())
         .with_child("inbox", route_inbox())
         .with_child(
@@ -64,6 +70,12 @@ pub fn route_apub() -> crate::RouteNode<()> {
                                 .with_handler_async("GET", handler_posts_likes_get),
                         ),
                     ),
+            ),
+        )
+        .with_child(
+            "post_like_undos",
+            crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
+                crate::RouteNode::new().with_handler_async("GET", handler_post_like_undos_get),
             ),
         )
 }
@@ -265,6 +277,12 @@ async fn inbox_common(
                 .into_concrete::<activitystreams::activity::Like>()
                 .unwrap();
             crate::apub_util::handle_like(activity, ctx).await?;
+        }
+        Some("Undo") => {
+            let activity = activity
+                .into_concrete::<activitystreams::activity::Undo>()
+                .unwrap();
+            crate::apub_util::handle_undo(activity, ctx).await?;
         }
         _ => {}
     }
@@ -671,6 +689,45 @@ async fn handler_comments_likes_get(
     }
 }
 
+async fn handler_comment_like_undos_get(
+    params: (uuid::Uuid,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (undo_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let undo_row = db
+        .query_opt(
+            "SELECT reply, person FROM local_reply_like_undo WHERE id=$1",
+            &[&undo_id],
+        )
+        .await?;
+
+    if let Some(undo_row) = undo_row {
+        let comment_id = undo_row.get(0);
+        let user_id = undo_row.get(1);
+
+        let undo = crate::apub_util::local_comment_like_undo_to_ap(
+            undo_id,
+            comment_id,
+            user_id,
+            &ctx.host_url_apub,
+        )?;
+        let body = serde_json::to_vec(&undo)?.into();
+
+        Ok(hyper::Response::builder()
+            .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+            .body(body)?)
+    } else {
+        Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such unlike",
+        ))
+    }
+}
+
 // sharedInbox
 async fn handler_inbox_post(
     _: (),
@@ -940,6 +997,45 @@ async fn handler_posts_likes_get(
         Ok(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
             "No such like",
+        ))
+    }
+}
+
+async fn handler_post_like_undos_get(
+    params: (uuid::Uuid,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (undo_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let undo_row = db
+        .query_opt(
+            "SELECT post, person FROM local_post_like_undo WHERE id=$1",
+            &[&undo_id],
+        )
+        .await?;
+
+    if let Some(undo_row) = undo_row {
+        let post_id = undo_row.get(0);
+        let user_id = undo_row.get(1);
+
+        let undo = crate::apub_util::local_post_like_undo_to_ap(
+            undo_id,
+            post_id,
+            user_id,
+            &ctx.host_url_apub,
+        )?;
+        let body = serde_json::to_vec(&undo)?.into();
+
+        Ok(hyper::Response::builder()
+            .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+            .body(body)?)
+    } else {
+        Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such unlike",
         ))
     }
 }
