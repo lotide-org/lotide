@@ -164,10 +164,52 @@ async fn route_unstable_communities_follow(
 
     let user = crate::require_login(&req, &db).await?;
 
-    let row_count = db.execute("INSERT INTO community_follow (community, follower) VALUES ($1, $2) ON CONFLICT DO NOTHING", &[&community, &user]).await?;
+    let row_count = db.execute("INSERT INTO community_follow (community, follower, local) VALUES ($1, $2, TRUE) ON CONFLICT DO NOTHING", &[&community, &user]).await?;
 
     if row_count > 0 {
         crate::apub_util::spawn_enqueue_send_community_follow(community, user, ctx);
+    }
+
+    Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+}
+
+async fn route_unstable_communities_unfollow(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community,) = params;
+    let mut db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let new_undo = {
+        let trans = db.transaction().await?;
+
+        let row_count = trans
+            .execute(
+                "DELETE FROM community_follow WHERE community=$1 AND follower=$2",
+                &[&community, &user],
+            )
+            .await?;
+
+        if row_count > 0 {
+            let id = uuid::Uuid::new_v4();
+            trans.execute(
+                "INSERT INTO local_community_follow_undo (id, community, follower) VALUES ($1, $2, $3)",
+                &[&id, &community, &user],
+            ).await?;
+
+            trans.commit().await?;
+
+            Some(id)
+        } else {
+            None
+        }
+    };
+
+    if let Some(new_undo) = new_undo {
+        crate::apub_util::spawn_enqueue_send_community_follow_undo(new_undo, community, user, ctx);
     }
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
@@ -293,6 +335,11 @@ pub fn route_communities() -> crate::RouteNode<()> {
                     "follow",
                     crate::RouteNode::new()
                         .with_handler_async("POST", route_unstable_communities_follow),
+                )
+                .with_child(
+                    "unfollow",
+                    crate::RouteNode::new()
+                        .with_handler_async("POST", route_unstable_communities_unfollow),
                 )
                 .with_child(
                     "posts",

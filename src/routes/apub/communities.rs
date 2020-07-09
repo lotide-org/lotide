@@ -406,7 +406,7 @@ async fn handler_communities_inbox_post(
                         if let Some(row) = row {
                             let local: bool = row.get(0);
                             if local {
-                                db.execute("INSERT INTO community_follow (community, follower) VALUES ($1, $2) ON CONFLICT (community, follower) DO NOTHING", &[&community_id, &follower_local_id]).await?;
+                                db.execute("INSERT INTO community_follow (community, follower, local, ap_id) VALUES ($1, $2, FALSE, $3) ON CONFLICT (community, follower) DO NOTHING", &[&community_id, &follower_local_id, &activity_ap_id.as_str()]).await?;
 
                                 crate::apub_util::spawn_enqueue_send_community_follow_accept(
                                     community_id,

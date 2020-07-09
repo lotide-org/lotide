@@ -62,6 +62,17 @@ pub fn get_local_community_apub_id(community: i64, host_url_apub: &str) -> Strin
     format!("{}/communities/{}", host_url_apub, community)
 }
 
+pub fn get_local_community_follow_apub_id(
+    community: i64,
+    follower: i64,
+    host_url_apub: &str,
+) -> String {
+    format!(
+        "{}/communities/{}/followers/{}",
+        host_url_apub, community, follower
+    )
+}
+
 pub fn get_local_person_pubkey_apub_id(person: i64, host_url_apub: &str) -> String {
     format!(
         "{}#main-key",
@@ -441,10 +452,13 @@ pub fn spawn_enqueue_send_community_follow(
         };
 
         let mut follow = activitystreams::activity::Follow::new();
-        follow.object_props.set_id(format!(
-            "{}/communities/{}/followers/{}",
-            ctx.host_url_apub, community, local_follower
-        ))?;
+        follow
+            .object_props
+            .set_id(get_local_community_follow_apub_id(
+                community,
+                local_follower,
+                &ctx.host_url_apub,
+            ))?;
 
         let person_ap_id = get_local_person_apub_id(local_follower, &ctx.host_url_apub);
 
@@ -461,6 +475,66 @@ pub fn spawn_enqueue_send_community_follow(
             inbox: (&community_inbox).into(),
             sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
             object: serde_json::to_string(&follow)?.into(),
+        })
+        .await?;
+
+        Ok(())
+    });
+}
+
+pub fn spawn_enqueue_send_community_follow_undo(
+    undo_id: uuid::Uuid,
+    community_local_id: i64,
+    local_follower: i64,
+    ctx: Arc<crate::RouteContext>,
+) {
+    crate::spawn_task(async move {
+        let (_community_ap_id, community_inbox): (String, String) = {
+            let db = ctx.db_pool.get().await?;
+
+            let row = db
+                .query_one(
+                    "SELECT local, ap_id, ap_inbox FROM community WHERE id=$1",
+                    &[&community_local_id],
+                )
+                .await?;
+            let local = row.get(0);
+            if local {
+                // no need to send follow state to ourself
+                return Ok(());
+            } else {
+                let ap_id = row.get(1);
+                let ap_inbox = row.get(2);
+
+                (if let Some(ap_id) = ap_id {
+                    if let Some(ap_inbox) = ap_inbox {
+                        Some((ap_id, ap_inbox))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                })
+                .ok_or_else(|| {
+                    crate::Error::InternalStr(format!(
+                        "Missing apub info for community {}",
+                        community_local_id,
+                    ))
+                })?
+            }
+        };
+
+        let undo = local_community_follow_undo_to_ap(
+            undo_id,
+            community_local_id,
+            local_follower,
+            &ctx.host_url_apub,
+        )?;
+
+        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+            inbox: (&community_inbox).into(),
+            sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
+            object: serde_json::to_string(&undo)?.into(),
         })
         .await?;
 
@@ -560,6 +634,29 @@ pub fn spawn_announce_community_comment(
         let announce = announce?;
         enqueue_send_to_community_followers(community, announce, ctx).await
     });
+}
+
+pub fn local_community_follow_undo_to_ap(
+    undo_id: uuid::Uuid,
+    community_local_id: i64,
+    local_follower: i64,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Undo, crate::Error> {
+    let mut undo = activitystreams::activity::Undo::new();
+    undo.undo_props
+        .set_object_xsd_any_uri(get_local_community_follow_apub_id(
+            community_local_id,
+            local_follower,
+            &host_url_apub,
+        ))?;
+    undo.undo_props
+        .set_actor_xsd_any_uri(get_local_person_apub_id(local_follower, &host_url_apub))?;
+    undo.object_props.set_id(format!(
+        "{}/community_follow_undos/{}",
+        host_url_apub, undo_id
+    ))?;
+
+    Ok(undo)
 }
 
 pub fn community_follow_accept_to_ap(
@@ -1559,6 +1656,8 @@ pub async fn handle_undo(
     db.execute("DELETE FROM post_like WHERE ap_id=$1", &[&object_id])
         .await?;
     db.execute("DELETE FROM reply_like WHERE ap_id=$1", &[&object_id])
+        .await?;
+    db.execute("DELETE FROM community_follow WHERE ap_id=$1", &[&object_id])
         .await?;
 
     Ok(())

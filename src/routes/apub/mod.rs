@@ -49,6 +49,13 @@ pub fn route_apub() -> crate::RouteNode<()> {
             ),
         )
         .with_child("communities", communities::route_communities())
+        .with_child(
+            "community_follow_undos",
+            crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
+                crate::RouteNode::new()
+                    .with_handler_async("GET", handler_community_follow_undos_get),
+            ),
+        )
         .with_child("inbox", route_inbox())
         .with_child(
             "posts",
@@ -709,6 +716,45 @@ async fn handler_comment_like_undos_get(
         let undo = crate::apub_util::local_comment_like_undo_to_ap(
             undo_id,
             comment_id,
+            user_id,
+            &ctx.host_url_apub,
+        )?;
+        let body = serde_json::to_vec(&undo)?.into();
+
+        Ok(hyper::Response::builder()
+            .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+            .body(body)?)
+    } else {
+        Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such unlike",
+        ))
+    }
+}
+
+async fn handler_community_follow_undos_get(
+    params: (uuid::Uuid,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (undo_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let undo_row = db
+        .query_opt(
+            "SELECT community, follower FROM local_community_follow_undo WHERE id=$1",
+            &[&undo_id],
+        )
+        .await?;
+
+    if let Some(undo_row) = undo_row {
+        let community_id = undo_row.get(0);
+        let user_id = undo_row.get(1);
+
+        let undo = crate::apub_util::local_community_follow_undo_to_ap(
+            undo_id,
+            community_id,
             user_id,
             &ctx.host_url_apub,
         )?;
