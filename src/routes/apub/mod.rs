@@ -193,6 +193,56 @@ async fn inbox_common(
     .await?;
 
     match activity.kind() {
+        Some("Accept") => {
+            let activity = activity
+                .into_concrete::<activitystreams::activity::Accept>()
+                .unwrap();
+
+            let activity_id = activity
+                .object_props
+                .get_id()
+                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
+
+            let actor_ap_id = activity
+                .accept_props
+                .get_actor_xsd_any_uri()
+                .ok_or(crate::Error::InternalStrStatic("Missing actor for Accept"))?;
+
+            crate::apub_util::require_containment(activity_id.as_url(), actor_ap_id.as_url())?;
+
+            let actor_ap_id = actor_ap_id.as_str();
+
+            let community_local_id: Option<i64> = {
+                db.query_opt("SELECT id FROM community WHERE ap_id=$1", &[&actor_ap_id])
+                    .await?
+                    .map(|row| row.get(0))
+            };
+
+            if let Some(community_local_id) = community_local_id {
+                let object_id = activity
+                    .accept_props
+                    .get_object_xsd_any_uri()
+                    .ok_or(crate::Error::InternalStrStatic("Missing object for Accept"))?
+                    .as_str();
+
+                if object_id.starts_with(&ctx.host_url_apub) {
+                    let remaining = &object_id[ctx.host_url_apub.len()..];
+                    if remaining.starts_with("/communities/") {
+                        let remaining = &remaining[13..];
+                        let next_expected = format!("{}/followers/", community_local_id);
+                        if remaining.starts_with(&next_expected) {
+                            let remaining = &remaining[next_expected.len()..];
+                            let follower_local_id: i64 = remaining.parse()?;
+
+                            db.execute(
+                                "UPDATE community_follow SET accepted=TRUE WHERE community=$1 AND follower=$2",
+                                &[&community_local_id, &follower_local_id],
+                            ).await?;
+                        }
+                    }
+                }
+            }
+        }
         Some("Announce") => {
             let activity = activity
                 .into_concrete::<activitystreams::activity::Announce>()

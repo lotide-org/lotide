@@ -1,5 +1,5 @@
 use crate::routes::api::{
-    Empty, MaybeIncludeYour, RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost,
+    MaybeIncludeYour, RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost,
 };
 use serde_derive::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -8,7 +8,12 @@ use std::sync::Arc;
 struct RespCommunityInfo<'a> {
     #[serde(flatten)]
     base: &'a RespMinimalCommunityInfo<'a>,
-    your_follow: Option<Option<Empty>>,
+    your_follow: Option<Option<RespYourFollowInfo>>,
+}
+
+#[derive(Serialize)]
+struct RespYourFollowInfo {
+    accepted: bool,
 }
 
 async fn route_unstable_communities_list(
@@ -107,7 +112,7 @@ async fn route_unstable_communities_get(
         (if query.include_your {
             let user = crate::require_login(&req, &db).await?;
             db.query_opt(
-                "SELECT name, local, ap_id, EXISTS(SELECT 1 FROM community_follow WHERE community=community.id AND follower=$2) FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2) FROM community WHERE id=$1",
                 &[&community_id, &user],
             ).await?
         } else {
@@ -141,7 +146,10 @@ async fn route_unstable_communities_get(
             },
         },
         your_follow: if query.include_your {
-            Some(if row.get(3) { Some(Empty {}) } else { None })
+            Some(match row.get(3) {
+                Some(accepted) => Some(RespYourFollowInfo { accepted }),
+                None => None,
+            })
         } else {
             None
         },
@@ -160,17 +168,72 @@ async fn route_unstable_communities_follow(
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community,) = params;
+
     let db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
 
-    let row_count = db.execute("INSERT INTO community_follow (community, follower, local) VALUES ($1, $2, TRUE) ON CONFLICT DO NOTHING", &[&community, &user]).await?;
-
-    if row_count > 0 {
-        crate::apub_util::spawn_enqueue_send_community_follow(community, user, ctx);
+    #[derive(Deserialize)]
+    struct CommunitiesFollowBody {
+        #[serde(default)]
+        try_wait_for_accept: bool,
     }
 
-    Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: CommunitiesFollowBody = serde_json::from_slice(&body)?;
+
+    let row = db
+        .query_opt("SELECT local FROM community WHERE id=$1", &[&community])
+        .await?
+        .ok_or_else(|| {
+            crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::NOT_FOUND,
+                "No such community",
+            ))
+        })?;
+
+    let community_local: bool = row.get(0);
+
+    let row_count = db.execute("INSERT INTO community_follow (community, follower, local, accepted) VALUES ($1, $2, TRUE, $3) ON CONFLICT DO NOTHING", &[&community, &user, &community_local]).await?;
+
+    let output =
+        if community_local {
+            RespYourFollowInfo { accepted: true }
+        } else {
+            if row_count > 0 {
+                crate::apub_util::spawn_enqueue_send_community_follow(community, user, ctx);
+
+                if body.try_wait_for_accept {
+                    tokio::time::delay_for(std::time::Duration::from_millis(500)).await;
+
+                    let row = db.query_one(
+                    "SELECT accepted FROM community_follow WHERE community=$1 AND follower=$2",
+                    &[&community, &user],
+                ).await?;
+
+                    RespYourFollowInfo {
+                        accepted: row.get(0),
+                    }
+                } else {
+                    RespYourFollowInfo { accepted: false }
+                }
+            } else {
+                let row = db
+                    .query_one(
+                        "SELECT accepted FROM community_follow WHERE community=$1 AND follower=$2",
+                        &[&community, &user],
+                    )
+                    .await?;
+
+                RespYourFollowInfo {
+                    accepted: row.get(0),
+                }
+            }
+        };
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&output)?.into())?)
 }
 
 async fn route_unstable_communities_unfollow(
