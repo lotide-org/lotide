@@ -649,10 +649,7 @@ async fn handler_comments_likes_get(
 
         if local {
             let row = db
-                .query_one(
-                    "SELECT local, ap_id FROM comment WHERE id=$1",
-                    &[&comment_id],
-                )
+                .query_one("SELECT local, ap_id FROM reply WHERE id=$1", &[&comment_id])
                 .await?;
             let comment_local = row.get(0);
             let comment_ap_id = if comment_local {
