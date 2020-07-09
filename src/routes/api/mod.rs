@@ -1184,6 +1184,13 @@ async fn route_unstable_comments_get(
 
     let db = ctx.db_pool.get().await?;
 
+    let include_your_for = if query.include_your {
+        let user = crate::require_login(&req, &db).await?;
+        Some(user)
+    } else {
+        None
+    };
+
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
             "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
@@ -1191,10 +1198,9 @@ async fn route_unstable_comments_get(
         )
         .map_err(crate::Error::from),
         async {
-            Ok(if query.include_your {
-                let user = crate::require_login(&req, &db).await?;
+            Ok(if let Some(user) = include_your_for {
                 let row = db.query_opt(
-                    "SELECT 1 FROM comment_like WHERE comment=$1 AND person=$2",
+                    "SELECT 1 FROM reply_like WHERE reply=$1 AND person=$2",
                     &[&comment_id, &user],
                 ).await?;
 
@@ -1239,6 +1245,12 @@ async fn route_unstable_comments_get(
                 None => None,
             };
 
+            let replies =
+                get_comments_replies(&[comment_id], include_your_for, 3, &db, &local_hostname)
+                    .await?
+                    .remove(&comment_id)
+                    .unwrap_or_else(|| Vec::new());
+
             let output = RespCommentInfo {
                 base: RespPostCommentInfo {
                     author,
@@ -1247,7 +1259,7 @@ async fn route_unstable_comments_get(
                     created: created.to_rfc3339().into(),
                     deleted: row.get(10),
                     id: comment_id,
-                    replies: None, // TODO fetch replies
+                    replies: Some(replies),
                     your_vote,
                 },
                 post,
