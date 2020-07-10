@@ -135,6 +135,10 @@ async fn handler_users_get(
                 crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
 
             let mut info = activitystreams::actor::Person::new();
+            info.object_props.set_many_context_xsd_any_uris(vec![
+                activitystreams::context(),
+                activitystreams::security(),
+            ])?;
             info.as_mut()
                 .set_id(user_ap_id.as_ref())?
                 .set_name_xsd_string(username.as_ref())?;
@@ -426,6 +430,7 @@ async fn handler_comments_get(
             if row.get(19) {
                 let mut body = activitystreams::object::Tombstone::new();
                 body.tombstone_props.set_former_type_xsd_string("Note")?;
+                body.object_props.set_context_xsd_any_uri(activitystreams::context())?;
                 body.object_props.set_id(crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub))?;
 
                 let body = serde_json::to_vec(&body)?.into();
@@ -864,6 +869,7 @@ async fn handler_posts_get(
 
                 let mut body = activitystreams::object::Tombstone::new();
                 body.tombstone_props.set_former_type_xsd_string(if had_href == Some(true) { "Page" } else { "Note" })?;
+                body.object_props.set_context_xsd_any_uri(activitystreams::context())?;
                 body.object_props.set_id(crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub))?;
 
                 let body = serde_json::to_vec(&body)?.into();

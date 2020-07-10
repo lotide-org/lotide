@@ -454,6 +454,9 @@ pub fn spawn_enqueue_send_community_follow(
         let mut follow = activitystreams::activity::Follow::new();
         follow
             .object_props
+            .set_context_xsd_any_uri(activitystreams::context())?;
+        follow
+            .object_props
             .set_id(get_local_community_follow_apub_id(
                 community,
                 local_follower,
@@ -552,6 +555,9 @@ pub fn local_community_post_announce_ap(
 
     let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
 
+    announce
+        .object_props
+        .set_context_xsd_any_uri(activitystreams::context())?;
     announce.object_props.set_id(format!(
         "{}/posts/{}/announce",
         community_ap_id, post_local_id,
@@ -581,6 +587,9 @@ pub fn local_community_comment_announce_ap(
 
     let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
 
+    announce
+        .object_props
+        .set_context_xsd_any_uri(activitystreams::context())?;
     announce.object_props.set_id(format!(
         "{}/comments/{}/announce",
         community_ap_id, comment_local_id,
@@ -643,6 +652,8 @@ pub fn local_community_follow_undo_to_ap(
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let mut undo = activitystreams::activity::Undo::new();
+    undo.object_props
+        .set_context_xsd_any_uri(activitystreams::context())?;
     undo.undo_props
         .set_object_xsd_any_uri(get_local_community_follow_apub_id(
             community_local_id,
@@ -666,6 +677,9 @@ pub fn community_follow_accept_to_ap(
 ) -> Result<activitystreams::activity::Accept, crate::Error> {
     let mut accept = activitystreams::activity::Accept::new();
 
+    accept
+        .object_props
+        .set_context_xsd_any_uri(activitystreams::context())?;
     accept.object_props.set_id(format!(
         "{}/followers/{}/accept",
         community_ap_id, follower_local_id
@@ -748,6 +762,7 @@ pub fn post_to_ap(
 
             post_ap
                 .as_mut()
+                .set_context_xsd_any_uri(activitystreams::context())?
                 .set_id(get_local_post_apub_id(post.id, &host_url_apub))?
                 .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
                     post.author.unwrap(),
@@ -773,6 +788,7 @@ pub fn post_to_ap(
 
             post_ap
                 .as_mut()
+                .set_context_xsd_any_uri(activitystreams::context())?
                 .set_id(get_local_post_apub_id(post.id, &host_url_apub))?
                 .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
                     post.author.unwrap(),
@@ -805,10 +821,13 @@ pub fn local_post_to_create_ap(
             post.author.unwrap(),
             &host_url_apub,
         ))?;
-    create.object_props.set_id(format!(
-        "{}/create",
-        get_local_post_apub_id(post.id, host_url_apub)
-    ))?;
+    create
+        .object_props
+        .set_context_xsd_any_uri(activitystreams::context())?
+        .set_id(format!(
+            "{}/create",
+            get_local_post_apub_id(post.id, host_url_apub)
+        ))?;
 
     Ok(create)
 }
@@ -824,6 +843,7 @@ pub fn local_comment_to_ap(
     let mut obj = activitystreams::object::Note::new();
 
     obj.as_mut()
+        .set_context_xsd_any_uri(activitystreams::context())?
         .set_id(get_local_comment_apub_id(comment.id, &host_url_apub))?
         .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
             comment.author.unwrap(),
@@ -914,6 +934,7 @@ pub fn local_post_delete_to_ap(
     let post_ap_id = get_local_post_apub_id(post_id, host_url_apub);
     delete
         .object_props
+        .set_context_xsd_any_uri(activitystreams::context())?
         .set_id(format!("{}/delete", post_ap_id))?;
     delete
         .delete_props
@@ -932,6 +953,7 @@ pub fn local_comment_delete_to_ap(
     let comment_ap_id = get_local_comment_apub_id(comment_id, host_url_apub);
     delete
         .object_props
+        .set_context_xsd_any_uri(activitystreams::context())?
         .set_id(format!("{}/delete", comment_ap_id))?;
     delete
         .delete_props
@@ -961,10 +983,13 @@ pub fn local_comment_to_create_ap(
     let author = comment.author.unwrap();
 
     let mut create = activitystreams::activity::Create::new();
-    create.object_props.set_id(format!(
-        "{}/create",
-        get_local_comment_apub_id(comment.id, host_url_apub)
-    ))?;
+    create
+        .object_props
+        .set_context_xsd_any_uri(activitystreams::context())?
+        .set_id(format!(
+            "{}/create",
+            get_local_comment_apub_id(comment.id, host_url_apub)
+        ))?;
     create.create_props.set_object_base_box(comment_ap)?;
     create
         .create_props
@@ -986,6 +1011,8 @@ pub fn local_post_like_to_ap(
             user,
             &host_url_apub,
         ))?;
+    like.object_props
+        .set_context_xsd_any_uri(activitystreams::context())?;
     like.object_props.set_id(get_local_post_like_apub_id(
         post_local_id,
         user,
@@ -1009,6 +1036,8 @@ pub fn local_post_like_undo_to_ap(
     undo.undo_props
         .set_actor_xsd_any_uri(get_local_person_apub_id(user, &host_url_apub))?;
     undo.object_props
+        .set_context_xsd_any_uri(activitystreams::context())?;
+    undo.object_props
         .set_id(format!("{}/post_like_undos/{}", host_url_apub, undo_id,))?;
 
     Ok(undo)
@@ -1027,6 +1056,8 @@ pub fn local_comment_like_to_ap(
             user,
             &host_url_apub,
         ))?;
+    like.object_props
+        .set_context_xsd_any_uri(activitystreams::context())?;
     like.object_props.set_id(get_local_comment_like_apub_id(
         comment_local_id,
         user,
@@ -1049,6 +1080,8 @@ pub fn local_comment_like_undo_to_ap(
         .set_object_xsd_any_uri(like_ap_id.as_ref())?;
     undo.undo_props
         .set_actor_xsd_any_uri(get_local_person_apub_id(user, &host_url_apub))?;
+    undo.object_props
+        .set_context_xsd_any_uri(activitystreams::context())?;
     undo.object_props
         .set_id(format!("{}/comment_like_undos/{}", host_url_apub, undo_id,))?;
 

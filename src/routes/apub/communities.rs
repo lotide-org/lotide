@@ -93,6 +93,10 @@ async fn handler_communities_get(
 
             let mut info = activitystreams::actor::Group::new();
             info.as_mut()
+                .set_many_context_xsd_any_uris(vec![
+                    activitystreams::context(),
+                    activitystreams::security(),
+                ])?
                 .set_id(community_ap_id.as_ref())?
                 .set_name_xsd_string(name.as_ref())?;
 
@@ -255,6 +259,10 @@ async fn handler_communities_followers_get(
             };
 
             let mut follow = activitystreams::activity::Follow::new();
+
+            follow
+                .object_props
+                .set_context_xsd_any_uri(activitystreams::context())?;
 
             follow.object_props.set_id(format!(
                 "{}/communities/{}/followers/{}",
