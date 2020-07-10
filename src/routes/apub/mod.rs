@@ -1,4 +1,5 @@
 use activitystreams::ext::Extensible;
+use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -85,6 +86,31 @@ pub fn route_apub() -> crate::RouteNode<()> {
                 crate::RouteNode::new().with_handler_async("GET", handler_post_like_undos_get),
             ),
         )
+}
+
+fn get_object_id<'a>(
+    aao_props: &'a activitystreams::activity::properties::ActorAndObjectProperties,
+) -> Result<Option<Cow<'a, activitystreams::primitives::XsdAnyUri>>, crate::Error> {
+    match aao_props.get_object_xsd_any_uri() {
+        Some(uri) => Ok(Some(Cow::Borrowed(uri))),
+        None => match aao_props.get_object_base_box() {
+            Some(base_box) => {
+                #[derive(Deserialize)]
+                struct WithMaybeID {
+                    id: Option<activitystreams::primitives::XsdAnyUri>,
+                }
+
+                impl activitystreams::Base for WithMaybeID {}
+
+                let value: WithMaybeID = base_box.clone().into_concrete()?;
+                match value.id {
+                    Some(id) => Ok(Some(Cow::Owned(id))),
+                    None => Ok(None),
+                }
+            }
+            None => Ok(None),
+        },
+    }
 }
 
 pub fn route_inbox() -> crate::RouteNode<()> {
@@ -223,11 +249,10 @@ async fn inbox_common(
             };
 
             if let Some(community_local_id) = community_local_id {
-                let object_id = activity
-                    .accept_props
-                    .get_object_xsd_any_uri()
-                    .ok_or(crate::Error::InternalStrStatic("Missing object for Accept"))?
-                    .as_str();
+                let object_id = get_object_id(&activity.accept_props)?
+                    .ok_or(crate::Error::InternalStrStatic("Missing object for Accept"))?;
+
+                let object_id = object_id.as_str();
 
                 if object_id.starts_with(&ctx.host_url_apub) {
                     let remaining = &object_id[ctx.host_url_apub.len()..];
