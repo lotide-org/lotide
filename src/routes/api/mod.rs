@@ -499,8 +499,9 @@ async fn route_unstable_posts_create(
         &[&user, &body.href, &body.content_text, &body.title, &body.community],
     ).await?;
 
+    let id = res_row.get(0);
+
     crate::spawn_task(async move {
-        let id = res_row.get(0);
         let created = res_row.get(1);
         let community_local: Option<bool> = res_row.get(2);
 
@@ -530,7 +531,11 @@ async fn route_unstable_posts_create(
         Ok(())
     });
 
-    Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+    let output = serde_json::to_vec(&serde_json::json!({ "id": id }))?;
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(output.into())?)
 }
 
 async fn apply_comments_replies<'a, T>(
