@@ -56,7 +56,7 @@ async fn route_unstable_communities_create(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     crate::require_login(&req, &db).await?;
 
@@ -81,14 +81,37 @@ async fn route_unstable_communities_create(
     let private_key = rsa.private_key_to_pem()?;
     let public_key = rsa.public_key_to_pem()?;
 
-    let row = db
-        .query_one(
-            "INSERT INTO community (name, local, private_key, public_key) VALUES ($1, TRUE, $2, $3) RETURNING id",
-            &[&body.name, &private_key, &public_key],
-        )
-        .await?;
+    let community_id = {
+        let trans = db.transaction().await?;
 
-    let community_id: i64 = row.get(0);
+        trans
+            .execute(
+                "INSERT INTO local_actor_name (name) VALUES ($1)",
+                &[&body.name],
+            )
+            .await
+            .map_err(|err| {
+                if err.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
+                    crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        "That name is already in use",
+                    ))
+                } else {
+                    err.into()
+                }
+            })?;
+
+        let row = trans
+            .query_one(
+                "INSERT INTO community (name, local, private_key, public_key) VALUES ($1, TRUE, $2, $3) RETURNING id",
+                &[&body.name, &private_key, &public_key],
+            )
+            .await?;
+
+        trans.commit().await?;
+
+        row.get::<_, i64>(0)
+    };
 
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")

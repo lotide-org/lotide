@@ -1632,7 +1632,7 @@ async fn route_unstable_users_create(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
 
@@ -1660,12 +1660,33 @@ async fn route_unstable_users_create(
         tokio::task::spawn_blocking(move || bcrypt::hash(req_password, bcrypt::DEFAULT_COST))
             .await??;
 
-    let row = db.query_one(
-        "INSERT INTO person (username, local, created_local, passhash) VALUES ($1, TRUE, current_timestamp, $2) RETURNING id",
-        &[&body.username, &passhash],
-    ).await?;
+    let user_id = {
+        let trans = db.transaction().await?;
+        trans
+            .execute(
+                "INSERT INTO local_actor_name (name) VALUES ($1)",
+                &[&body.username],
+            )
+            .await
+            .map_err(|err| {
+                if err.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
+                    crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        "That name is already in use",
+                    ))
+                } else {
+                    err.into()
+                }
+            })?;
+        let row = trans.query_one(
+            "INSERT INTO person (username, local, created_local, passhash) VALUES ($1, TRUE, current_timestamp, $2) RETURNING id",
+            &[&body.username, &passhash],
+        ).await?;
 
-    let user_id: i64 = row.get(0);
+        trans.commit().await?;
+
+        row.get::<_, i64>(0)
+    };
 
     let output = if body.login {
         let token = insert_token(user_id, &db).await?;
