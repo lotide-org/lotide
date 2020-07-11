@@ -10,7 +10,7 @@ mod communities;
 lazy_static::lazy_static! {
     static ref USERNAME_ALLOWED_CHARS: HashSet<char> = {
         use unic_char_range::chars;
-        chars!('a'..'z').into_iter().chain(chars!('A'..'Z')).chain(chars!('0'..'9')).chain(std::iter::once('_'))
+        chars!('a'..='z').into_iter().chain(chars!('A'..='Z')).chain(chars!('0'..='9')).chain(std::iter::once('_'))
             .collect()
     };
 }
