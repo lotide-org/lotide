@@ -58,7 +58,7 @@ async fn route_unstable_communities_create(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let mut db = ctx.db_pool.get().await?;
 
-    crate::require_login(&req, &db).await?;
+    let user = crate::require_login(&req, &db).await?;
 
     #[derive(Deserialize)]
     struct CommunitiesCreateBody<'a> {
@@ -103,8 +103,8 @@ async fn route_unstable_communities_create(
 
         let row = trans
             .query_one(
-                "INSERT INTO community (name, local, private_key, public_key) VALUES ($1, TRUE, $2, $3) RETURNING id",
-                &[&body.name, &private_key, &public_key],
+                "INSERT INTO community (name, local, private_key, public_key, created_by) VALUES ($1, TRUE, $2, $3, $4) RETURNING id",
+                &[&body.name, &private_key, &public_key, &user],
             )
             .await?;
 
