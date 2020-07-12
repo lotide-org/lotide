@@ -346,7 +346,7 @@ async fn route_unstable_communities_posts_list(
         }
     };
 
-    let limit: i64 = 10; // TODO make configurable
+    let limit: i64 = 30; // TODO make configurable
 
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id, &limit];
 

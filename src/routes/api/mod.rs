@@ -448,7 +448,7 @@ async fn route_unstable_posts_list(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let db = ctx.db_pool.get().await?;
 
-    let limit: i64 = 10;
+    let limit: i64 = 30;
 
     let stream = db.query_raw(
         "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
@@ -1709,7 +1709,7 @@ async fn route_unstable_users_me_following_posts_list(
 
     let user = crate::require_login(&req, &db).await?;
 
-    let limit: i64 = 10; // TODO make configurable
+    let limit: i64 = 30; // TODO make configurable
 
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&user, &limit];
 
