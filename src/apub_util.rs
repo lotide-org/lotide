@@ -1331,11 +1331,37 @@ pub async fn handle_recieved_object_for_community(
                         .map(|x| x.as_str())
                         .unwrap_or("");
 
+                    // Interpret attachments (usually images) as links
+                    let href = (match &obj.as_ref().attachment {
+                        Some(activitystreams::object::properties::ObjectPropertiesAttachmentEnum::Array(vec)) => vec.iter().next(),
+                        Some(activitystreams::object::properties::ObjectPropertiesAttachmentEnum::Term(term)) => Some(term),
+                        None => None,
+                    })
+                        .and_then(|term| {
+                            match term {
+                                activitystreams::object::properties::ObjectPropertiesAttachmentTermEnum::BaseBox(base) => Some(base),
+                                _ => None,
+                            }
+                        })
+                        .map(|base| -> Result<_, crate::Error> {
+                            Ok(match base.kind() {
+                                Some("Document") => Some(base.clone().into_concrete::<activitystreams::object::Document>()?.object_props),
+                                Some("Image") => Some(base.clone().into_concrete::<activitystreams::object::Image>()?.object_props),
+                                _ => None,
+                            })
+                        })
+                        .transpose()?
+                        .flatten();
+                    let href = href
+                        .as_ref()
+                        .and_then(|href| href.get_url_xsd_any_uri())
+                        .map(|href| href.as_str());
+
                     if let Some(object_id) = &obj.as_ref().id {
                         handle_recieved_post(
                             object_id.as_str(),
                             title,
-                            None,
+                            href,
                             content,
                             media_type,
                             created,
