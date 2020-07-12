@@ -1,7 +1,7 @@
 # lotide
 A federated forum / link aggregator using ActivityPub.
 
-To track progress and report issues, visit the [issue tracker](https://todo.sr.ht/~vpzom/lotide).
+To track progress and report issues, visit the [issue tracker](https://todo.sr.ht/~vpzom/lotide)
 
 See [hitide](https://git.sr.ht/~vpzom/hitide) for the frontend code.
 
