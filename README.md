@@ -11,9 +11,13 @@ See details in [INSTALL.md](https://git.sr.ht/~vpzom/lotide/tree/master/doc/INST
 ## Contact
 Discuss the project on Matrix in [#lotide:synapse.vpzom.click](https://matrix.to/#/#lotide:synapse.vpzom.click).
 
-## Test/Demo Instances
-Might disappear or get wiped occasionally.
+## Try
+You can set up your own instance of lotide, or check it out on one of these:
 
+Test instances, will likely disappear eventually:
  - https://a.tide.tk
  - https://b.tide.tk
  - https://c.tide.tk
+
+Slightly more stable:
+ - https://dev.narwhal.city
