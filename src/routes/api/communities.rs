@@ -2,12 +2,19 @@ use crate::routes::api::{
     MaybeIncludeYour, RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost,
 };
 use serde_derive::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::sync::Arc;
 
 #[derive(Serialize)]
 struct RespCommunityInfo<'a> {
     #[serde(flatten)]
     base: &'a RespMinimalCommunityInfo<'a>,
+
+    description: &'a str,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    you_are_moderator: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     your_follow: Option<Option<RespYourFollowInfo>>,
 }
 
@@ -135,12 +142,12 @@ async fn route_unstable_communities_get(
         (if query.include_your {
             let user = crate::require_login(&req, &db).await?;
             db.query_opt(
-                "SELECT name, local, ap_id, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2) FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, description, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), (created_by IS NOT NULL AND created_by = $2) FROM community WHERE id=$1",
                 &[&community_id, &user],
             ).await?
         } else {
             db.query_opt(
-                "SELECT name, local, ap_id FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, description FROM community WHERE id=$1",
                 &[&community_id],
             ).await?
         })
@@ -168,8 +175,14 @@ async fn route_unstable_communities_get(
                 }
             },
         },
+        description: row.get(3),
+        you_are_moderator: if query.include_your {
+            Some(row.get(5))
+        } else {
+            None
+        },
         your_follow: if query.include_your {
-            Some(match row.get(3) {
+            Some(match row.get(4) {
                 Some(accepted) => Some(RespYourFollowInfo { accepted }),
                 None => None,
             })
@@ -183,6 +196,64 @@ async fn route_unstable_communities_get(
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
         .body(body.into())?)
+}
+
+async fn route_unstable_communities_patch(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    #[derive(Deserialize)]
+    struct CommunitiesEditBody<'a> {
+        description: Option<Cow<'a, str>>,
+    }
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: CommunitiesEditBody = serde_json::from_slice(&body)?;
+
+    ({
+        let row = db
+            .query_opt(
+                "SELECT created_by FROM community WHERE id=$1",
+                &[&community_id],
+            )
+            .await?;
+        match row {
+            None => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::NOT_FOUND,
+                "No such community",
+            ))),
+            Some(row) => {
+                let created_by: Option<i64> = row.get(0);
+                if created_by == Some(user) {
+                    Ok(())
+                } else {
+                    Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        "You are not authorized to modify this community",
+                    )))
+                }
+            }
+        }
+    })?;
+
+    if let Some(description) = body.description {
+        db.execute(
+            "UPDATE community SET description=$1 WHERE id=$2",
+            &[&description, &community_id],
+        )
+        .await?;
+
+        crate::apub_util::spawn_enqueue_send_new_community_update(community_id, ctx);
+    }
+
+    Ok(crate::empty_response())
 }
 
 async fn route_unstable_communities_follow(
@@ -417,6 +488,7 @@ pub fn route_communities() -> crate::RouteNode<()> {
         .with_child_parse::<i64, _>(
             crate::RouteNode::new()
                 .with_handler_async("GET", route_unstable_communities_get)
+                .with_handler_async("PATCH", route_unstable_communities_patch)
                 .with_child(
                     "follow",
                     crate::RouteNode::new()

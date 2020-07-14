@@ -1,0 +1,1 @@
+ALTER TABLE community ADD COLUMN description TEXT NOT NULL DEFAULT '';

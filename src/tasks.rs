@@ -91,3 +91,21 @@ impl TaskDef for DeliverToFollowers {
         Ok(())
     }
 }
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct FetchActor<'a> {
+    pub actor_ap_id: Cow<'a, str>,
+}
+
+#[async_trait]
+impl<'a> TaskDef for FetchActor<'a> {
+    const KIND: &'static str = "fetch_actor";
+
+    async fn perform(self, ctx: &crate::BaseContext) -> Result<(), crate::Error> {
+        let db = ctx.db_pool.get().await?;
+
+        crate::apub_util::fetch_actor(&self.actor_ap_id, &db, &ctx.http_client).await?;
+
+        Ok(())
+    }
+}

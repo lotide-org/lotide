@@ -370,6 +370,42 @@ async fn inbox_common(
                 .unwrap();
             crate::apub_util::handle_undo(activity, ctx).await?;
         }
+        Some("Update") => {
+            let activity = activity
+                .into_concrete::<activitystreams::activity::Update>()
+                .unwrap();
+
+            let activity_id = activity
+                .object_props
+                .get_id()
+                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
+
+            let object_id = activity
+                .update_props
+                .get_object_xsd_any_uri()
+                .ok_or(crate::Error::InternalStrStatic("Missing object for Update"))?;
+
+            crate::apub_util::require_containment(activity_id.as_url(), object_id.as_url())?;
+
+            let object_id = object_id.as_str().to_owned();
+
+            crate::spawn_task(async move {
+                let row = db
+                    .query_opt(
+                        "SELECT 1 FROM community WHERE ap_id=$1 LIMIT 1",
+                        &[&object_id],
+                    )
+                    .await?;
+                if row.is_some() {
+                    ctx.enqueue_task(&crate::tasks::FetchActor {
+                        actor_ap_id: object_id.into(),
+                    })
+                    .await?;
+                }
+
+                Ok(())
+            });
+        }
         _ => {}
     }
 

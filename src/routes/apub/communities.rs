@@ -45,6 +45,13 @@ pub fn route_communities() -> crate::RouteNode<()> {
                             .with_handler_async("GET", handler_communities_posts_announce_get),
                     ),
                 ),
+            )
+            .with_child(
+                "updates",
+                crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
+                    crate::RouteNode::new()
+                        .with_handler_async("GET", handler_communities_updates_get),
+                ),
             ),
     )
 }
@@ -59,7 +66,7 @@ async fn handler_communities_get(
 
     match db
         .query_opt(
-            "SELECT name, local, public_key FROM community WHERE id=$1",
+            "SELECT name, local, public_key, description FROM community WHERE id=$1",
             &[&community_id],
         )
         .await?
@@ -69,8 +76,15 @@ async fn handler_communities_get(
             "No such community",
         )),
         Some(row) => {
-            let name: String = row.get(0);
             let local: bool = row.get(1);
+            if !local {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested community is not owned by this instance",
+                )));
+            }
+
+            let name: String = row.get(0);
             let public_key =
                 row.get::<_, Option<&[u8]>>(2)
                     .and_then(|bytes| match std::str::from_utf8(bytes) {
@@ -80,13 +94,7 @@ async fn handler_communities_get(
                             None
                         }
                     });
-
-            if !local {
-                return Err(crate::Error::UserError(crate::simple_response(
-                    hyper::StatusCode::BAD_REQUEST,
-                    "Requested community is not owned by this instance",
-                )));
-            }
+            let description: &str = row.get(3);
 
             let community_ap_id =
                 crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub);
@@ -98,7 +106,8 @@ async fn handler_communities_get(
                     activitystreams::security(),
                 ])?
                 .set_id(community_ap_id.as_ref())?
-                .set_name_xsd_string(name.as_ref())?;
+                .set_name_xsd_string(name.as_ref())?
+                .set_summary_xsd_string(description)?;
 
             let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
 
@@ -509,5 +518,44 @@ async fn handler_communities_posts_announce_get(
                 }
             }
         },
+    }
+}
+
+async fn handler_communities_updates_get(
+    params: (i64, uuid::Uuid),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, update_id) = params;
+    let db = ctx.db_pool.get().await?;
+
+    let row = db
+        .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
+        .await?;
+    match row {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such community",
+        )),
+        Some(row) => {
+            let local: bool = row.get(0);
+            if local {
+                let body = crate::apub_util::local_community_update_to_ap(
+                    community_id,
+                    update_id,
+                    &ctx.host_url_apub,
+                )?;
+                let body = serde_json::to_vec(&body)?;
+
+                Ok(hyper::Response::builder()
+                    .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                    .body(body.into())?)
+            } else {
+                Ok(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested community is not owned by this instance",
+                ))
+            }
+        }
     }
 }

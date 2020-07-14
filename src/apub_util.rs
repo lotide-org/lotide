@@ -258,6 +258,7 @@ pub async fn fetch_actor(
                 .map(|x| x.as_str())
                 .or_else(|| group.as_ref().get_name_xsd_string().map(|x| x.as_str()))
                 .unwrap_or("");
+            let description = group.as_ref().get_summary_xsd_string().map(|x| x.as_str());
             let inbox = group.base.extension.inbox.as_str();
             let shared_inbox = group
                 .base
@@ -272,8 +273,8 @@ pub async fn fetch_actor(
                 .map(|key| key.public_key_pem.as_bytes());
 
             let id = db.query_one(
-                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key) VALUES ($1, FALSE, $2, $3, $4, $5) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5 RETURNING id",
-                &[&name, &ap_id, &inbox, &shared_inbox, &public_key],
+                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, description) VALUES ($1, FALSE, $2, $3, $4, $5, $6) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, description=$6 RETURNING id",
+                &[&name, &ap_id, &inbox, &shared_inbox, &public_key, &description],
             ).await?.get(0);
 
             Ok(ActorLocalInfo::Community {
@@ -408,6 +409,14 @@ pub async fn fetch_or_create_local_actor_privkey(
             get_local_community_pubkey_apub_id(id, &host_url_apub),
         ),
     })
+}
+
+pub fn spawn_enqueue_send_new_community_update(community: i64, ctx: Arc<crate::RouteContext>) {
+    crate::spawn_task(async move {
+        let activity =
+            local_community_update_to_ap(community, uuid::Uuid::new_v4(), &ctx.host_url_apub)?;
+        enqueue_send_to_community_followers(community, activity, ctx).await
+    });
 }
 
 pub fn spawn_enqueue_send_community_follow(
@@ -643,6 +652,27 @@ pub fn spawn_announce_community_comment(
         let announce = announce?;
         enqueue_send_to_community_followers(community, announce, ctx).await
     });
+}
+
+pub fn local_community_update_to_ap(
+    community_id: i64,
+    update_id: uuid::Uuid,
+    host_url_apub: &str,
+) -> Result<activitystreams::activity::Update, crate::Error> {
+    let mut update = activitystreams::activity::Update::new();
+
+    let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
+
+    update
+        .object_props
+        .set_id(format!("{}/updates/{}", community_ap_id, update_id))?;
+
+    update
+        .update_props
+        .set_actor_xsd_any_uri(community_ap_id.as_ref())?
+        .set_object_xsd_any_uri(community_ap_id)?;
+
+    Ok(update)
 }
 
 pub fn local_community_follow_undo_to_ap(
@@ -1137,13 +1167,13 @@ pub async fn enqueue_forward_to_community_followers(
 
 async fn enqueue_send_to_community_followers(
     community_id: i64,
-    announce: activitystreams::activity::Announce,
+    activity: impl serde::Serialize,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     ctx.enqueue_task(&crate::tasks::DeliverToFollowers {
         actor: crate::ActorLocalRef::Community(community_id),
         sign: true,
-        object: serde_json::to_string(&announce)?,
+        object: serde_json::to_string(&activity)?,
     })
     .await
 }
