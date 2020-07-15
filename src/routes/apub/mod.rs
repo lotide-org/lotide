@@ -497,6 +497,7 @@ async fn handler_comments_get(
                 let body = serde_json::to_vec(&body)?.into();
 
                 let mut resp = hyper::Response::new(body);
+                *resp.status_mut() = hyper::StatusCode::GONE;
                 resp.headers_mut().insert(
                     hyper::header::CONTENT_TYPE,
                     hyper::header::HeaderValue::from_static(crate::apub_util::ACTIVITY_TYPE),
@@ -936,6 +937,7 @@ async fn handler_posts_get(
                 let body = serde_json::to_vec(&body)?.into();
 
                 let mut resp = hyper::Response::new(body);
+                *resp.status_mut() = hyper::StatusCode::GONE;
                 resp.headers_mut().insert(
                     hyper::header::CONTENT_TYPE,
                     hyper::header::HeaderValue::from_static(crate::apub_util::ACTIVITY_TYPE),
