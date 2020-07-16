@@ -72,6 +72,27 @@ struct RespPostCommentInfo<'a> {
     your_vote: Option<Option<Empty>>,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum RespThingInfo<'a> {
+    #[serde(rename = "post")]
+    Post {
+        id: i64,
+        href: Option<&'a str>,
+        title: &'a str,
+        created: String,
+        community: RespMinimalCommunityInfo<'a>,
+    },
+    #[serde(rename = "comment")]
+    Comment {
+        id: i64,
+        content_text: Option<&'a str>,
+        content_html: Option<&'a str>,
+        created: String,
+        post: RespMinimalPostInfo<'a>,
+    },
+}
+
 pub fn route_api() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child(
         "unstable",
@@ -163,7 +184,13 @@ pub fn route_api() -> crate::RouteNode<()> {
                         ),
                     )
                     .with_child_parse::<i64, _>(
-                        crate::RouteNode::new().with_handler_async("GET", route_unstable_users_get),
+                        crate::RouteNode::new()
+                            .with_handler_async("GET", route_unstable_users_get)
+                            .with_child(
+                                "things",
+                                crate::RouteNode::new()
+                                    .with_handler_async("GET", route_unstable_users_things_list),
+                            ),
                     ),
             ),
     )
@@ -1743,6 +1770,72 @@ async fn route_unstable_users_get(
     };
 
     let body = serde_json::to_vec(&info)?;
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body.into())?)
+}
+
+async fn route_unstable_users_things_list(
+    params: (i64,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (user_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let limit: i64 = 30;
+
+    let rows = db.query(
+        "(SELECT TRUE, post.id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, NULL FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted) ORDER BY created DESC LIMIT $2",
+        &[&user_id, &limit],
+    )
+        .await?;
+
+    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
+
+    let things: Vec<RespThingInfo> = rows
+        .iter()
+        .map(|row| {
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
+            let created = created.to_rfc3339().into();
+
+            if row.get(0) {
+                let community_local = row.get(7);
+
+                RespThingInfo::Post {
+                    id: row.get(1),
+                    href: row.get(2),
+                    title: row.get(3),
+                    created,
+                    community: RespMinimalCommunityInfo {
+                        id: row.get(5),
+                        name: row.get(6),
+                        local: community_local,
+                        host: crate::get_actor_host_or_unknown(
+                            community_local,
+                            row.get(8),
+                            &local_hostname,
+                        ),
+                    },
+                }
+            } else {
+                RespThingInfo::Comment {
+                    id: row.get(1),
+                    content_text: row.get(2),
+                    content_html: row.get(3),
+                    created,
+                    post: RespMinimalPostInfo {
+                        id: row.get(5),
+                        title: row.get(6),
+                    },
+                }
+            }
+        })
+        .collect();
+
+    let body = serde_json::to_vec(&things)?;
 
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
