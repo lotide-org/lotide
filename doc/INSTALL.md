@@ -54,3 +54,5 @@ The following environment variables are required (*An environment variable manag
 Run `migrant setup`, then `migrant apply -a` to update the database schema.
 
 To build and run lotide, run `cargo run` in the lotide directory.
+
+Note that lotide itself does not contain a frontend, so you probably want to also setup [hitide](https://git.sr.ht/~vpzom/hitide).
