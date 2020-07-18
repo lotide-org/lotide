@@ -487,41 +487,63 @@ async fn route_unstable_posts_create(
     struct PostsCreateBody {
         community: i64,
         href: Option<String>,
+        content_markdown: Option<String>,
         content_text: Option<String>,
         title: String,
     }
 
     let body: PostsCreateBody = serde_json::from_slice(&body)?;
 
-    if body.href.is_none() && body.content_text.is_none() {
+    if body.href.is_none() && body.content_text.is_none() && body.content_markdown.is_none() {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            "Post must contain either href or content_text",
+            "Post must contain one of href, content_text, or content_markdown",
+        )));
+    }
+
+    if body.content_markdown.is_some() && body.content_text.is_some() {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "content_markdown and content_text are mutually exclusive",
         )));
     }
 
     // TODO validate permissions to post
 
+    let (content_text, content_markdown, content_html) = match body.content_markdown {
+        Some(md) => {
+            let (html, md) =
+                tokio::task::spawn_blocking(move || (crate::render_markdown(&md), md)).await?;
+            (None, Some(md), Some(html))
+        }
+        None => match body.content_text {
+            Some(text) => (Some(text), None, None),
+            None => (None, None, None),
+        },
+    };
+
     let res_row = db.query_one(
-        "INSERT INTO post (author, href, content_text, title, created, community, local) VALUES ($1, $2, $3, $4, current_timestamp, $5, TRUE) RETURNING id, created, (SELECT local FROM community WHERE id=post.community)",
-        &[&user, &body.href, &body.content_text, &body.title, &body.community],
+        "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7) RETURNING id, created, (SELECT local FROM community WHERE id=post.community)",
+        &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html],
     ).await?;
 
     let id = res_row.get(0);
+    let created = res_row.get(1);
+
+    let post = crate::PostInfoOwned {
+        id,
+        author: Some(user),
+        content_text,
+        content_markdown,
+        content_html,
+        href: body.href,
+        title: body.title,
+        created,
+        community: body.community,
+    };
 
     crate::spawn_task(async move {
-        let created = res_row.get(1);
         let community_local: Option<bool> = res_row.get(2);
-
-        let post = crate::PostInfoOwned {
-            id,
-            author: Some(user),
-            content_text: body.content_text,
-            href: body.href,
-            title: body.title,
-            created,
-            community: body.community,
-        };
 
         if let Some(community_local) = community_local {
             if community_local {

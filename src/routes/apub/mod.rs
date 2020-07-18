@@ -907,7 +907,7 @@ async fn handler_posts_get(
 
     match db
         .query_opt(
-            "SELECT author, href, content_text, title, created, community, local, deleted, had_href, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
+            "SELECT author, href, title, created, community, local, deleted, had_href, content_text, content_markdown, content_html, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
             &[&post_id],
         )
         .await?
@@ -917,7 +917,7 @@ async fn handler_posts_get(
             "No such post",
         )),
         Some(row) => {
-            let local: bool = row.get(6);
+            let local: bool = row.get(5);
 
             if !local {
                 return Err(crate::Error::UserError(crate::simple_response(
@@ -926,8 +926,8 @@ async fn handler_posts_get(
                 )));
             }
 
-            if row.get(7) {
-                let had_href: Option<bool> = row.get(8);
+            if row.get(6) {
+                let had_href: Option<bool> = row.get(7);
 
                 let mut body = activitystreams::object::Tombstone::new();
                 body.tombstone_props.set_former_type_xsd_string(if had_href == Some(true) { "Page" } else { "Note" })?;
@@ -946,9 +946,9 @@ async fn handler_posts_get(
                 return Ok(resp);
             }
 
-            let community_local_id = row.get(5);
+            let community_local_id = row.get(4);
 
-            let community_ap_id = match row.get(9) {
+            let community_ap_id = match row.get(11) {
                 Some(ap_id) => ap_id,
                 None => {
                     // assume local (might be a problem?)
@@ -959,11 +959,13 @@ async fn handler_posts_get(
             let post_info = crate::PostInfo {
                 author: row.get(0),
                 community: community_local_id,
-                created: &row.get(4),
+                created: &row.get(3),
                 href: row.get(1),
-                content_text: row.get(2),
+                content_text: row.get(8),
+                content_markdown: row.get(9),
+                content_html: row.get(10),
                 id: post_id,
-                title: row.get(3),
+                title: row.get(2),
             };
 
             let body = crate::apub_util::post_to_ap(&post_info, &community_ap_id, &ctx.host_url_apub)?;
@@ -991,7 +993,7 @@ async fn handler_posts_create_get(
 
     match db
         .query_opt(
-            "SELECT author, href, content_text, title, created, community, local, deleted, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
+            "SELECT author, href, title, created, community, local, deleted, content_text, content_markdown, content_html, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
             &[&post_id],
         )
         .await?
@@ -1001,7 +1003,7 @@ async fn handler_posts_create_get(
             "No such post",
         )),
         Some(row) => {
-            let local: bool = row.get(6);
+            let local: bool = row.get(5);
 
             if !local {
                 return Err(crate::Error::UserError(crate::simple_response(
@@ -1010,16 +1012,16 @@ async fn handler_posts_create_get(
                 )));
             }
 
-            if row.get(7) {
+            if row.get(6) {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::GONE,
                     "Post has been deleted",
                 )));
             }
 
-            let community_local_id = row.get(5);
+            let community_local_id = row.get(4);
 
-            let community_ap_id = match row.get(8) {
+            let community_ap_id = match row.get(10) {
                 Some(ap_id) => ap_id,
                 None => {
                     // assume local (might be a problem?)
@@ -1030,9 +1032,11 @@ async fn handler_posts_create_get(
             let post_info = crate::PostInfo {
                 author: row.get(0),
                 community: community_local_id,
-                created: &row.get(4),
+                created: &row.get(3),
                 href: row.get(1),
-                content_text: row.get(2),
+                content_text: row.get(7),
+                content_markdown: row.get(8),
+                content_html: row.get(9),
                 id: post_id,
                 title: row.get(3),
             };

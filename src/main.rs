@@ -93,11 +93,15 @@ pub enum ThingLocalRef {
     Comment(i64),
 }
 
+#[derive(Debug)]
 pub struct PostInfo<'a> {
     id: i64,
     author: Option<i64>,
     href: Option<&'a str>,
     content_text: Option<&'a str>,
+    #[allow(dead_code)]
+    content_markdown: Option<&'a str>,
+    content_html: Option<&'a str>,
     title: &'a str,
     created: &'a chrono::DateTime<chrono::FixedOffset>,
     #[allow(dead_code)]
@@ -109,6 +113,8 @@ pub struct PostInfoOwned {
     author: Option<i64>,
     href: Option<String>,
     content_text: Option<String>,
+    content_markdown: Option<String>,
+    content_html: Option<String>,
     title: String,
     created: chrono::DateTime<chrono::FixedOffset>,
     community: i64,
@@ -121,6 +127,8 @@ impl<'a> Into<PostInfo<'a>> for &'a PostInfoOwned {
             author: self.author,
             href: self.href.as_deref(),
             content_text: self.content_text.as_deref(),
+            content_markdown: self.content_markdown.as_deref(),
+            content_html: self.content_html.as_deref(),
             title: &self.title,
             created: &self.created,
             community: self.community,
@@ -263,6 +271,14 @@ pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 's
     tokio::spawn(task.map_err(|err| {
         eprintln!("Error in task: {:?}", err);
     }));
+}
+
+pub fn render_markdown(src: &str) -> String {
+    let parser = pulldown_cmark::Parser::new(src);
+    let mut output = String::new();
+    pulldown_cmark::html::push_html(&mut output, parser);
+
+    output
 }
 
 pub fn on_community_add_post<'a>(

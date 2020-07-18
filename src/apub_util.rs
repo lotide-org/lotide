@@ -786,6 +786,20 @@ pub fn post_to_ap(
 ) -> Result<activitystreams::BaseBox, crate::Error> {
     use std::convert::TryInto;
 
+    let apply_content = |props: &mut activitystreams::object::properties::ObjectProperties| -> Result<(), crate::Error> {
+        if let Some(html) = post.content_html {
+            props
+                .set_content_xsd_string(html)?
+                .set_media_type(mime::TEXT_HTML)?;
+        } else if let Some(text) = post.content_text {
+            props
+                .set_content_xsd_string(text)?
+                .set_media_type(mime::TEXT_PLAIN)?;
+        }
+
+        Ok(())
+    };
+
     match post.href {
         Some(href) => {
             let mut post_ap = activitystreams::object::Page::new();
@@ -804,12 +818,7 @@ pub fn post_to_ap(
                 .set_to_xsd_any_uri(community_ap_id)?
                 .set_cc_xsd_any_uri(activitystreams::public())?;
 
-            if let Some(content) = post.content_text {
-                post_ap
-                    .as_mut()
-                    .set_content_xsd_string(content)?
-                    .set_media_type(mime::TEXT_PLAIN)?;
-            }
+            apply_content(post_ap.as_mut())?;
 
             Ok(post_ap.try_into()?)
         }
@@ -824,12 +833,12 @@ pub fn post_to_ap(
                     post.author.unwrap(),
                     &host_url_apub,
                 ))?
-                .set_content_xsd_string(post.content_text.unwrap_or(""))?
-                .set_media_type(mime::TEXT_PLAIN)?
                 .set_summary_xsd_string(post.title)?
                 .set_published(post.created.clone())?
                 .set_to_xsd_any_uri(community_ap_id)?
                 .set_cc_xsd_any_uri(activitystreams::public())?;
+
+            apply_content(post_ap.as_mut())?;
 
             Ok(post_ap.try_into()?)
         }
