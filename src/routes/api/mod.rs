@@ -1193,14 +1193,34 @@ async fn route_unstable_posts_replies_create(
 
     #[derive(Deserialize)]
     struct RepliesCreateBody<'a> {
-        content_text: Cow<'a, str>,
+        content_text: Option<Cow<'a, str>>,
+        content_markdown: Option<String>,
     }
 
     let body: RepliesCreateBody<'_> = serde_json::from_slice(&body)?;
 
+    if !(body.content_markdown.is_some() ^ body.content_text.is_some()) {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "Exactly one of content_markdown and content_text must be specified",
+        )));
+    }
+
+    let (content_text, content_markdown, content_html) = match body.content_markdown {
+        Some(md) => {
+            let (html, md) =
+                tokio::task::spawn_blocking(move || (crate::render_markdown(&md), md)).await?;
+            (None, Some(md), Some(html))
+        }
+        None => match body.content_text {
+            Some(text) => (Some(text), None, None),
+            None => (None, None, None),
+        },
+    };
+
     let row = db.query_one(
-        "INSERT INTO reply (post, author, content_text, created, local) VALUES ($1, $2, $3, current_timestamp, TRUE) RETURNING id, created",
-        &[&post_id, &user, &body.content_text],
+        "INSERT INTO reply (post, author, created, local, content_text, content_markdown, content_html) VALUES ($1, $2, current_timestamp, TRUE, $3, $4, $5) RETURNING id, created",
+        &[&post_id, &user, &content_text, &content_markdown, &content_html],
     ).await?;
 
     let reply_id: i64 = row.get(0);
@@ -1211,7 +1231,9 @@ async fn route_unstable_posts_replies_create(
         author: Some(user),
         post: post_id,
         parent: None,
-        content_text: Some(body.content_text.into_owned()),
+        content_text: content_text.map(Cow::into_owned),
+        content_markdown,
+        content_html,
         created,
         ap_id: crate::APIDOrLocal::Local,
     };
@@ -1612,11 +1634,31 @@ async fn route_unstable_comments_replies_create(
 
     #[derive(Deserialize)]
     struct CommentRepliesCreateBody<'a> {
-        content_text: Cow<'a, str>,
+        content_text: Option<Cow<'a, str>>,
+        content_markdown: Option<String>,
     }
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let body: CommentRepliesCreateBody<'_> = serde_json::from_slice(&body)?;
+
+    if !(body.content_markdown.is_some() ^ body.content_text.is_some()) {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "Exactly one of content_markdown and content_text must be specified",
+        )));
+    }
+
+    let (content_text, content_markdown, content_html) = match body.content_markdown {
+        Some(md) => {
+            let (html, md) =
+                tokio::task::spawn_blocking(move || (crate::render_markdown(&md), md)).await?;
+            (None, Some(md), Some(html))
+        }
+        None => match body.content_text {
+            Some(text) => (Some(text), None, None),
+            None => (None, None, None),
+        },
+    };
 
     let post: i64 = match db
         .query_opt("SELECT post FROM reply WHERE id=$1", &[&parent_id])
@@ -1630,8 +1672,8 @@ async fn route_unstable_comments_replies_create(
     }?;
 
     let row = db.query_one(
-        "INSERT INTO reply (post, parent, author, content_text, created, local) VALUES ($1, $2, $3, $4, current_timestamp, TRUE) RETURNING id, created",
-        &[&post, &parent_id, &user, &body.content_text],
+        "INSERT INTO reply (post, parent, author, created, local, content_text, content_markdown, content_html) VALUES ($1, $2, $3, current_timestamp, TRUE, $4, $5, $6) RETURNING id, created",
+        &[&post, &parent_id, &user, &content_text, &content_markdown, &content_html],
     ).await?;
 
     let reply_id: i64 = row.get(0);
@@ -1642,7 +1684,9 @@ async fn route_unstable_comments_replies_create(
         author: Some(user),
         post,
         parent: Some(parent_id),
-        content_text: Some(body.content_text.into_owned()),
+        content_text: content_text.map(Cow::into_owned),
+        content_markdown,
+        content_html,
         created,
         ap_id: crate::APIDOrLocal::Local,
     };

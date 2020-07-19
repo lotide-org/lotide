@@ -136,12 +136,16 @@ impl<'a> Into<PostInfo<'a>> for &'a PostInfoOwned {
     }
 }
 
+#[derive(Debug)]
 pub struct CommentInfo {
     id: i64,
     author: Option<i64>,
     post: i64,
     parent: Option<i64>,
     content_text: Option<String>,
+    #[allow(dead_code)]
+    content_markdown: Option<String>,
+    content_html: Option<String>,
     created: chrono::DateTime<chrono::FixedOffset>,
     ap_id: APIDOrLocal,
 }

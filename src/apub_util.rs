@@ -889,8 +889,19 @@ pub fn local_comment_to_ap(
             &host_url_apub,
         ))?
         .set_published(comment.created.clone())?
-        .set_in_reply_to_xsd_any_uri(parent_ap_id.unwrap_or(post_ap_id))?
-        .set_content_xsd_string(comment.content_text.clone().unwrap())?;
+        .set_in_reply_to_xsd_any_uri(parent_ap_id.unwrap_or(post_ap_id))?;
+
+    println!("{:?}", comment);
+
+    if let Some(html) = &comment.content_html {
+        obj.as_mut()
+            .set_content_xsd_string(html.as_ref())?
+            .set_media_type(mime::TEXT_HTML)?;
+    } else if let Some(text) = &comment.content_text {
+        obj.as_mut()
+            .set_content_xsd_string(text.as_ref())?
+            .set_media_type(mime::TEXT_PLAIN)?;
+    }
 
     if let Some(parent_or_post_author_ap_id) = parent_or_post_author_ap_id {
         use std::convert::TryInto;
