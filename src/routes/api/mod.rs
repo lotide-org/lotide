@@ -129,6 +129,10 @@ pub fn route_api() -> crate::RouteNode<()> {
             )
             .with_child("communities", communities::route_communities())
             .with_child(
+                "instance",
+                crate::RouteNode::new().with_handler_async("GET", route_unstable_instance_get),
+            )
+            .with_child(
                 "posts",
                 crate::RouteNode::new()
                     .with_handler_async("GET", route_unstable_posts_list)
@@ -459,6 +463,23 @@ async fn route_unstable_nodeinfo_20_get(
             "application/json; profile=http://nodeinfo.diaspora.software/ns/schema/2.0#",
         )
         .body(body)?)
+}
+
+async fn route_unstable_instance_get(
+    _: (),
+    _ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let body = serde_json::json!({
+        "software": {
+            "name": "lotide",
+            "version": env!("CARGO_PKG_VERSION"),
+        }
+    });
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&body)?.into())?)
 }
 
 async fn route_unstable_posts_list(
