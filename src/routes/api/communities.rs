@@ -38,15 +38,18 @@ async fn route_unstable_communities_list(
         .iter()
         .map(|row| {
             let id = row.get(0);
-            let name = row.get(3);
             let local = row.get(1);
-            let host = crate::get_actor_host_or_unknown(local, row.get(2), &ctx.local_hostname);
+            let ap_id = row.get(2);
+            let name = row.get(3);
+
+            let host = crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname);
 
             RespMinimalCommunityInfo {
                 id,
                 name,
                 local,
                 host,
+                remote_url: ap_id,
             }
         })
         .collect();
@@ -158,6 +161,7 @@ async fn route_unstable_communities_get(
     };
 
     let community_local = row.get(1);
+    let community_ap_id: Option<&str> = row.get(2);
 
     let info = RespCommunityInfo {
         base: &RespMinimalCommunityInfo {
@@ -167,11 +171,12 @@ async fn route_unstable_communities_get(
             host: if community_local {
                 (&ctx.local_hostname).into()
             } else {
-                match row.get::<_, Option<&str>>(2).and_then(crate::get_url_host) {
+                match community_ap_id.and_then(crate::get_url_host) {
                     Some(host) => host.into(),
                     None => "[unknown]".into(),
                 }
             },
+            remote_url: community_ap_id,
         },
         description: row.get(3),
         you_are_moderator: if query.include_your {
@@ -397,6 +402,7 @@ async fn route_unstable_communities_posts_list(
     let community = {
         let row = &community_row;
         let community_local = row.get(1);
+        let community_ap_id: Option<&str> = row.get(2);
 
         RespMinimalCommunityInfo {
             id: community_id,
@@ -405,11 +411,12 @@ async fn route_unstable_communities_posts_list(
             host: if community_local {
                 (&ctx.local_hostname).into()
             } else {
-                match row.get::<_, Option<&str>>(2).and_then(crate::get_url_host) {
+                match community_ap_id.and_then(crate::get_url_host) {
                     Some(host) => host.into(),
                     None => "[unknown]".into(),
                 }
             },
+            remote_url: community_ap_id,
         }
     };
 
@@ -449,6 +456,7 @@ async fn route_unstable_communities_posts_list(
                             None => "[unknown]".into(),
                         }
                     },
+                    remote_url: author_ap_id.map(From::from),
                 }
             });
 

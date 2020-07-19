@@ -30,6 +30,7 @@ struct RespMinimalAuthorInfo<'a> {
     username: Cow<'a, str>,
     local: bool,
     host: Cow<'a, str>,
+    remote_url: Option<Cow<'a, str>>,
 }
 
 #[derive(Serialize)]
@@ -38,6 +39,7 @@ struct RespMinimalCommunityInfo<'a> {
     name: &'a str,
     local: bool,
     host: Cow<'a, str>,
+    remote_url: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -693,6 +695,7 @@ async fn get_comments_replies<'a>(
                         author_ap_id,
                         &local_hostname,
                     ),
+                    remote_url: author_ap_id.map(|x| x.to_owned().into()),
                 }
             });
 
@@ -774,6 +777,7 @@ async fn get_post_comments<'a>(
                         author_ap_id,
                         &local_hostname,
                     ),
+                    remote_url: author_ap_id.map(|x| x.to_owned().into()),
                 }
             });
 
@@ -873,15 +877,17 @@ async fn route_unstable_posts_get(
             let author = match row.get(10) {
                 Some(author_username) => {
                     let author_local = row.get(11);
+                    let author_ap_id = row.get(12);
                     Some(RespMinimalAuthorInfo {
                         id: row.get(0),
                         username: Cow::Borrowed(author_username),
                         local: author_local,
                         host: crate::get_actor_host_or_unknown(
                             author_local,
-                            row.get(12),
+                            author_ap_id,
                             &ctx.local_hostname,
                         ),
+                        remote_url: author_ap_id.map(From::from),
                     })
                 }
                 None => None,
@@ -896,6 +902,7 @@ async fn route_unstable_posts_get(
                     community_ap_id,
                     &ctx.local_hostname,
                 ),
+                remote_url: community_ap_id,
             };
 
             let post = RespPostListPost {
@@ -1310,15 +1317,17 @@ async fn route_unstable_comments_get(
             let author = match row.get(6) {
                 Some(author_username) => {
                     let author_local = row.get(7);
+                    let author_ap_id = row.get(8);
                     Some(RespMinimalAuthorInfo {
                         id: row.get(0),
                         username: Cow::Borrowed(author_username),
                         local: author_local,
                         host: crate::get_actor_host_or_unknown(
                             author_local,
-                            row.get(8),
+                            author_ap_id,
                             &ctx.local_hostname,
                         ),
+                        remote_url: author_ap_id.map(From::from),
                     })
                 }
                 None => None,
@@ -1861,12 +1870,14 @@ async fn route_unstable_users_get(
     })?;
 
     let local = row.get(1);
+    let ap_id = row.get(2);
 
     let info = RespMinimalAuthorInfo {
         id: user_id,
         local,
         username: Cow::Borrowed(row.get(0)),
-        host: crate::get_actor_host_or_unknown(local, row.get(2), &ctx.local_hostname),
+        host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
+        remote_url: ap_id.map(From::from),
     };
 
     let info = RespUserInfo {
@@ -1906,6 +1917,7 @@ async fn route_unstable_users_things_list(
 
             if row.get(0) {
                 let community_local = row.get(7);
+                let community_ap_id = row.get(8);
 
                 RespThingInfo::Post {
                     id: row.get(1),
@@ -1918,9 +1930,10 @@ async fn route_unstable_users_things_list(
                         local: community_local,
                         host: crate::get_actor_host_or_unknown(
                             community_local,
-                            row.get(8),
+                            community_ap_id,
                             &ctx.local_hostname,
                         ),
+                        remote_url: community_ap_id,
                     },
                 }
             } else {
@@ -1980,6 +1993,7 @@ async fn handle_common_posts_list(
                         author_ap_id,
                         &local_hostname,
                     ),
+                    remote_url: author_ap_id.map(|x| x.to_owned().into()),
                 }
             });
 
@@ -1992,6 +2006,7 @@ async fn handle_common_posts_list(
                     community_ap_id,
                     &local_hostname,
                 ),
+                remote_url: community_ap_id,
             };
 
             let post = RespPostListPost {
