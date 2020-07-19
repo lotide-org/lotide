@@ -463,7 +463,7 @@ async fn route_unstable_posts_list(
         ([limit]).iter().map(|x| x as _),
     ).await?;
 
-    let posts = handle_common_posts_list(stream, &ctx.host_url_apub).await?;
+    let posts = handle_common_posts_list(stream, &ctx.local_hostname).await?;
 
     let body = serde_json::to_vec(&posts)?;
 
@@ -823,15 +823,13 @@ async fn route_unstable_posts_get(
 
     let (post_id,) = params;
 
-    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
-
     let (row, comments, your_vote) = futures::future::try_join3(
         db.query_opt(
             "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1) FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
-        get_post_comments(post_id, include_your_for, &db, &local_hostname),
+        get_post_comments(post_id, include_your_for, &db, &ctx.local_hostname),
         async {
             if let Some(user) = include_your_for {
                 let row = db.query_opt("SELECT 1 FROM post_like WHERE post=$1 AND person=$2", &[&post_id, &user]).await?;
@@ -872,7 +870,7 @@ async fn route_unstable_posts_get(
                         host: crate::get_actor_host_or_unknown(
                             author_local,
                             row.get(12),
-                            &local_hostname,
+                            &ctx.local_hostname,
                         ),
                     })
                 }
@@ -886,7 +884,7 @@ async fn route_unstable_posts_get(
                 host: crate::get_actor_host_or_unknown(
                     community_local,
                     community_ap_id,
-                    &local_hostname,
+                    &ctx.local_hostname,
                 ),
             };
 
@@ -1292,8 +1290,6 @@ async fn route_unstable_comments_get(
         },
     ).await?;
 
-    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
-
     match row {
         None => Ok(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
@@ -1311,7 +1307,7 @@ async fn route_unstable_comments_get(
                         host: crate::get_actor_host_or_unknown(
                             author_local,
                             row.get(8),
-                            &local_hostname,
+                            &ctx.local_hostname,
                         ),
                     })
                 }
@@ -1327,7 +1323,7 @@ async fn route_unstable_comments_get(
             };
 
             let replies =
-                get_comments_replies(&[comment_id], include_your_for, 3, &db, &local_hostname)
+                get_comments_replies(&[comment_id], include_your_for, 3, &db, &ctx.local_hostname)
                     .await?
                     .remove(&comment_id)
                     .unwrap_or_else(|| Vec::new());
@@ -1792,7 +1788,7 @@ async fn route_unstable_users_me_following_posts_list(
         values.iter().map(|s| *s as _)
     ).await?;
 
-    let posts = handle_common_posts_list(stream, &ctx.host_url_apub).await?;
+    let posts = handle_common_posts_list(stream, &ctx.local_hostname).await?;
 
     let body = serde_json::to_vec(&posts)?;
 
@@ -1826,13 +1822,11 @@ async fn route_unstable_users_get(
 
     let local = row.get(1);
 
-    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
-
     let info = RespMinimalAuthorInfo {
         id: user_id,
         local,
         username: Cow::Borrowed(row.get(0)),
-        host: crate::get_actor_host_or_unknown(local, row.get(2), &local_hostname),
+        host: crate::get_actor_host_or_unknown(local, row.get(2), &ctx.local_hostname),
     };
 
     let body = serde_json::to_vec(&info)?;
@@ -1859,8 +1853,6 @@ async fn route_unstable_users_things_list(
     )
         .await?;
 
-    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
-
     let things: Vec<RespThingInfo> = rows
         .iter()
         .map(|row| {
@@ -1882,7 +1874,7 @@ async fn route_unstable_users_things_list(
                         host: crate::get_actor_host_or_unknown(
                             community_local,
                             row.get(8),
-                            &local_hostname,
+                            &ctx.local_hostname,
                         ),
                     },
                 }
@@ -1911,11 +1903,9 @@ async fn route_unstable_users_things_list(
 async fn handle_common_posts_list(
     stream: impl futures::stream::TryStream<Ok = tokio_postgres::Row, Error = tokio_postgres::Error>
         + Send,
-    host_url_apub: &str,
+    local_hostname: &str,
 ) -> Result<Vec<serde_json::Value>, crate::Error> {
     use futures::stream::TryStreamExt;
-
-    let local_hostname = crate::get_url_host(host_url_apub).unwrap();
 
     let posts: Vec<serde_json::Value> = stream
         .map_err(crate::Error::from)

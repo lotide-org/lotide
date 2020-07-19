@@ -17,6 +17,8 @@ pub struct BaseContext {
     pub host_url_apub: String,
     pub http_client: HttpClient,
     pub apub_proxy_rewrites: bool,
+
+    pub local_hostname: String,
 }
 
 pub struct RouteContext {
@@ -431,6 +433,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let routes = Arc::new(routes::route_root());
     let base_context = Arc::new(BaseContext {
+        local_hostname: get_url_host(&host_url_apub).expect("Failed to parse HOST_URL_ACTIVITYPUB"),
+
         db_pool,
         host_url_api,
         host_url_apub,

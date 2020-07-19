@@ -77,8 +77,6 @@ async fn handler_webfinger_get(
         Community,
     }
 
-    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
-
     let found_ref = if query.resource.starts_with(&ctx.host_url_apub) {
         let rest = &query.resource[ctx.host_url_apub.len()..];
         if rest.starts_with("/users/") {
@@ -97,9 +95,11 @@ async fn handler_webfinger_get(
             None
         }
     } else if query.resource.starts_with("acct:")
-        && query.resource.ends_with(&format!("@{}", local_hostname))
+        && query
+            .resource
+            .ends_with(&format!("@{}", ctx.local_hostname))
     {
-        let name = &query.resource[5..(query.resource.len() - (local_hostname.len() + 1))];
+        let name = &query.resource[5..(query.resource.len() - (ctx.local_hostname.len() + 1))];
 
         Some(LocalRef::Name(name))
     } else {
@@ -143,7 +143,7 @@ async fn handler_webfinger_get(
             crate::simple_response(hyper::StatusCode::NOT_FOUND, "Nothing found for that query")
         }
         Some((ty, id, name)) => {
-            let subject = format!("acct:{}@{}", name, local_hostname);
+            let subject = format!("acct:{}@{}", name, ctx.local_hostname);
             let alias = match ty {
                 LTActorType::User => {
                     crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub)

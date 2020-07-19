@@ -34,15 +34,13 @@ async fn route_unstable_communities_list(
         .query("SELECT id, local, ap_id, name FROM community", &[])
         .await?;
 
-    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
-
     let output: Vec<_> = rows
         .iter()
         .map(|row| {
             let id = row.get(0);
             let name = row.get(3);
             let local = row.get(1);
-            let host = crate::get_actor_host_or_unknown(local, row.get(2), &local_hostname);
+            let host = crate::get_actor_host_or_unknown(local, row.get(2), &ctx.local_hostname);
 
             RespMinimalCommunityInfo {
                 id,
@@ -167,7 +165,7 @@ async fn route_unstable_communities_get(
             name: row.get(0),
             local: community_local,
             host: if community_local {
-                crate::get_url_host(&ctx.host_url_apub).unwrap().into()
+                (&ctx.local_hostname).into()
             } else {
                 match row.get::<_, Option<&str>>(2).and_then(crate::get_url_host) {
                     Some(host) => host.into(),
@@ -383,8 +381,6 @@ async fn route_unstable_communities_posts_list(
 
     let db = ctx.db_pool.get().await?;
 
-    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
-
     let community_row = db
         .query_opt(
             "SELECT name, local, ap_id FROM community WHERE id=$1",
@@ -407,7 +403,7 @@ async fn route_unstable_communities_posts_list(
             name: row.get(0),
             local: community_local,
             host: if community_local {
-                (&local_hostname).into()
+                (&ctx.local_hostname).into()
             } else {
                 match row.get::<_, Option<&str>>(2).and_then(crate::get_url_host) {
                     Some(host) => host.into(),
@@ -425,8 +421,6 @@ async fn route_unstable_communities_posts_list(
         "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $2",
         values.iter().map(|s| *s as _)
     ).await?;
-
-    let local_hostname = crate::get_url_host(&ctx.host_url_apub).unwrap();
 
     let posts: Vec<serde_json::Value> = stream
         .map_err(crate::Error::from)
@@ -448,7 +442,7 @@ async fn route_unstable_communities_posts_list(
                     username: author_name.into(),
                     local: author_local,
                     host: if author_local {
-                        (&local_hostname).into()
+                        (&ctx.local_hostname).into()
                     } else {
                         match author_ap_id.and_then(crate::get_url_host) {
                             Some(host) => host.into(),
