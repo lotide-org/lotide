@@ -32,7 +32,7 @@ location /.well-known {
 	proxy_pass http://c_backend_1:3333;
 }
 location / {
-	if ($http_accept = application/activity+json) {
+	if ($http_accept ~* "application/activity\+json") {
 		rewrite ^(.*)$ /apub$1;
 	}
 	if ($http_content_type = application/activity+json) {
