@@ -981,7 +981,7 @@ async fn route_unstable_posts_delete(
                 )));
             }
 
-            db.execute("UPDATE post SET had_href=(href IS NOT NULL), href=NULL, title='[deleted]', content_text='[deleted]', deleted=TRUE WHERE id=$1", &[&post_id]).await?;
+            db.execute("UPDATE post SET had_href=(href IS NOT NULL), href=NULL, title='[deleted]', content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE id=$1", &[&post_id]).await?;
 
             crate::spawn_task(async move {
                 let community: Option<i64> = row.get(1);
@@ -1416,12 +1416,12 @@ async fn route_unstable_comments_delete(
             if author != Some(user) {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::FORBIDDEN,
-                    "That's not your post",
+                    "That's not your comment",
                 )));
             }
 
             db.execute(
-                "UPDATE reply SET content_text='[deleted]', deleted=TRUE WHERE id=$1",
+                "UPDATE reply SET content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE id=$1",
                 &[&comment_id],
             )
             .await?;
