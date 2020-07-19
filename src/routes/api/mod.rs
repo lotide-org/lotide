@@ -225,7 +225,7 @@ enum Lookup<'a> {
     WebFinger { user: &'a str, host: &'a str },
 }
 
-fn parse_lookup<'a>(src: &'a str) -> Result<Lookup<'a>, crate::Error> {
+fn parse_lookup(src: &str) -> Result<Lookup, crate::Error> {
     if src.starts_with("http") {
         return Ok(Lookup::URI(src.parse()?));
     }
@@ -240,9 +240,9 @@ fn parse_lookup<'a>(src: &'a str) -> Result<Lookup<'a>, crate::Error> {
         return Ok(Lookup::WebFinger { user, host });
     }
 
-    return Err(crate::Error::InternalStrStatic(
+    Err(crate::Error::InternalStrStatic(
         "Unrecognized lookup format",
-    ));
+    ))
 }
 
 async fn route_unstable_actors_lookup(
@@ -721,7 +721,7 @@ async fn get_comments_replies<'a>(
 
     let mut result = HashMap::new();
     for (parent, comment) in comments {
-        result.entry(parent).or_insert(Vec::new()).push(comment);
+        result.entry(parent).or_insert_with(Vec::new).push(comment);
     }
 
     Ok(result)
@@ -943,7 +943,7 @@ async fn route_unstable_posts_delete(
         )
         .await?;
     match row {
-        None => return Ok(crate::empty_response()), // already gone
+        None => Ok(crate::empty_response()), // already gone
         Some(row) => {
             let author: Option<i64> = row.get(0);
             if author != Some(user) {
@@ -1336,7 +1336,7 @@ async fn route_unstable_comments_get(
                 get_comments_replies(&[comment_id], include_your_for, 3, &db, &ctx.local_hostname)
                     .await?
                     .remove(&comment_id)
-                    .unwrap_or_else(|| Vec::new());
+                    .unwrap_or_else(Vec::new);
 
             let output = RespCommentInfo {
                 base: RespPostCommentInfo {
@@ -1380,7 +1380,7 @@ async fn route_unstable_comments_delete(
         )
         .await?;
     match row {
-        None => return Ok(crate::empty_response()), // already gone
+        None => Ok(crate::empty_response()), // already gone
         Some(row) => {
             let author: Option<i64> = row.get(0);
             if author != Some(user) {
@@ -1902,7 +1902,7 @@ async fn route_unstable_users_things_list(
         .iter()
         .map(|row| {
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
-            let created = created.to_rfc3339().into();
+            let created = created.to_rfc3339();
 
             if row.get(0) {
                 let community_local = row.get(7);

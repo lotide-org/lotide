@@ -88,9 +88,9 @@ pub fn route_apub() -> crate::RouteNode<()> {
         )
 }
 
-fn get_object_id<'a>(
-    aao_props: &'a activitystreams::activity::properties::ActorAndObjectProperties,
-) -> Result<Option<Cow<'a, activitystreams::primitives::XsdAnyUri>>, crate::Error> {
+fn get_object_id(
+    aao_props: &activitystreams::activity::properties::ActorAndObjectProperties,
+) -> Result<Option<Cow<'_, activitystreams::primitives::XsdAnyUri>>, crate::Error> {
     match aao_props.get_object_xsd_any_uri() {
         Some(uri) => Ok(Some(Cow::Borrowed(uri))),
         None => match aao_props.get_object_base_box() {

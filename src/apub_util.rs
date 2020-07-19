@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-pub const ACTIVITY_TYPE: &'static str = "application/activity+json";
+pub const ACTIVITY_TYPE: &str = "application/activity+json";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -491,7 +491,7 @@ pub fn spawn_enqueue_send_community_follow(
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: (&community_inbox).into(),
             sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
-            object: serde_json::to_string(&follow)?.into(),
+            object: serde_json::to_string(&follow)?,
         })
         .await?;
 
@@ -551,7 +551,7 @@ pub fn spawn_enqueue_send_community_follow_undo(
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: (&community_inbox).into(),
             sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
-            object: serde_json::to_string(&undo)?.into(),
+            object: serde_json::to_string(&undo)?,
         })
         .await?;
 
@@ -776,7 +776,7 @@ pub fn spawn_enqueue_send_community_follow_accept(
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: (&follower_inbox).into(),
             sign_as: Some(crate::ActorLocalRef::Community(local_community)),
-            object: body.into(),
+            object: body,
         })
         .await?;
 
@@ -819,7 +819,7 @@ pub fn post_to_ap(
                 ))?
                 .set_url_xsd_any_uri(href)?
                 .set_summary_xsd_string(post.title)?
-                .set_published(post.created.clone())?
+                .set_published(*post.created)?
                 .set_to_xsd_any_uri(community_ap_id)?
                 .set_cc_xsd_any_uri(activitystreams::public())?;
 
@@ -839,7 +839,7 @@ pub fn post_to_ap(
                     &host_url_apub,
                 ))?
                 .set_summary_xsd_string(post.title)?
-                .set_published(post.created.clone())?
+                .set_published(*post.created)?
                 .set_to_xsd_any_uri(community_ap_id)?
                 .set_cc_xsd_any_uri(activitystreams::public())?;
 
@@ -893,7 +893,7 @@ pub fn local_comment_to_ap(
             comment.author.unwrap(),
             &host_url_apub,
         ))?
-        .set_published(comment.created.clone())?
+        .set_published(comment.created)?
         .set_in_reply_to_xsd_any_uri(parent_ap_id.unwrap_or(post_ap_id))?;
 
     println!("{:?}", comment);
@@ -972,7 +972,7 @@ pub fn spawn_enqueue_send_local_post_to_community(
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: (&community_inbox).into(),
             sign_as: Some(crate::ActorLocalRef::Person(post.author.unwrap())),
-            object: serde_json::to_string(&create)?.into(),
+            object: serde_json::to_string(&create)?,
         })
         .await?;
 
@@ -1169,7 +1169,7 @@ pub fn spawn_enqueue_send_comment_to_community(
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: community_ap_inbox.into(),
             sign_as: Some(crate::ActorLocalRef::Person(author)),
-            object: serde_json::to_string(&create)?.into(),
+            object: serde_json::to_string(&create)?,
         })
         .await?;
 

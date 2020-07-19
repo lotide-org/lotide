@@ -287,7 +287,7 @@ pub fn render_markdown(src: &str) -> String {
     output
 }
 
-pub fn on_community_add_post<'a>(
+pub fn on_community_add_post(
     community: i64,
     post_local_id: i64,
     post_ap_id: &str,
