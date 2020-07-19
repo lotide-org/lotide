@@ -230,10 +230,15 @@ pub async fn fetch_actor(
                 .public_key
                 .as_ref()
                 .map(|key| key.public_key_pem.as_bytes());
+            let description = person
+                .as_ref()
+                .get_summary_xsd_string()
+                .map(|x| x.as_str())
+                .unwrap_or("");
 
             let id = db.query_one(
-                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5 RETURNING id",
-                &[&username, &ap_id, &inbox, &shared_inbox, &public_key],
+                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, description) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, description=$6 RETURNING id",
+                &[&username, &ap_id, &inbox, &shared_inbox, &public_key, &description],
             ).await?.get(0);
 
             Ok(ActorLocalInfo::User {

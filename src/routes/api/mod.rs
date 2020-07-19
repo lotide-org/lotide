@@ -47,6 +47,14 @@ struct RespMinimalPostInfo<'a> {
 }
 
 #[derive(Serialize)]
+struct RespUserInfo<'a> {
+    #[serde(flatten)]
+    base: RespMinimalAuthorInfo<'a>,
+
+    description: &'a str,
+}
+
+#[derive(Serialize)]
 struct RespPostListPost<'a> {
     id: i64,
     title: &'a str,
@@ -175,13 +183,15 @@ pub fn route_api() -> crate::RouteNode<()> {
                     .with_handler_async("POST", route_unstable_users_create)
                     .with_child(
                         "me",
-                        crate::RouteNode::new().with_child(
-                            "following:posts",
-                            crate::RouteNode::new().with_handler_async(
-                                "GET",
-                                route_unstable_users_me_following_posts_list,
+                        crate::RouteNode::new()
+                            .with_handler_async("PATCH", route_unstable_users_me_patch)
+                            .with_child(
+                                "following:posts",
+                                crate::RouteNode::new().with_handler_async(
+                                    "GET",
+                                    route_unstable_users_me_following_posts_list,
+                                ),
                             ),
-                        ),
                     )
                     .with_child_parse::<i64, _>(
                         crate::RouteNode::new()
@@ -1770,6 +1780,36 @@ async fn route_unstable_users_create(
         .body(serde_json::to_vec(&output)?.into())?)
 }
 
+async fn route_unstable_users_me_patch(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    #[derive(Deserialize)]
+    struct UsersEditBody<'a> {
+        description: Option<Cow<'a, str>>,
+    }
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: UsersEditBody = serde_json::from_slice(&body)?;
+
+    if let Some(description) = body.description {
+        db.execute(
+            "UPDATE person SET description=$1 WHERE id=$2",
+            &[&description, &user],
+        )
+        .await?;
+
+        // TODO maybe send this somewhere?
+    }
+
+    Ok(crate::empty_response())
+}
+
 async fn route_unstable_users_me_following_posts_list(
     _: (),
     ctx: Arc<crate::RouteContext>,
@@ -1808,7 +1848,7 @@ async fn route_unstable_users_get(
 
     let row = db
         .query_opt(
-            "SELECT username, local, ap_id FROM person WHERE id=$1",
+            "SELECT username, local, ap_id, description FROM person WHERE id=$1",
             &[&user_id],
         )
         .await?;
@@ -1827,6 +1867,11 @@ async fn route_unstable_users_get(
         local,
         username: Cow::Borrowed(row.get(0)),
         host: crate::get_actor_host_or_unknown(local, row.get(2), &ctx.local_hostname),
+    };
+
+    let info = RespUserInfo {
+        base: info,
+        description: row.get(3),
     };
 
     let body = serde_json::to_vec(&info)?;

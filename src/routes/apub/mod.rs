@@ -127,7 +127,7 @@ async fn handler_users_get(
 
     match db
         .query_opt(
-            "SELECT username, local, public_key FROM person WHERE id=$1",
+            "SELECT username, local, public_key, description FROM person WHERE id=$1",
             &[&user_id],
         )
         .await?
@@ -157,6 +157,8 @@ async fn handler_users_get(
                         }
                     });
 
+            let description: &str = row.get(3);
+
             let user_ap_id =
                 crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
 
@@ -167,7 +169,8 @@ async fn handler_users_get(
             ])?;
             info.as_mut()
                 .set_id(user_ap_id.as_ref())?
-                .set_name_xsd_string(username.as_ref())?;
+                .set_name_xsd_string(username.as_ref())?
+                .set_summary_xsd_string(description)?;
 
             let mut endpoints = activitystreams::endpoint::EndpointProperties::default();
             endpoints.set_shared_inbox(format!("{}/inbox", ctx.host_url_apub))?;
