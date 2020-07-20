@@ -1,3 +1,4 @@
+use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use activitystreams::ext::Extensible;
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -9,7 +10,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
     crate::RouteNode::new()
         .with_child(
             "users",
-            crate::RouteNode::new().with_child_parse::<i64, _>(
+            crate::RouteNode::new().with_child_parse::<UserLocalID, _>(
                 crate::RouteNode::new()
                     .with_handler_async("GET", handler_users_get)
                     .with_child(
@@ -21,7 +22,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
         )
         .with_child(
             "comments",
-            crate::RouteNode::new().with_child_parse::<i64, _>(
+            crate::RouteNode::new().with_child_parse::<CommentLocalID, _>(
                 crate::RouteNode::new()
                     .with_handler_async("GET", handler_comments_get)
                     .with_child(
@@ -36,7 +37,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
                     )
                     .with_child(
                         "likes",
-                        crate::RouteNode::new().with_child_parse::<i64, _>(
+                        crate::RouteNode::new().with_child_parse::<UserLocalID, _>(
                             crate::RouteNode::new()
                                 .with_handler_async("GET", handler_comments_likes_get),
                         ),
@@ -60,7 +61,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
         .with_child("inbox", route_inbox())
         .with_child(
             "posts",
-            crate::RouteNode::new().with_child_parse::<i64, _>(
+            crate::RouteNode::new().with_child_parse::<PostLocalID, _>(
                 crate::RouteNode::new()
                     .with_handler_async("GET", handler_posts_get)
                     .with_child(
@@ -73,7 +74,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
                     )
                     .with_child(
                         "likes",
-                        crate::RouteNode::new().with_child_parse::<i64, _>(
+                        crate::RouteNode::new().with_child_parse::<UserLocalID, _>(
                             crate::RouteNode::new()
                                 .with_handler_async("GET", handler_posts_likes_get),
                         ),
@@ -118,7 +119,7 @@ pub fn route_inbox() -> crate::RouteNode<()> {
 }
 
 async fn handler_users_get(
-    params: (i64,),
+    params: (UserLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -128,7 +129,7 @@ async fn handler_users_get(
     match db
         .query_opt(
             "SELECT username, local, public_key, description FROM person WHERE id=$1",
-            &[&user_id],
+            &[&user_id.raw()],
         )
         .await?
     {
@@ -245,10 +246,10 @@ async fn inbox_common(
 
             let actor_ap_id = actor_ap_id.as_str();
 
-            let community_local_id: Option<i64> = {
+            let community_local_id: Option<CommunityLocalID> = {
                 db.query_opt("SELECT id FROM community WHERE ap_id=$1", &[&actor_ap_id])
                     .await?
-                    .map(|row| row.get(0))
+                    .map(|row| CommunityLocalID(row.get(0)))
             };
 
             if let Some(community_local_id) = community_local_id {
@@ -264,7 +265,7 @@ async fn inbox_common(
                         let next_expected = format!("{}/followers/", community_local_id);
                         if remaining.starts_with(&next_expected) {
                             let remaining = &remaining[next_expected.len()..];
-                            let follower_local_id: i64 = remaining.parse()?;
+                            let follower_local_id: UserLocalID = remaining.parse()?;
 
                             db.execute(
                                 "UPDATE community_follow SET accepted=TRUE WHERE community=$1 AND follower=$2",
@@ -294,7 +295,7 @@ async fn inbox_common(
                     &[&community_ap_id.as_str()],
                 )
                 .await?
-                .map(|row| (row.get(0), row.get(1)));
+                .map(|row| (CommunityLocalID(row.get(0)), row.get(1)));
 
             if let Some((community_local_id, community_is_local)) = community_local_info {
                 crate::apub_util::require_containment(
@@ -455,7 +456,7 @@ pub async fn inbox_common_create(
 }
 
 async fn handler_users_inbox_post(
-    _: (i64,),
+    _: (UserLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -463,7 +464,7 @@ async fn handler_users_inbox_post(
 }
 
 async fn handler_comments_get(
-    params: (i64,),
+    params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -509,9 +510,9 @@ async fn handler_comments_get(
                 return Ok(resp);
             }
 
-            let post_local_id: i64 = row.get(2);
+            let post_local_id = PostLocalID(row.get(2));
 
-            let community_local_id: i64 = row.get(8);
+            let community_local_id = CommunityLocalID(row.get(8));
 
             let community_ap_id = if row.get(9) {
                 crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
@@ -525,14 +526,14 @@ async fn handler_comments_get(
                 row.get(7)
             };
 
-            let parent_local_id = row.get(5);
+            let parent_local_id = row.get::<_, Option<_>>(5).map(CommentLocalID);
 
             let content_text = row.get(1);
             let content_markdown = row.get(20);
             let content_html = row.get(21);
 
             let info = crate::CommentInfo {
-                author: row.get(0),
+                author: Some(UserLocalID(row.get(0))),
                 created: row.get(3),
                 content_text,
                 content_markdown,
@@ -555,7 +556,7 @@ async fn handler_comments_get(
                     match row.get(14) {
                         Some(post_author_local) => {
                             if post_author_local {
-                                Some(crate::apub_util::get_local_person_apub_id(row.get(13), &ctx.host_url_apub))
+                                Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(13)), &ctx.host_url_apub))
                             } else {
                                 row.get(15)
                             }
@@ -567,7 +568,7 @@ async fn handler_comments_get(
                     match row.get(17) {
                         Some(parent_author_local) => {
                             if parent_author_local {
-                                Some(crate::apub_util::get_local_person_apub_id(row.get(16), &ctx.host_url_apub))
+                                Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(16)), &ctx.host_url_apub))
                             } else {
                                 row.get(18)
                             }
@@ -593,7 +594,7 @@ async fn handler_comments_get(
 }
 
 async fn handler_comments_create_get(
-    params: (i64,),
+    params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -628,9 +629,9 @@ async fn handler_comments_create_get(
                 )));
             }
 
-            let post_local_id: i64 = row.get(2);
+            let post_local_id = PostLocalID(row.get(2));
 
-            let community_local_id: i64 = row.get(8);
+            let community_local_id = CommunityLocalID(row.get(8));
 
             let community_ap_id = if row.get(9) {
                 crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
@@ -644,14 +645,14 @@ async fn handler_comments_create_get(
                 row.get(7)
             };
 
-            let parent_local_id = row.get(5);
+            let parent_local_id = row.get::<_, Option<_>>(5).map(CommentLocalID);
 
             let content_text = row.get(1);
             let content_markdown = row.get(20);
             let content_html = row.get(21);
 
             let info = crate::CommentInfo {
-                author: row.get(0),
+                author: Some(UserLocalID(row.get(0))),
                 created: row.get(3),
                 content_text,
                 content_markdown,
@@ -674,7 +675,7 @@ async fn handler_comments_create_get(
                     match row.get(14) {
                         Some(post_author_local) => {
                             if post_author_local {
-                                Some(crate::apub_util::get_local_person_apub_id(row.get(13), &ctx.host_url_apub))
+                                Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(13)), &ctx.host_url_apub))
                             } else {
                                 row.get(15)
                             }
@@ -686,7 +687,7 @@ async fn handler_comments_create_get(
                     match row.get(17) {
                         Some(parent_author_local) => {
                             if parent_author_local {
-                                Some(crate::apub_util::get_local_person_apub_id(row.get(16), &ctx.host_url_apub))
+                                Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(16)), &ctx.host_url_apub))
                             } else {
                                 row.get(18)
                             }
@@ -712,7 +713,7 @@ async fn handler_comments_create_get(
 }
 
 async fn handler_comments_delete_get(
-    params: (i64,),
+    params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -747,7 +748,7 @@ async fn handler_comments_delete_get(
                 )));
             }
 
-            let author = row.get(0);
+            let author = UserLocalID(row.get(0));
 
             let body = crate::apub_util::local_comment_delete_to_ap(
                 comment_id,
@@ -769,7 +770,7 @@ async fn handler_comments_delete_get(
 }
 
 async fn handler_comments_likes_get(
-    params: (i64, i64),
+    params: (CommentLocalID, UserLocalID),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -780,7 +781,7 @@ async fn handler_comments_likes_get(
     let like_row = db
         .query_opt(
             "SELECT local FROM reply_like WHERE reply=$1 AND person=$2",
-            &[&comment_id, &user_id],
+            &[&comment_id, &user_id.raw()],
         )
         .await?;
     if let Some(like_row) = like_row {
@@ -842,8 +843,8 @@ async fn handler_comment_like_undos_get(
         .await?;
 
     if let Some(undo_row) = undo_row {
-        let comment_id = undo_row.get(0);
-        let user_id = undo_row.get(1);
+        let comment_id = CommentLocalID(undo_row.get(0));
+        let user_id = UserLocalID(undo_row.get(1));
 
         let undo = crate::apub_util::local_comment_like_undo_to_ap(
             undo_id,
@@ -881,8 +882,8 @@ async fn handler_community_follow_undos_get(
         .await?;
 
     if let Some(undo_row) = undo_row {
-        let community_id = undo_row.get(0);
-        let user_id = undo_row.get(1);
+        let community_id = CommunityLocalID(undo_row.get(0));
+        let user_id = UserLocalID(undo_row.get(1));
 
         let undo = crate::apub_util::local_community_follow_undo_to_ap(
             undo_id,
@@ -913,17 +914,18 @@ async fn handler_inbox_post(
 }
 
 async fn handler_posts_get(
-    params: (i64,),
+    params: (PostLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (post_id,) = params;
+
     let db = ctx.db_pool.get().await?;
 
     match db
         .query_opt(
             "SELECT author, href, title, created, community, local, deleted, had_href, content_text, content_markdown, content_html, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
-            &[&post_id],
+            &[&post_id.raw()],
         )
         .await?
     {
@@ -961,7 +963,7 @@ async fn handler_posts_get(
                 return Ok(resp);
             }
 
-            let community_local_id = row.get(4);
+            let community_local_id = CommunityLocalID(row.get(4));
 
             let community_ap_id = match row.get(11) {
                 Some(ap_id) => ap_id,
@@ -972,7 +974,7 @@ async fn handler_posts_get(
             };
 
             let post_info = crate::PostInfo {
-                author: row.get(0),
+                author: Some(UserLocalID(row.get(0))),
                 community: community_local_id,
                 created: &row.get(3),
                 href: row.get(1),
@@ -999,17 +1001,18 @@ async fn handler_posts_get(
 }
 
 async fn handler_posts_create_get(
-    params: (i64,),
+    params: (PostLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (post_id,) = params;
+
     let db = ctx.db_pool.get().await?;
 
     match db
         .query_opt(
             "SELECT author, href, title, created, community, local, deleted, content_text, content_markdown, content_html, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
-            &[&post_id],
+            &[&post_id.raw()],
         )
         .await?
     {
@@ -1034,7 +1037,7 @@ async fn handler_posts_create_get(
                 )));
             }
 
-            let community_local_id = row.get(4);
+            let community_local_id = CommunityLocalID(row.get(4));
 
             let community_ap_id = match row.get(10) {
                 Some(ap_id) => ap_id,
@@ -1045,7 +1048,7 @@ async fn handler_posts_create_get(
             };
 
             let post_info = crate::PostInfo {
-                author: row.get(0),
+                author: Some(UserLocalID(row.get(0))),
                 community: community_local_id,
                 created: &row.get(3),
                 href: row.get(1),
@@ -1072,17 +1075,18 @@ async fn handler_posts_create_get(
 }
 
 async fn handler_posts_delete_get(
-    params: (i64,),
+    params: (PostLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (post_id,) = params;
+
     let db = ctx.db_pool.get().await?;
 
     match db
         .query_opt(
             "SELECT author, local, deleted FROM post WHERE id=$1",
-            &[&post_id],
+            &[&post_id.raw()],
         )
         .await?
     {
@@ -1107,7 +1111,7 @@ async fn handler_posts_delete_get(
                 )));
             }
 
-            let author = row.get(0);
+            let author = UserLocalID(row.get(0));
 
             let body =
                 crate::apub_util::local_post_delete_to_ap(post_id, author, &ctx.host_url_apub)?;
@@ -1126,7 +1130,7 @@ async fn handler_posts_delete_get(
 }
 
 async fn handler_posts_likes_get(
-    params: (i64, i64),
+    params: (PostLocalID, UserLocalID),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1137,7 +1141,7 @@ async fn handler_posts_likes_get(
     let like_row = db
         .query_opt(
             "SELECT local FROM post_like WHERE post=$1 AND person=$2",
-            &[&post_id, &user_id],
+            &[&post_id.raw(), &user_id],
         )
         .await?;
     if let Some(like_row) = like_row {
@@ -1145,7 +1149,10 @@ async fn handler_posts_likes_get(
 
         if local {
             let row = db
-                .query_one("SELECT local, ap_id FROM post WHERE id=$1", &[&post_id])
+                .query_one(
+                    "SELECT local, ap_id FROM post WHERE id=$1",
+                    &[&post_id.raw()],
+                )
                 .await?;
             let post_local = row.get(0);
             let post_ap_id = if post_local {
@@ -1199,8 +1206,8 @@ async fn handler_post_like_undos_get(
         .await?;
 
     if let Some(undo_row) = undo_row {
-        let post_id = undo_row.get(0);
-        let user_id = undo_row.get(1);
+        let post_id = PostLocalID(undo_row.get(0));
+        let user_id = UserLocalID(undo_row.get(1));
 
         let undo = crate::apub_util::local_post_like_undo_to_ap(
             undo_id,

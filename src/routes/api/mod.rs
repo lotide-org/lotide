@@ -1,4 +1,5 @@
 use crate::routes::well_known::{FingerRequestQuery, FingerResponse};
+use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -26,7 +27,7 @@ struct MaybeIncludeYour {
 
 #[derive(Serialize)]
 struct RespMinimalAuthorInfo<'a> {
-    id: i64,
+    id: UserLocalID,
     username: Cow<'a, str>,
     local: bool,
     host: Cow<'a, str>,
@@ -35,7 +36,7 @@ struct RespMinimalAuthorInfo<'a> {
 
 #[derive(Serialize)]
 struct RespMinimalCommunityInfo<'a> {
-    id: i64,
+    id: CommunityLocalID,
     name: &'a str,
     local: bool,
     host: Cow<'a, str>,
@@ -44,7 +45,7 @@ struct RespMinimalCommunityInfo<'a> {
 
 #[derive(Serialize)]
 struct RespMinimalPostInfo<'a> {
-    id: i64,
+    id: PostLocalID,
     title: &'a str,
 }
 
@@ -58,7 +59,7 @@ struct RespUserInfo<'a> {
 
 #[derive(Serialize)]
 struct RespPostListPost<'a> {
-    id: i64,
+    id: PostLocalID,
     title: &'a str,
     href: Option<&'a str>,
     content_text: Option<&'a str>,
@@ -70,7 +71,7 @@ struct RespPostListPost<'a> {
 
 #[derive(Serialize)]
 struct RespPostCommentInfo<'a> {
-    id: i64,
+    id: CommentLocalID,
     author: Option<RespMinimalAuthorInfo<'a>>,
     created: Cow<'a, str>,
     content_text: Option<Cow<'a, str>>,
@@ -87,7 +88,7 @@ struct RespPostCommentInfo<'a> {
 enum RespThingInfo<'a> {
     #[serde(rename = "post")]
     Post {
-        id: i64,
+        id: PostLocalID,
         href: Option<&'a str>,
         title: &'a str,
         created: String,
@@ -95,7 +96,7 @@ enum RespThingInfo<'a> {
     },
     #[serde(rename = "comment")]
     Comment {
-        id: i64,
+        id: CommentLocalID,
         content_text: Option<&'a str>,
         content_html: Option<&'a str>,
         created: String,
@@ -137,7 +138,7 @@ pub fn route_api() -> crate::RouteNode<()> {
                 crate::RouteNode::new()
                     .with_handler_async("GET", route_unstable_posts_list)
                     .with_handler_async("POST", route_unstable_posts_create)
-                    .with_child_parse::<i64, _>(
+                    .with_child_parse::<PostLocalID, _>(
                         crate::RouteNode::new()
                             .with_handler_async("GET", route_unstable_posts_get)
                             .with_handler_async("DELETE", route_unstable_posts_delete)
@@ -162,7 +163,7 @@ pub fn route_api() -> crate::RouteNode<()> {
             )
             .with_child(
                 "comments",
-                crate::RouteNode::new().with_child_parse::<i64, _>(
+                crate::RouteNode::new().with_child_parse::<CommentLocalID, _>(
                     crate::RouteNode::new()
                         .with_handler_async("GET", route_unstable_comments_get)
                         .with_handler_async("DELETE", route_unstable_comments_delete)
@@ -199,7 +200,7 @@ pub fn route_api() -> crate::RouteNode<()> {
                                 ),
                             ),
                     )
-                    .with_child_parse::<i64, _>(
+                    .with_child_parse::<UserLocalID, _>(
                         crate::RouteNode::new()
                             .with_handler_async("GET", route_unstable_users_get)
                             .with_child(
@@ -213,7 +214,7 @@ pub fn route_api() -> crate::RouteNode<()> {
 }
 
 async fn insert_token(
-    user_id: i64,
+    user_id: UserLocalID,
     db: &tokio_postgres::Client,
 ) -> Result<uuid::Uuid, tokio_postgres::Error> {
     let token = uuid::Uuid::new_v4();
@@ -361,7 +362,7 @@ async fn route_unstable_logins_create(
             ))
         })?;
 
-    let id: i64 = row.get(0);
+    let id = UserLocalID(row.get(0));
     let passhash: Option<String> = row.get(1);
 
     let passhash = passhash.ok_or_else(|| {
@@ -518,7 +519,7 @@ async fn route_unstable_posts_create(
 
     #[derive(Deserialize)]
     struct PostsCreateBody {
-        community: i64,
+        community: CommunityLocalID,
         href: Option<String>,
         content_markdown: Option<String>,
         content_text: Option<String>,
@@ -560,7 +561,7 @@ async fn route_unstable_posts_create(
         &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html],
     ).await?;
 
-    let id = res_row.get(0);
+    let id = PostLocalID(res_row.get(0));
     let created = res_row.get(1);
 
     let post = crate::PostInfoOwned {
@@ -603,7 +604,7 @@ async fn route_unstable_posts_create(
 
 async fn apply_comments_replies<'a, T>(
     comments: &mut Vec<(T, RespPostCommentInfo<'a>)>,
-    include_your_for: Option<i64>,
+    include_your_for: Option<UserLocalID>,
     depth: u8,
     db: &tokio_postgres::Client,
     local_hostname: &'a str,
@@ -631,9 +632,9 @@ async fn apply_comments_replies<'a, T>(
         )
         .await?;
 
-        let with_replies: HashSet<i64> = stream
+        let with_replies: HashSet<CommentLocalID> = stream
             .map_err(crate::Error::from)
-            .map_ok(|row| row.get::<_, i64>(0))
+            .map_ok(|row| CommentLocalID(row.get(0)))
             .try_collect()
             .await?;
 
@@ -646,15 +647,19 @@ async fn apply_comments_replies<'a, T>(
 }
 
 fn get_comments_replies_box<'a: 'b, 'b>(
-    parents: &'b [i64],
-    include_your_for: Option<i64>,
+    parents: &'b [CommentLocalID],
+    include_your_for: Option<UserLocalID>,
     depth: u8,
     db: &'b tokio_postgres::Client,
     local_hostname: &'a str,
 ) -> std::pin::Pin<
     Box<
-        dyn Future<Output = Result<HashMap<i64, Vec<RespPostCommentInfo<'a>>>, crate::Error>>
-            + Send
+        dyn Future<
+                Output = Result<
+                    HashMap<CommentLocalID, Vec<RespPostCommentInfo<'a>>>,
+                    crate::Error,
+                >,
+            > + Send
             + 'b,
     >,
 > {
@@ -668,12 +673,12 @@ fn get_comments_replies_box<'a: 'b, 'b>(
 }
 
 async fn get_comments_replies<'a>(
-    parents: &[i64],
-    include_your_for: Option<i64>,
+    parents: &[CommentLocalID],
+    include_your_for: Option<UserLocalID>,
     depth: u8,
     db: &tokio_postgres::Client,
     local_hostname: &'a str,
-) -> Result<HashMap<i64, Vec<RespPostCommentInfo<'a>>>, crate::Error> {
+) -> Result<HashMap<CommentLocalID, Vec<RespPostCommentInfo<'a>>>, crate::Error> {
     use futures::TryStreamExt;
 
     let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted";
@@ -695,15 +700,15 @@ async fn get_comments_replies<'a>(
     let mut comments: Vec<_> = stream
         .map_err(crate::Error::from)
         .and_then(|row| {
-            let id: i64 = row.get(0);
+            let id = CommentLocalID(row.get(0));
             let content_text: Option<String> = row.get(2);
             let content_html: Option<String> = row.get(5);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
-            let parent: i64 = row.get(4);
+            let parent = CommentLocalID(row.get(4));
 
             let author_username: Option<String> = row.get(6);
             let author = author_username.map(|author_username| {
-                let author_id: i64 = row.get(1);
+                let author_id = UserLocalID(row.get(1));
                 let author_local: bool = row.get(7);
                 let author_ap_id: Option<&str> = row.get(8);
 
@@ -752,8 +757,8 @@ async fn get_comments_replies<'a>(
 }
 
 async fn get_post_comments<'a>(
-    post_id: i64,
-    include_your_for: Option<i64>,
+    post_id: PostLocalID,
+    include_your_for: Option<UserLocalID>,
     db: &tokio_postgres::Client,
     local_hostname: &'a str,
 ) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
@@ -778,14 +783,14 @@ async fn get_post_comments<'a>(
     let mut comments: Vec<_> = stream
         .map_err(crate::Error::from)
         .and_then(|row| {
-            let id: i64 = row.get(0);
+            let id = CommentLocalID(row.get(0));
             let content_text: Option<String> = row.get(2);
             let content_html: Option<String> = row.get(4);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
 
             let author_username: Option<String> = row.get(5);
             let author = author_username.map(|author_username| {
-                let author_id: i64 = row.get(1);
+                let author_id = UserLocalID(row.get(1));
                 let author_local: bool = row.get(6);
                 let author_ap_id: Option<&str> = row.get(7);
 
@@ -829,7 +834,7 @@ async fn get_post_comments<'a>(
 }
 
 async fn route_unstable_posts_get(
-    params: (i64,),
+    params: (PostLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -890,7 +895,7 @@ async fn route_unstable_posts_get(
             let content_html = row.get(5);
             let title = row.get(3);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
-            let community_id = row.get(6);
+            let community_id = CommunityLocalID(row.get(6));
             let community_name = row.get(7);
             let community_local = row.get(8);
             let community_ap_id = row.get(9);
@@ -900,7 +905,7 @@ async fn route_unstable_posts_get(
                     let author_local = row.get(11);
                     let author_ap_id = row.get(12);
                     Some(RespMinimalAuthorInfo {
-                        id: row.get(0),
+                        id: UserLocalID(row.get(0)),
                         username: Cow::Borrowed(author_username),
                         local: author_local,
                         host: crate::get_actor_host_or_unknown(
@@ -954,7 +959,7 @@ async fn route_unstable_posts_get(
 }
 
 async fn route_unstable_posts_delete(
-    params: (i64,),
+    params: (PostLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -973,7 +978,7 @@ async fn route_unstable_posts_delete(
     match row {
         None => Ok(crate::empty_response()), // already gone
         Some(row) => {
-            let author: Option<i64> = row.get(0);
+            let author = row.get::<_, Option<_>>(0).map(UserLocalID);
             if author != Some(user) {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::FORBIDDEN,
@@ -984,7 +989,7 @@ async fn route_unstable_posts_delete(
             db.execute("UPDATE post SET had_href=(href IS NOT NULL), href=NULL, title='[deleted]', content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE id=$1", &[&post_id]).await?;
 
             crate::spawn_task(async move {
-                let community: Option<i64> = row.get(1);
+                let community = row.get::<_, Option<_>>(1).map(CommunityLocalID);
                 if let Some(community) = community {
                     let delete_ap = crate::apub_util::local_post_delete_to_ap(
                         post_id,
@@ -1027,7 +1032,7 @@ async fn route_unstable_posts_delete(
 }
 
 async fn route_unstable_posts_like(
-    params: (i64,),
+    params: (PostLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1095,7 +1100,7 @@ async fn route_unstable_posts_like(
                 }
 
                 if community_local == Some(true) {
-                    let community_local_id = row.get(2);
+                    let community_local_id = CommunityLocalID(row.get(2));
                     crate::apub_util::enqueue_forward_to_community_followers(
                         community_local_id,
                         body,
@@ -1113,7 +1118,7 @@ async fn route_unstable_posts_like(
 }
 
 async fn route_unstable_posts_unlike(
-    params: (i64,),
+    params: (PostLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1197,7 +1202,7 @@ async fn route_unstable_posts_unlike(
                 }
 
                 if community_local == Some(true) {
-                    let community_local_id = row.get(1);
+                    let community_local_id = CommunityLocalID(row.get(1));
                     crate::apub_util::enqueue_forward_to_community_followers(
                         community_local_id,
                         body,
@@ -1215,7 +1220,7 @@ async fn route_unstable_posts_unlike(
 }
 
 async fn route_unstable_posts_replies_create(
-    params: (i64,),
+    params: (PostLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1259,7 +1264,7 @@ async fn route_unstable_posts_replies_create(
         &[&post_id, &user, &content_text, &content_markdown, &content_html],
     ).await?;
 
-    let reply_id: i64 = row.get(0);
+    let reply_id = CommentLocalID(row.get(0));
     let created = row.get(1);
 
     let comment = crate::CommentInfo {
@@ -1282,7 +1287,7 @@ async fn route_unstable_posts_replies_create(
 }
 
 async fn route_unstable_comments_get(
-    params: (i64,),
+    params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1340,7 +1345,7 @@ async fn route_unstable_comments_get(
                     let author_local = row.get(7);
                     let author_ap_id = row.get(8);
                     Some(RespMinimalAuthorInfo {
-                        id: row.get(0),
+                        id: UserLocalID(row.get(0)),
                         username: Cow::Borrowed(author_username),
                         local: author_local,
                         host: crate::get_actor_host_or_unknown(
@@ -1356,7 +1361,7 @@ async fn route_unstable_comments_get(
 
             let post = match row.get(9) {
                 Some(post_title) => Some(RespMinimalPostInfo {
-                    id: row.get(1),
+                    id: PostLocalID(row.get(1)),
                     title: post_title,
                 }),
                 None => None,
@@ -1393,7 +1398,7 @@ async fn route_unstable_comments_get(
 }
 
 async fn route_unstable_comments_delete(
-    params: (i64,),
+    params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1412,7 +1417,7 @@ async fn route_unstable_comments_delete(
     match row {
         None => Ok(crate::empty_response()), // already gone
         Some(row) => {
-            let author: Option<i64> = row.get(0);
+            let author = row.get::<_, Option<_>>(0).map(UserLocalID);
             if author != Some(user) {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::FORBIDDEN,
@@ -1427,7 +1432,7 @@ async fn route_unstable_comments_delete(
             .await?;
 
             crate::spawn_task(async move {
-                let community: Option<i64> = row.get(1);
+                let community = row.get::<_, Option<_>>(1).map(CommunityLocalID);
                 if let Some(community) = community {
                     let delete_ap = crate::apub_util::local_comment_delete_to_ap(
                         comment_id,
@@ -1470,7 +1475,7 @@ async fn route_unstable_comments_delete(
 }
 
 async fn route_unstable_comments_like(
-    params: (i64,),
+    params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1538,7 +1543,7 @@ async fn route_unstable_comments_like(
                 }
 
                 if community_local == Some(true) {
-                    let community_local_id = row.get(2);
+                    let community_local_id = CommunityLocalID(row.get(2));
                     crate::apub_util::enqueue_forward_to_community_followers(
                         community_local_id,
                         body,
@@ -1556,7 +1561,7 @@ async fn route_unstable_comments_like(
 }
 
 async fn route_unstable_comments_unlike(
-    params: (i64,),
+    params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1640,7 +1645,7 @@ async fn route_unstable_comments_unlike(
                 }
 
                 if community_local == Some(true) {
-                    let community_local_id = row.get(2);
+                    let community_local_id = CommunityLocalID(row.get(2));
                     crate::apub_util::enqueue_forward_to_community_followers(
                         community_local_id,
                         body,
@@ -1658,7 +1663,7 @@ async fn route_unstable_comments_unlike(
 }
 
 async fn route_unstable_comments_replies_create(
-    params: (i64,),
+    params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1696,7 +1701,7 @@ async fn route_unstable_comments_replies_create(
         },
     };
 
-    let post: i64 = match db
+    let post: PostLocalID = match db
         .query_opt("SELECT post FROM reply WHERE id=$1", &[&parent_id])
         .await?
     {
@@ -1704,7 +1709,7 @@ async fn route_unstable_comments_replies_create(
             hyper::StatusCode::NOT_FOUND,
             "No such comment",
         ))),
-        Some(row) => Ok(row.get(0)),
+        Some(row) => Ok(PostLocalID(row.get(0))),
     }?;
 
     let row = db.query_one(
@@ -1712,7 +1717,7 @@ async fn route_unstable_comments_replies_create(
         &[&post, &parent_id, &user, &content_text, &content_markdown, &content_html],
     ).await?;
 
-    let reply_id: i64 = row.get(0);
+    let reply_id = CommentLocalID(row.get(0));
     let created = row.get(1);
 
     let info = crate::CommentInfo {
@@ -1795,7 +1800,7 @@ async fn route_unstable_users_create(
 
         trans.commit().await?;
 
-        row.get::<_, i64>(0)
+        UserLocalID(row.get(0))
     };
 
     let output = if body.login {
@@ -1868,7 +1873,7 @@ async fn route_unstable_users_me_following_posts_list(
 }
 
 async fn route_unstable_users_get(
-    params: (i64,),
+    params: (UserLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1914,7 +1919,7 @@ async fn route_unstable_users_get(
 }
 
 async fn route_unstable_users_things_list(
-    params: (i64,),
+    params: (UserLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -1941,12 +1946,12 @@ async fn route_unstable_users_things_list(
                 let community_ap_id = row.get(8);
 
                 RespThingInfo::Post {
-                    id: row.get(1),
+                    id: PostLocalID(row.get(1)),
                     href: row.get(2),
                     title: row.get(3),
                     created,
                     community: RespMinimalCommunityInfo {
-                        id: row.get(5),
+                        id: CommunityLocalID(row.get(5)),
                         name: row.get(6),
                         local: community_local,
                         host: crate::get_actor_host_or_unknown(
@@ -1959,12 +1964,12 @@ async fn route_unstable_users_things_list(
                 }
             } else {
                 RespThingInfo::Comment {
-                    id: row.get(1),
+                    id: CommentLocalID(row.get(1)),
                     content_text: row.get(2),
                     content_html: row.get(3),
                     created,
                     post: RespMinimalPostInfo {
-                        id: row.get(5),
+                        id: PostLocalID(row.get(5)),
                         title: row.get(6),
                     },
                 }
@@ -1989,14 +1994,14 @@ async fn handle_common_posts_list(
     let posts: Vec<serde_json::Value> = stream
         .map_err(crate::Error::from)
         .and_then(|row| {
-            let id: i64 = row.get(0);
-            let author_id: Option<i64> = row.get(1);
+            let id = PostLocalID(row.get(0));
+            let author_id = row.get::<_, Option<_>>(1).map(UserLocalID);
             let href: Option<&str> = row.get(2);
             let content_text: Option<&str> = row.get(3);
             let content_html: Option<&str> = row.get(6);
             let title: &str = row.get(4);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
-            let community_id: i64 = row.get(7);
+            let community_id = CommunityLocalID(row.get(7));
             let community_name: &str = row.get(8);
             let community_local: bool = row.get(9);
             let community_ap_id: Option<&str> = row.get(10);
