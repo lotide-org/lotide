@@ -1,3 +1,4 @@
+use crate::{ActorLocalRef, CommunityLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -66,15 +67,9 @@ async fn handler_webfinger_get(
         serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
     enum LocalRef<'a> {
-        UserID(i64),
-        CommunityID(i64),
+        UserID(UserLocalID),
+        CommunityID(CommunityLocalID),
         Name(&'a str),
-    }
-
-    #[derive(Debug)]
-    enum LTActorType {
-        User,
-        Community,
     }
 
     let found_ref = if query.resource.starts_with(&ctx.host_url_apub) {
@@ -108,29 +103,29 @@ async fn handler_webfinger_get(
 
     let db = ctx.db_pool.get().await?;
 
-    let found: Option<(LTActorType, i64, Cow<'_, str>)> = match found_ref {
+    let found: Option<(ActorLocalRef, Cow<'_, str>)> = match found_ref {
         Some(LocalRef::UserID(id)) => {
             let row = db
                 .query_opt("SELECT username FROM person WHERE id=$1 AND local", &[&id])
                 .await?;
-            row.map(|row| (LTActorType::User, id, Cow::Owned(row.get(0))))
+            row.map(|row| (ActorLocalRef::Person(id), Cow::Owned(row.get(0))))
         }
         Some(LocalRef::CommunityID(id)) => {
             let row = db
                 .query_opt("SELECT name FROM community WHERE id=$1 AND local", &[&id])
                 .await?;
-            row.map(|row| (LTActorType::Community, id, Cow::Owned(row.get(0))))
+            row.map(|row| (ActorLocalRef::Community(id), Cow::Owned(row.get(0))))
         }
         Some(LocalRef::Name(name)) => {
             let row = db.query_opt("(SELECT FALSE, id, username FROM person WHERE LOWER(username)=LOWER($1) AND local) UNION ALL (SELECT TRUE, id, name FROM community WHERE LOWER(name)=LOWER($1) AND local) LIMIT 1", &[&name]).await?;
             row.map(|row| {
+                let id = row.get(1);
                 (
                     if row.get(0) {
-                        LTActorType::Community
+                        ActorLocalRef::Community(CommunityLocalID(id))
                     } else {
-                        LTActorType::User
+                        ActorLocalRef::Person(UserLocalID(id))
                     },
-                    row.get(1),
                     Cow::Owned(row.get(2)),
                 )
             })
@@ -142,13 +137,13 @@ async fn handler_webfinger_get(
         None => {
             crate::simple_response(hyper::StatusCode::NOT_FOUND, "Nothing found for that query")
         }
-        Some((ty, id, name)) => {
+        Some((actor_ref, name)) => {
             let subject = format!("acct:{}@{}", name, ctx.local_hostname);
-            let alias = match ty {
-                LTActorType::User => {
+            let alias = match actor_ref {
+                ActorLocalRef::Person(id) => {
                     crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub)
                 }
-                LTActorType::Community => {
+                ActorLocalRef::Community(id) => {
                     crate::apub_util::get_local_community_apub_id(id, &ctx.host_url_apub)
                 }
             };

@@ -1,6 +1,7 @@
 use crate::routes::api::{
     MaybeIncludeYour, RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost,
 };
+use crate::{CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -37,7 +38,7 @@ async fn route_unstable_communities_list(
     let output: Vec<_> = rows
         .iter()
         .map(|row| {
-            let id = row.get(0);
+            let id = CommunityLocalID(row.get(0));
             let local = row.get(1);
             let ap_id = row.get(2);
             let name = row.get(3);
@@ -112,13 +113,13 @@ async fn route_unstable_communities_create(
         let row = trans
             .query_one(
                 "INSERT INTO community (name, local, private_key, public_key, created_by) VALUES ($1, TRUE, $2, $3, $4) RETURNING id",
-                &[&body.name, &private_key, &public_key, &user],
+                &[&body.name, &private_key, &public_key, &user.raw()],
             )
             .await?;
 
         trans.commit().await?;
 
-        row.get::<_, i64>(0)
+        CommunityLocalID(row.get(0))
     };
 
     Ok(hyper::Response::builder()
@@ -129,7 +130,7 @@ async fn route_unstable_communities_create(
 }
 
 async fn route_unstable_communities_get(
-    params: (i64,),
+    params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -144,12 +145,12 @@ async fn route_unstable_communities_get(
             let user = crate::require_login(&req, &db).await?;
             db.query_opt(
                 "SELECT name, local, ap_id, description, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), (created_by IS NOT NULL AND created_by = $2) FROM community WHERE id=$1",
-                &[&community_id, &user],
+                &[&community_id.raw(), &user.raw()],
             ).await?
         } else {
             db.query_opt(
                 "SELECT name, local, ap_id, description FROM community WHERE id=$1",
-                &[&community_id],
+                &[&community_id.raw()],
             ).await?
         })
         .ok_or_else(|| {
@@ -202,7 +203,7 @@ async fn route_unstable_communities_get(
 }
 
 async fn route_unstable_communities_patch(
-    params: (i64,),
+    params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -233,7 +234,7 @@ async fn route_unstable_communities_patch(
                 "No such community",
             ))),
             Some(row) => {
-                let created_by: Option<i64> = row.get(0);
+                let created_by = row.get::<_, Option<_>>(0).map(UserLocalID);
                 if created_by == Some(user) {
                     Ok(())
                 } else {
@@ -260,7 +261,7 @@ async fn route_unstable_communities_patch(
 }
 
 async fn route_unstable_communities_follow(
-    params: (i64,),
+    params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -291,7 +292,7 @@ async fn route_unstable_communities_follow(
 
     let community_local: bool = row.get(0);
 
-    let row_count = db.execute("INSERT INTO community_follow (community, follower, local, accepted) VALUES ($1, $2, TRUE, $3) ON CONFLICT DO NOTHING", &[&community, &user, &community_local]).await?;
+    let row_count = db.execute("INSERT INTO community_follow (community, follower, local, accepted) VALUES ($1, $2, TRUE, $3) ON CONFLICT DO NOTHING", &[&community, &user.raw(), &community_local]).await?;
 
     let output =
         if community_local {
@@ -305,7 +306,7 @@ async fn route_unstable_communities_follow(
 
                     let row = db.query_one(
                     "SELECT accepted FROM community_follow WHERE community=$1 AND follower=$2",
-                    &[&community, &user],
+                    &[&community, &user.raw()],
                 ).await?;
 
                     RespYourFollowInfo {
@@ -318,7 +319,7 @@ async fn route_unstable_communities_follow(
                 let row = db
                     .query_one(
                         "SELECT accepted FROM community_follow WHERE community=$1 AND follower=$2",
-                        &[&community, &user],
+                        &[&community, &user.raw()],
                     )
                     .await?;
 
@@ -334,7 +335,7 @@ async fn route_unstable_communities_follow(
 }
 
 async fn route_unstable_communities_unfollow(
-    params: (i64,),
+    params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -349,7 +350,7 @@ async fn route_unstable_communities_unfollow(
         let row_count = trans
             .execute(
                 "DELETE FROM community_follow WHERE community=$1 AND follower=$2",
-                &[&community, &user],
+                &[&community, &user.raw()],
             )
             .await?;
 
@@ -357,7 +358,7 @@ async fn route_unstable_communities_unfollow(
             let id = uuid::Uuid::new_v4();
             trans.execute(
                 "INSERT INTO local_community_follow_undo (id, community, follower) VALUES ($1, $2, $3)",
-                &[&id, &community, &user],
+                &[&id, &community, &user.raw()],
             ).await?;
 
             trans.commit().await?;
@@ -376,7 +377,7 @@ async fn route_unstable_communities_unfollow(
 }
 
 async fn route_unstable_communities_posts_list(
-    params: (i64,),
+    params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -432,8 +433,8 @@ async fn route_unstable_communities_posts_list(
     let posts: Vec<serde_json::Value> = stream
         .map_err(crate::Error::from)
         .and_then(|row| {
-            let id: i64 = row.get(0);
-            let author_id: Option<i64> = row.get(1);
+            let id = PostLocalID(row.get(0));
+            let author_id = row.get::<_, Option<_>>(1).map(UserLocalID);
             let href: Option<&str> = row.get(2);
             let content_text: Option<&str> = row.get(3);
             let content_html: Option<&str> = row.get(6);
@@ -487,7 +488,7 @@ pub fn route_communities() -> crate::RouteNode<()> {
     crate::RouteNode::new()
         .with_handler_async("GET", route_unstable_communities_list)
         .with_handler_async("POST", route_unstable_communities_create)
-        .with_child_parse::<i64, _>(
+        .with_child_parse::<CommunityLocalID, _>(
             crate::RouteNode::new()
                 .with_handler_async("GET", route_unstable_communities_get)
                 .with_handler_async("PATCH", route_unstable_communities_patch)

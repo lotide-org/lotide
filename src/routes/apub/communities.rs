@@ -1,14 +1,15 @@
+use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use activitystreams::ext::Extensible;
 use std::borrow::Cow;
 use std::sync::Arc;
 
 pub fn route_communities() -> crate::RouteNode<()> {
-    crate::RouteNode::new().with_child_parse::<i64, _>(
+    crate::RouteNode::new().with_child_parse::<CommunityLocalID, _>(
         crate::RouteNode::new()
             .with_handler_async("GET", handler_communities_get)
             .with_child(
                 "comments",
-                crate::RouteNode::new().with_child_parse::<i64, _>(
+                crate::RouteNode::new().with_child_parse::<CommentLocalID, _>(
                     crate::RouteNode::new().with_child(
                         "announce",
                         crate::RouteNode::new()
@@ -20,7 +21,7 @@ pub fn route_communities() -> crate::RouteNode<()> {
                 "followers",
                 crate::RouteNode::new()
                     .with_handler_async("GET", handler_communities_followers_list)
-                    .with_child_parse::<i64, _>(
+                    .with_child_parse::<UserLocalID, _>(
                         crate::RouteNode::new()
                             .with_handler_async("GET", handler_communities_followers_get)
                             .with_child(
@@ -38,7 +39,7 @@ pub fn route_communities() -> crate::RouteNode<()> {
             )
             .with_child(
                 "posts",
-                crate::RouteNode::new().with_child_parse::<i64, _>(
+                crate::RouteNode::new().with_child_parse::<PostLocalID, _>(
                     crate::RouteNode::new().with_child(
                         "announce",
                         crate::RouteNode::new()
@@ -57,7 +58,7 @@ pub fn route_communities() -> crate::RouteNode<()> {
 }
 
 async fn handler_communities_get(
-    params: (i64,),
+    params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -156,7 +157,7 @@ async fn handler_communities_get(
 }
 
 async fn handler_communities_comments_announce_get(
-    params: (i64, i64),
+    params: (CommunityLocalID, CommentLocalID),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -183,7 +184,7 @@ async fn handler_communities_comments_announce_get(
                 )));
             }
 
-            let comment_local_id = row.get(0);
+            let comment_local_id = CommentLocalID(row.get(0));
             let comment_ap_id = if row.get(1) {
                 Cow::Owned(crate::apub_util::get_local_comment_apub_id(comment_local_id, &ctx.host_url_apub))
             } else {
@@ -201,7 +202,7 @@ async fn handler_communities_comments_announce_get(
 }
 
 async fn handler_communities_followers_list(
-    params: (i64,),
+    params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -228,16 +229,17 @@ async fn handler_communities_followers_list(
 }
 
 async fn handler_communities_followers_get(
-    params: (i64, i64),
+    params: (CommunityLocalID, UserLocalID),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community_id, user_id) = params;
+
     let db = ctx.db_pool.get().await?;
 
     let row = db.query_opt(
         "SELECT person.local, community.local, community.ap_id FROM community_follow, community, person WHERE community.id=$1 AND community.id = community_follow.community AND person.id = community_follow.follower AND person.id = $2",
-        &[&community_id, &user_id],
+        &[&community_id.raw(), &user_id.raw()],
     ).await?;
     match row {
         None => Ok(crate::simple_response(
@@ -298,7 +300,7 @@ async fn handler_communities_followers_get(
 }
 
 async fn handler_communities_followers_accept_get(
-    params: (i64, i64),
+    params: (CommunityLocalID, UserLocalID),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -328,7 +330,7 @@ async fn handler_communities_followers_accept_get(
             let follow_ap_id = if follower_local {
                 Cow::Owned(crate::apub_util::get_local_follow_apub_id(
                     community_id,
-                    row.get(2),
+                    UserLocalID(row.get(2)),
                     &ctx.host_url_apub,
                 ))
             } else {
@@ -358,7 +360,7 @@ async fn handler_communities_followers_accept_get(
 }
 
 async fn handler_communities_inbox_post(
-    params: (i64,),
+    params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -377,7 +379,7 @@ async fn handler_communities_inbox_post(
         Some("Create") => {
             super::inbox_common_create(
                 activity
-                    .into_concrete::<activitystreams::activity::Create>()
+                    .into_concrete_activity::<activitystreams::activity::Create>()
                     .unwrap(),
                 ctx,
             )
@@ -385,7 +387,7 @@ async fn handler_communities_inbox_post(
         }
         Some("Follow") => {
             let follow = activity
-                .into_concrete::<activitystreams::activity::Follow>()
+                .into_concrete_activity::<activitystreams::activity::Follow>()
                 .unwrap();
 
             let follower_ap_id = follow.follow_props.get_actor_xsd_any_uri();
@@ -401,6 +403,7 @@ async fn handler_communities_inbox_post(
                     activity_ap_id.as_url(),
                     follower_ap_id.as_url(),
                 )?;
+                let follow = crate::apub_util::Contained(Cow::Borrowed(&follow));
 
                 let follower_local_id = crate::apub_util::get_or_fetch_user_local_id(
                     follower_ap_id.as_str(),
@@ -428,7 +431,7 @@ async fn handler_communities_inbox_post(
                                 crate::apub_util::spawn_enqueue_send_community_follow_accept(
                                     community_id,
                                     follower_local_id,
-                                    follow,
+                                    follow.with_owned(),
                                     ctx,
                                 );
                             }
@@ -443,21 +446,21 @@ async fn handler_communities_inbox_post(
         }
         Some("Delete") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Delete>()
+                .into_concrete_activity::<activitystreams::activity::Delete>()
                 .unwrap();
 
             crate::apub_util::handle_delete(activity, ctx).await?;
         }
         Some("Like") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Like>()
+                .into_concrete_activity::<activitystreams::activity::Like>()
                 .unwrap();
 
             crate::apub_util::handle_like(activity, ctx).await?;
         }
         Some("Undo") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Undo>()
+                .into_concrete_activity::<activitystreams::activity::Undo>()
                 .unwrap();
             crate::apub_util::handle_undo(activity, ctx).await?;
         }
@@ -468,7 +471,7 @@ async fn handler_communities_inbox_post(
 }
 
 async fn handler_communities_posts_announce_get(
-    params: (i64, i64),
+    params: (CommunityLocalID, PostLocalID),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
@@ -497,7 +500,7 @@ async fn handler_communities_posts_announce_get(
                         "Requested community is not owned by this instance",
                     )),
                 Some(true) => {
-                    let post_local_id = row.get(0);
+                    let post_local_id = PostLocalID(row.get(0));
                     let post_ap_id = if row.get(1) {
                         Cow::Owned(crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub))
                     } else {
@@ -522,7 +525,7 @@ async fn handler_communities_posts_announce_get(
 }
 
 async fn handler_communities_updates_get(
-    params: (i64, uuid::Uuid),
+    params: (CommunityLocalID, uuid::Uuid),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {

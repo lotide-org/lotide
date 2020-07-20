@@ -84,21 +84,69 @@ pub enum APIDOrLocal {
     APID(String),
 }
 
+macro_rules! id_wrapper {
+    ($ty:ident) => {
+        #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+        #[serde(transparent)]
+        pub struct $ty(pub i64);
+        impl $ty {
+            pub fn raw(&self) -> i64 {
+                self.0
+            }
+        }
+        impl std::fmt::Display for $ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::str::FromStr for $ty {
+            type Err = std::num::ParseIntError;
+            fn from_str(src: &str) -> Result<Self, Self::Err> {
+                Ok(Self(src.parse()?))
+            }
+        }
+        impl postgres_types::ToSql for $ty {
+            fn to_sql(
+                &self,
+                ty: &postgres_types::Type,
+                out: &mut bytes::BytesMut,
+            ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+                self.0.to_sql(ty, out)
+            }
+            fn accepts(ty: &postgres_types::Type) -> bool {
+                i64::accepts(ty)
+            }
+            fn to_sql_checked(
+                &self,
+                ty: &postgres_types::Type,
+                out: &mut bytes::BytesMut,
+            ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+                self.0.to_sql_checked(ty, out)
+            }
+        }
+    };
+}
+
+id_wrapper!(CommentLocalID);
+id_wrapper!(CommunityLocalID);
+id_wrapper!(PostLocalID);
+id_wrapper!(UserLocalID);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActorLocalRef {
-    Person(i64),
-    Community(i64),
+    Person(UserLocalID),
+    Community(CommunityLocalID),
 }
 
 pub enum ThingLocalRef {
-    Post(i64),
-    Comment(i64),
+    Post(PostLocalID),
+    Comment(CommentLocalID),
 }
 
 #[derive(Debug)]
 pub struct PostInfo<'a> {
-    id: i64,
-    author: Option<i64>,
+    id: PostLocalID,
+    author: Option<UserLocalID>,
     href: Option<&'a str>,
     content_text: Option<&'a str>,
     #[allow(dead_code)]
@@ -107,19 +155,19 @@ pub struct PostInfo<'a> {
     title: &'a str,
     created: &'a chrono::DateTime<chrono::FixedOffset>,
     #[allow(dead_code)]
-    community: i64,
+    community: CommunityLocalID,
 }
 
 pub struct PostInfoOwned {
-    id: i64,
-    author: Option<i64>,
+    id: PostLocalID,
+    author: Option<UserLocalID>,
     href: Option<String>,
     content_text: Option<String>,
     content_markdown: Option<String>,
     content_html: Option<String>,
     title: String,
     created: chrono::DateTime<chrono::FixedOffset>,
-    community: i64,
+    community: CommunityLocalID,
 }
 
 impl<'a> Into<PostInfo<'a>> for &'a PostInfoOwned {
@@ -140,10 +188,10 @@ impl<'a> Into<PostInfo<'a>> for &'a PostInfoOwned {
 
 #[derive(Debug)]
 pub struct CommentInfo {
-    id: i64,
-    author: Option<i64>,
-    post: i64,
-    parent: Option<i64>,
+    id: CommentLocalID,
+    author: Option<UserLocalID>,
+    post: PostLocalID,
+    parent: Option<CommentLocalID>,
     content_text: Option<String>,
     #[allow(dead_code)]
     content_markdown: Option<String>,
@@ -230,7 +278,7 @@ pub async fn res_to_error(
 pub async fn authenticate(
     req: &hyper::Request<hyper::Body>,
     db: &tokio_postgres::Client,
-) -> Result<Option<i64>, Error> {
+) -> Result<Option<UserLocalID>, Error> {
     use headers::Header;
 
     let value = match req.headers().get(hyper::header::AUTHORIZATION) {
@@ -255,7 +303,7 @@ pub async fn authenticate(
         .await?;
 
     match row {
-        Some(row) => Ok(Some(row.get(0))),
+        Some(row) => Ok(Some(UserLocalID(row.get(0)))),
         None => Ok(None),
     }
 }
@@ -263,7 +311,7 @@ pub async fn authenticate(
 pub async fn require_login(
     req: &hyper::Request<hyper::Body>,
     db: &tokio_postgres::Client,
-) -> Result<i64, Error> {
+) -> Result<UserLocalID, Error> {
     authenticate(req, db).await?.ok_or_else(|| {
         Error::UserError(simple_response(
             hyper::StatusCode::UNAUTHORIZED,
@@ -288,8 +336,8 @@ pub fn render_markdown(src: &str) -> String {
 }
 
 pub fn on_community_add_post(
-    community: i64,
-    post_local_id: i64,
+    community: CommunityLocalID,
+    post_local_id: PostLocalID,
     post_ap_id: &str,
     ctx: Arc<crate::RouteContext>,
 ) {
@@ -298,8 +346,8 @@ pub fn on_community_add_post(
 }
 
 pub fn on_community_add_comment(
-    community: i64,
-    comment_local_id: i64,
+    community: CommunityLocalID,
+    comment_local_id: CommentLocalID,
     comment_ap_id: &str,
     ctx: Arc<crate::RouteContext>,
 ) {
@@ -319,7 +367,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
         let res = futures::future::try_join(
             db.query_opt(
                 "SELECT community.id, community.local, community.ap_id, community.ap_inbox, post.local, post.ap_id, person.id, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.id = $1 AND post.community = community.id",
-                &[&comment.post],
+                &[&comment.post.raw()],
             ),
             async {
                 match comment.parent {
@@ -330,7 +378,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                         ).await?;
 
                         if row.get(0) {
-                            Ok(Some((crate::apub_util::get_local_comment_apub_id(parent, &ctx.host_url_apub), Some(crate::apub_util::get_local_person_apub_id(row.get(2), &ctx.host_url_apub)))))
+                            Ok(Some((crate::apub_util::get_local_comment_apub_id(parent, &ctx.host_url_apub), Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(2)), &ctx.host_url_apub)))))
                         } else {
                             Ok(row.get::<_, Option<String>>(1).map(|x| (x, row.get(3))))
                         }
@@ -365,7 +413,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                     None,
                     if post_local {
                         Some(crate::apub_util::get_local_person_apub_id(
-                            row.get(6),
+                            UserLocalID(row.get(6)),
                             &ctx.host_url_apub,
                         ))
                     } else {
@@ -382,7 +430,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
 
             if let Some(post_ap_id) = post_ap_id {
                 if community_local {
-                    let community = row.get(0);
+                    let community = CommunityLocalID(row.get(0));
                     crate::on_community_add_comment(community, comment.id, &comment_ap_id, ctx);
                 } else {
                     crate::apub_util::spawn_enqueue_send_comment_to_community(

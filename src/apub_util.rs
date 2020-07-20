@@ -1,10 +1,68 @@
-use crate::ThingLocalRef;
+use crate::{CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
 pub const ACTIVITY_TYPE: &str = "application/activity+json";
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+pub struct Verified<T: Clone>(pub T);
+impl<T: Clone> std::ops::Deref for Verified<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<T: Clone> Verified<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+impl Verified<activitystreams::activity::ActivityBox> {
+    pub fn into_concrete_activity<
+        T: activitystreams::Activity + serde::de::DeserializeOwned + Clone,
+    >(
+        self,
+    ) -> Result<Verified<T>, std::io::Error> {
+        Ok(Verified(self.0.into_concrete()?))
+    }
+}
+impl<
+        T: std::convert::TryInto<activitystreams::object::ObjectBox, Error = std::io::Error> + Clone,
+    > Verified<T>
+{
+    pub fn try_box_object(
+        self,
+    ) -> Result<Verified<activitystreams::object::ObjectBox>, std::io::Error> {
+        Ok(Verified(self.0.try_into()?))
+    }
+}
+impl Verified<activitystreams::object::ObjectBox> {
+    pub fn into_concrete_object<
+        T: activitystreams::Object + serde::de::DeserializeOwned + Clone,
+    >(
+        self,
+    ) -> Result<Verified<T>, std::io::Error> {
+        Ok(Verified(self.0.into_concrete()?))
+    }
+}
+
+pub struct Contained<'a, T: activitystreams::Base + Clone>(pub Cow<'a, Verified<T>>);
+impl<'a, T: activitystreams::Base + Clone> std::ops::Deref for Contained<'a, T> {
+    type Target = Verified<T>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+impl<'a, T: activitystreams::Base + Clone> Contained<'a, T> {
+    pub fn with_owned(self) -> Contained<'static, T> {
+        Contained(Cow::Owned(self.0.into_owned()))
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,11 +84,15 @@ impl<'a, T: activitystreams::actor::Actor> activitystreams::ext::Extension<T>
 {
 }
 
-pub fn get_local_post_apub_id(post: i64, host_url_apub: &str) -> String {
+pub fn get_local_post_apub_id(post: PostLocalID, host_url_apub: &str) -> String {
     format!("{}/posts/{}", host_url_apub, post)
 }
 
-pub fn get_local_post_like_apub_id(post_local_id: i64, user: i64, host_url_apub: &str) -> String {
+pub fn get_local_post_like_apub_id(
+    post_local_id: PostLocalID,
+    user: UserLocalID,
+    host_url_apub: &str,
+) -> String {
     format!(
         "{}/likes/{}",
         crate::apub_util::get_local_post_apub_id(post_local_id, &host_url_apub),
@@ -38,13 +100,13 @@ pub fn get_local_post_like_apub_id(post_local_id: i64, user: i64, host_url_apub:
     )
 }
 
-pub fn get_local_comment_apub_id(comment: i64, host_url_apub: &str) -> String {
+pub fn get_local_comment_apub_id(comment: CommentLocalID, host_url_apub: &str) -> String {
     format!("{}/comments/{}", host_url_apub, comment)
 }
 
 pub fn get_local_comment_like_apub_id(
-    comment_local_id: i64,
-    user: i64,
+    comment_local_id: CommentLocalID,
+    user: UserLocalID,
     host_url_apub: &str,
 ) -> String {
     format!(
@@ -54,17 +116,17 @@ pub fn get_local_comment_like_apub_id(
     )
 }
 
-pub fn get_local_person_apub_id(person: i64, host_url_apub: &str) -> String {
+pub fn get_local_person_apub_id(person: UserLocalID, host_url_apub: &str) -> String {
     format!("{}/users/{}", host_url_apub, person)
 }
 
-pub fn get_local_community_apub_id(community: i64, host_url_apub: &str) -> String {
+pub fn get_local_community_apub_id(community: CommunityLocalID, host_url_apub: &str) -> String {
     format!("{}/communities/{}", host_url_apub, community)
 }
 
 pub fn get_local_community_follow_apub_id(
-    community: i64,
-    follower: i64,
+    community: CommunityLocalID,
+    follower: UserLocalID,
     host_url_apub: &str,
 ) -> String {
     format!(
@@ -73,21 +135,28 @@ pub fn get_local_community_follow_apub_id(
     )
 }
 
-pub fn get_local_person_pubkey_apub_id(person: i64, host_url_apub: &str) -> String {
+pub fn get_local_person_pubkey_apub_id(person: UserLocalID, host_url_apub: &str) -> String {
     format!(
         "{}#main-key",
         get_local_person_apub_id(person, host_url_apub)
     )
 }
 
-pub fn get_local_community_pubkey_apub_id(community: i64, host_url_apub: &str) -> String {
+pub fn get_local_community_pubkey_apub_id(
+    community: CommunityLocalID,
+    host_url_apub: &str,
+) -> String {
     format!(
         "{}#main-key",
         get_local_community_apub_id(community, host_url_apub)
     )
 }
 
-pub fn get_local_follow_apub_id(community: i64, follower: i64, host_url_apub: &str) -> String {
+pub fn get_local_follow_apub_id(
+    community: CommunityLocalID,
+    follower: UserLocalID,
+    host_url_apub: &str,
+) -> String {
     format!(
         "{}/followers/{}",
         get_local_community_apub_id(community, host_url_apub),
@@ -124,11 +193,11 @@ pub fn do_verify(
 
 pub enum ActorLocalInfo {
     User {
-        id: i64,
+        id: UserLocalID,
         public_key: Option<Vec<u8>>,
     },
     Community {
-        id: i64,
+        id: CommunityLocalID,
         public_key: Option<Vec<u8>>,
     },
 }
@@ -236,10 +305,10 @@ pub async fn fetch_actor(
                 .map(|x| x.as_str())
                 .unwrap_or("");
 
-            let id = db.query_one(
+            let id = UserLocalID(db.query_one(
                 "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, description) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, description=$6 RETURNING id",
                 &[&username, &ap_id, &inbox, &shared_inbox, &public_key, &description],
-            ).await?.get(0);
+            ).await?.get(0));
 
             Ok(ActorLocalInfo::User {
                 id,
@@ -277,10 +346,10 @@ pub async fn fetch_actor(
                 .as_ref()
                 .map(|key| key.public_key_pem.as_bytes());
 
-            let id = db.query_one(
+            let id = CommunityLocalID(db.query_one(
                 "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, description) VALUES ($1, FALSE, $2, $3, $4, $5, $6) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, description=$6 RETURNING id",
                 &[&name, &ap_id, &inbox, &shared_inbox, &public_key, &description],
-            ).await?.get(0);
+            ).await?.get(0));
 
             Ok(ActorLocalInfo::Community {
                 id,
@@ -296,7 +365,7 @@ pub async fn get_or_fetch_user_local_id(
     db: &tokio_postgres::Client,
     host_url_apub: &str,
     http_client: &crate::HttpClient,
-) -> Result<i64, crate::Error> {
+) -> Result<UserLocalID, crate::Error> {
     if ap_id.starts_with(host_url_apub) {
         if ap_id[host_url_apub.len()..].starts_with("/users/") {
             Ok(ap_id[(host_url_apub.len() + 7)..].parse()?)
@@ -311,7 +380,7 @@ pub async fn get_or_fetch_user_local_id(
             .query_opt("SELECT id FROM person WHERE ap_id=$1", &[&ap_id])
             .await?
         {
-            Some(row) => Ok(row.get(0)),
+            Some(row) => Ok(UserLocalID(row.get(0))),
             None => {
                 // Not known yet, time to fetch
 
@@ -328,7 +397,7 @@ pub async fn get_or_fetch_user_local_id(
 }
 
 pub async fn fetch_or_create_local_user_privkey(
-    user: i64,
+    user: UserLocalID,
     db: &tokio_postgres::Client,
 ) -> Result<openssl::pkey::PKey<openssl::pkey::Private>, crate::Error> {
     let row = db
@@ -364,7 +433,7 @@ pub async fn fetch_or_create_local_user_privkey(
 }
 
 pub async fn fetch_or_create_local_community_privkey(
-    community: i64,
+    community: CommunityLocalID,
     db: &tokio_postgres::Client,
 ) -> Result<openssl::pkey::PKey<openssl::pkey::Private>, crate::Error> {
     let row = db
@@ -416,7 +485,10 @@ pub async fn fetch_or_create_local_actor_privkey(
     })
 }
 
-pub fn spawn_enqueue_send_new_community_update(community: i64, ctx: Arc<crate::RouteContext>) {
+pub fn spawn_enqueue_send_new_community_update(
+    community: CommunityLocalID,
+    ctx: Arc<crate::RouteContext>,
+) {
     crate::spawn_task(async move {
         let activity =
             local_community_update_to_ap(community, uuid::Uuid::new_v4(), &ctx.host_url_apub)?;
@@ -425,8 +497,8 @@ pub fn spawn_enqueue_send_new_community_update(community: i64, ctx: Arc<crate::R
 }
 
 pub fn spawn_enqueue_send_community_follow(
-    community: i64,
-    local_follower: i64,
+    community: CommunityLocalID,
+    local_follower: UserLocalID,
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
@@ -501,8 +573,8 @@ pub fn spawn_enqueue_send_community_follow(
 
 pub fn spawn_enqueue_send_community_follow_undo(
     undo_id: uuid::Uuid,
-    community_local_id: i64,
-    local_follower: i64,
+    community_local_id: CommunityLocalID,
+    local_follower: UserLocalID,
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
@@ -560,8 +632,8 @@ pub fn spawn_enqueue_send_community_follow_undo(
 }
 
 pub fn local_community_post_announce_ap(
-    community_id: i64,
-    post_local_id: i64,
+    community_id: CommunityLocalID,
+    post_local_id: PostLocalID,
     post_ap_id: &str,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Announce, crate::Error> {
@@ -592,8 +664,8 @@ pub fn local_community_post_announce_ap(
 }
 
 pub fn local_community_comment_announce_ap(
-    community_id: i64,
-    comment_local_id: i64,
+    community_id: CommunityLocalID,
+    comment_local_id: CommentLocalID,
     comment_ap_id: &str,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Announce, crate::Error> {
@@ -620,8 +692,8 @@ pub fn local_community_comment_announce_ap(
 }
 
 pub fn spawn_announce_community_post(
-    community: i64,
-    post_local_id: i64,
+    community: CommunityLocalID,
+    post_local_id: PostLocalID,
     post_ap_id: &str,
     ctx: Arc<crate::RouteContext>,
 ) {
@@ -641,8 +713,8 @@ pub fn spawn_announce_community_post(
 }
 
 pub fn spawn_announce_community_comment(
-    community: i64,
-    comment_local_id: i64,
+    community: CommunityLocalID,
+    comment_local_id: CommentLocalID,
     comment_ap_id: &str,
     ctx: Arc<crate::RouteContext>,
 ) {
@@ -660,7 +732,7 @@ pub fn spawn_announce_community_comment(
 }
 
 pub fn local_community_update_to_ap(
-    community_id: i64,
+    community_id: CommunityLocalID,
     update_id: uuid::Uuid,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Update, crate::Error> {
@@ -682,8 +754,8 @@ pub fn local_community_update_to_ap(
 
 pub fn local_community_follow_undo_to_ap(
     undo_id: uuid::Uuid,
-    community_local_id: i64,
-    local_follower: i64,
+    community_local_id: CommunityLocalID,
+    local_follower: UserLocalID,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let mut undo = activitystreams::activity::Undo::new();
@@ -707,7 +779,7 @@ pub fn local_community_follow_undo_to_ap(
 
 pub fn community_follow_accept_to_ap(
     community_ap_id: &str,
-    follower_local_id: i64,
+    follower_local_id: UserLocalID,
     follow_ap_id: &str,
 ) -> Result<activitystreams::activity::Accept, crate::Error> {
     let mut accept = activitystreams::activity::Accept::new();
@@ -727,9 +799,9 @@ pub fn community_follow_accept_to_ap(
 }
 
 pub fn spawn_enqueue_send_community_follow_accept(
-    local_community: i64,
-    follower: i64,
-    follow: activitystreams::activity::Follow,
+    local_community: CommunityLocalID,
+    follower: UserLocalID,
+    follow: Contained<'static, activitystreams::activity::Follow>,
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
@@ -981,8 +1053,8 @@ pub fn spawn_enqueue_send_local_post_to_community(
 }
 
 pub fn local_post_delete_to_ap(
-    post_id: i64,
-    author: i64,
+    post_id: PostLocalID,
+    author: UserLocalID,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Delete, crate::Error> {
     let mut delete = activitystreams::activity::Delete::new();
@@ -1000,8 +1072,8 @@ pub fn local_post_delete_to_ap(
 }
 
 pub fn local_comment_delete_to_ap(
-    comment_id: i64,
-    author: i64,
+    comment_id: CommentLocalID,
+    author: UserLocalID,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Delete, crate::Error> {
     let mut delete = activitystreams::activity::Delete::new();
@@ -1054,9 +1126,9 @@ pub fn local_comment_to_create_ap(
 }
 
 pub fn local_post_like_to_ap(
-    post_local_id: i64,
+    post_local_id: PostLocalID,
     post_ap_id: &str,
-    user: i64,
+    user: UserLocalID,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
     let mut like = activitystreams::activity::Like::new();
@@ -1079,8 +1151,8 @@ pub fn local_post_like_to_ap(
 
 pub fn local_post_like_undo_to_ap(
     undo_id: uuid::Uuid,
-    post_local_id: i64,
-    user: i64,
+    post_local_id: PostLocalID,
+    user: UserLocalID,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let like_ap_id = get_local_post_like_apub_id(post_local_id, user, &host_url_apub);
@@ -1099,9 +1171,9 @@ pub fn local_post_like_undo_to_ap(
 }
 
 pub fn local_comment_like_to_ap(
-    comment_local_id: i64,
+    comment_local_id: CommentLocalID,
     comment_ap_id: &str,
-    user: i64,
+    user: UserLocalID,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
     let mut like = activitystreams::activity::Like::new();
@@ -1124,8 +1196,8 @@ pub fn local_comment_like_to_ap(
 
 pub fn local_comment_like_undo_to_ap(
     undo_id: uuid::Uuid,
-    comment_local_id: i64,
-    user: i64,
+    comment_local_id: CommentLocalID,
+    user: UserLocalID,
     host_url_apub: &str,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let like_ap_id = get_local_comment_like_apub_id(comment_local_id, user, &host_url_apub);
@@ -1178,7 +1250,7 @@ pub fn spawn_enqueue_send_comment_to_community(
 }
 
 pub async fn enqueue_forward_to_community_followers(
-    community_id: i64,
+    community_id: CommunityLocalID,
     body: String,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
@@ -1191,7 +1263,7 @@ pub async fn enqueue_forward_to_community_followers(
 }
 
 async fn enqueue_send_to_community_followers(
-    community_id: i64,
+    community_id: CommunityLocalID,
     activity: impl serde::Serialize,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
@@ -1203,7 +1275,10 @@ async fn enqueue_send_to_community_followers(
     .await
 }
 
-pub fn maybe_get_local_user_id_from_uri(uri: &str, host_url_apub: &str) -> Option<i64> {
+pub fn maybe_get_local_community_id_from_uri(
+    uri: &str,
+    host_url_apub: &str,
+) -> Option<CommunityLocalID> {
     if uri.starts_with(&host_url_apub) {
         let path = &uri[host_url_apub.len()..];
         if path.starts_with("/communities/") {
@@ -1221,32 +1296,30 @@ pub fn maybe_get_local_user_id_from_uri(uri: &str, host_url_apub: &str) -> Optio
 }
 
 pub async fn handle_recieved_object_for_local_community(
-    obj: activitystreams::object::ObjectBox,
+    obj: Verified<activitystreams::object::ObjectBox>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    use std::convert::TryInto;
-
     let (to, in_reply_to, obj_id, obj) = match obj.kind() {
         Some("Page") => {
             let obj = obj
-                .into_concrete::<activitystreams::object::Page>()
+                .into_concrete_object::<activitystreams::object::Page>()
                 .unwrap();
             (
                 obj.object_props.to.clone(),
                 None,
                 obj.object_props.id.clone(),
-                obj.try_into().unwrap(),
+                obj.try_box_object().unwrap(),
             )
         }
         Some("Note") => {
             let obj = obj
-                .into_concrete::<activitystreams::object::Note>()
+                .into_concrete_object::<activitystreams::object::Note>()
                 .unwrap();
             (
                 obj.object_props.to.clone(),
                 obj.object_props.in_reply_to.clone(),
                 obj.object_props.id.clone(),
-                obj.try_into().unwrap(),
+                obj.try_box_object().unwrap(),
             )
         }
         _ => (None, None, None, obj),
@@ -1257,7 +1330,7 @@ pub async fn handle_recieved_object_for_local_community(
         Some(activitystreams::object::properties::ObjectPropertiesToEnum::Term(term)) => match term
         {
             activitystreams::object::properties::ObjectPropertiesToTermEnum::XsdAnyUri(uri) => {
-                maybe_get_local_user_id_from_uri(uri.as_str(), &ctx.host_url_apub)
+                maybe_get_local_community_id_from_uri(uri.as_str(), &ctx.host_url_apub)
             }
             _ => None,
         },
@@ -1265,7 +1338,7 @@ pub async fn handle_recieved_object_for_local_community(
             .iter()
             .filter_map(|term| match term {
                 activitystreams::object::properties::ObjectPropertiesToTermEnum::XsdAnyUri(uri) => {
-                    maybe_get_local_user_id_from_uri(uri.as_str(), &ctx.host_url_apub)
+                    maybe_get_local_community_id_from_uri(uri.as_str(), &ctx.host_url_apub)
                 }
                 _ => None,
             })
@@ -1278,7 +1351,7 @@ pub async fn handle_recieved_object_for_local_community(
         // not to a community, but might still match as a reply
         if let Some(in_reply_to) = in_reply_to {
             if let Some(obj_id) = obj_id {
-                if let Ok(obj) = obj.into_concrete::<activitystreams::object::Note>() {
+                if let Ok(obj) = obj.into_concrete_object::<activitystreams::object::Note>() {
                     // TODO deduplicate this?
 
                     let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
@@ -1311,16 +1384,16 @@ pub async fn handle_recieved_object_for_local_community(
 }
 
 pub async fn handle_recieved_object_for_community(
-    community_local_id: i64,
+    community_local_id: CommunityLocalID,
     community_is_local: bool,
-    obj: activitystreams::object::ObjectBox,
+    obj: Verified<activitystreams::object::ObjectBox>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     println!("recieved object: {:?}", obj);
 
     match obj.kind() {
         Some("Page") => {
-            let obj: activitystreams::object::Page = obj.into_concrete().unwrap();
+            let obj: Verified<activitystreams::object::Page> = obj.into_concrete_object().unwrap();
             let title = obj
                 .as_ref()
                 .get_summary_xsd_string()
@@ -1355,7 +1428,7 @@ pub async fn handle_recieved_object_for_community(
             }
         }
         Some("Note") => {
-            let obj: activitystreams::object::Note = obj.into_concrete().unwrap();
+            let obj: Verified<activitystreams::object::Note> = obj.into_concrete_object().unwrap();
             let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
             let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
             let created = obj.as_ref().get_published().map(|x| x.as_datetime());
@@ -1444,7 +1517,7 @@ async fn handle_recieved_post(
     media_type: Option<&mime::Mime>,
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
     author: Option<&str>,
-    community_local_id: i64,
+    community_local_id: CommunityLocalID,
     community_is_local: bool,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
@@ -1470,7 +1543,7 @@ async fn handle_recieved_post(
 
     if community_is_local {
         if let Some(row) = row {
-            let post_local_id = row.get(0);
+            let post_local_id = PostLocalID(row.get(0));
             crate::on_community_add_post(community_local_id, post_local_id, object_id, ctx);
         }
     }
@@ -1514,8 +1587,13 @@ async fn handle_recieved_reply(
         {
             #[derive(Debug)]
             enum ReplyTarget {
-                Post { id: i64 },
-                Comment { id: i64, post: i64 },
+                Post {
+                    id: PostLocalID,
+                },
+                Comment {
+                    id: CommentLocalID,
+                    post: PostLocalID,
+                },
             }
 
             let term_ap_id = term_ap_id.as_str();
@@ -1535,7 +1613,7 @@ async fn handle_recieved_reply(
                         if let Some(row) = row {
                             Some(ReplyTarget::Comment {
                                 id: local_comment_id,
-                                post: row.get(0),
+                                post: PostLocalID(row.get(0)),
                             })
                         } else {
                             None
@@ -1550,12 +1628,14 @@ async fn handle_recieved_reply(
                 let row = db
                     .query_opt("(SELECT id, post FROM reply WHERE ap_id=$1) UNION (SELECT NULL, id FROM post WHERE ap_id=$1) LIMIT 1", &[&term_ap_id])
                     .await?;
-                row.map(|row| match row.get(0) {
+                row.map(|row| match row.get::<_, Option<_>>(0).map(CommentLocalID) {
                     Some(reply_id) => ReplyTarget::Comment {
                         id: reply_id,
-                        post: row.get(1),
+                        post: PostLocalID(row.get(1)),
                     },
-                    None => ReplyTarget::Post { id: row.get(1) },
+                    None => ReplyTarget::Post {
+                        id: PostLocalID(row.get(1)),
+                    },
                 })
             };
 
@@ -1567,7 +1647,7 @@ async fn handle_recieved_reply(
 
                 let local_community_maybe = {
                     let row = db.query_opt("SELECT id FROM community WHERE id=(SELECT community FROM post WHERE id=$1) AND local", &[&post]).await?;
-                    row.map(|row| row.get(0))
+                    row.map(|row| CommunityLocalID(row.get(0)))
                 };
 
                 let content_is_html = media_type.is_none() || media_type == Some(&mime::TEXT_HTML);
@@ -1586,7 +1666,7 @@ async fn handle_recieved_reply(
                     if let Some(local_community) = local_community_maybe {
                         crate::on_community_add_comment(
                             local_community,
-                            row.get(0),
+                            CommentLocalID(row.get(0)),
                             object_id,
                             ctx,
                         );
@@ -1600,7 +1680,7 @@ async fn handle_recieved_reply(
 }
 
 pub async fn handle_like(
-    activity: activitystreams::activity::Like,
+    activity: Verified<activitystreams::activity::Like>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
@@ -1648,9 +1728,9 @@ pub async fn handle_like(
 
                 if let Some(row) = row {
                     Some(if row.get(0) {
-                        ThingLocalRef::Post(row.get(1))
+                        ThingLocalRef::Post(PostLocalID(row.get(1)))
                     } else {
-                        ThingLocalRef::Comment(row.get(1))
+                        ThingLocalRef::Comment(CommentLocalID(row.get(1)))
                     })
                 } else {
                     None
@@ -1669,7 +1749,7 @@ pub async fn handle_like(
                         if let Some(row) = row {
                             let community_local = row.get(1);
                             if community_local {
-                                let community_id = row.get(0);
+                                let community_id = CommunityLocalID(row.get(0));
                                 let body = serde_json::to_string(&activity)?;
                                 enqueue_forward_to_community_followers(community_id, body, ctx)
                                     .await?;
@@ -1688,7 +1768,7 @@ pub async fn handle_like(
                         if let Some(row) = row {
                             let community_local = row.get(1);
                             if community_local {
-                                let community_id = row.get(0);
+                                let community_id = CommunityLocalID(row.get(0));
                                 let body = serde_json::to_string(&activity)?;
                                 enqueue_forward_to_community_followers(community_id, body, ctx)
                                     .await?;
@@ -1705,7 +1785,7 @@ pub async fn handle_like(
 }
 
 pub async fn handle_delete(
-    activity: activitystreams::activity::Delete,
+    activity: Verified<activitystreams::activity::Delete>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
@@ -1720,7 +1800,7 @@ pub async fn handle_delete(
 
         if let Some(row) = row {
             // Something was deleted
-            let local_community = row.get(0);
+            let local_community = row.get::<_, Option<_>>(0).map(CommunityLocalID);
             if let Some(community_id) = local_community {
                 // Community is local, need to forward delete to followers
 
@@ -1739,7 +1819,7 @@ pub async fn handle_delete(
 }
 
 pub async fn handle_undo(
-    activity: activitystreams::activity::Undo,
+    activity: Verified<activitystreams::activity::Undo>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let activity_id = activity
@@ -1829,7 +1909,7 @@ pub async fn verify_incoming_activity(
     db: &tokio_postgres::Client,
     http_client: &crate::HttpClient,
     apub_proxy_rewrites: bool,
-) -> Result<activitystreams::activity::ActivityBox, crate::Error> {
+) -> Result<Verified<activitystreams::activity::ActivityBox>, crate::Error> {
     let req_body = hyper::body::to_bytes(req.body_mut()).await?;
 
     match req.headers().get("signature") {
@@ -1843,7 +1923,7 @@ pub async fn verify_incoming_activity(
 
             let res_body = fetch_ap_object(ap_id.as_str(), http_client).await?;
 
-            Ok(serde_json::from_value(res_body)?)
+            Ok(Verified(serde_json::from_value(res_body)?))
         }
         Some(signature) => {
             let raw_activity_props: activitystreams::activity::properties::ActorOptOriginAndTargetProperties = serde_json::from_slice(&req_body)?;
@@ -1893,7 +1973,7 @@ pub async fn verify_incoming_activity(
             )
             .await?
             {
-                Ok(serde_json::from_slice(&req_body)?)
+                Ok(Verified(serde_json::from_slice(&req_body)?))
             } else {
                 Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::FORBIDDEN,
