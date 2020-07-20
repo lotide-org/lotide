@@ -6,6 +6,64 @@ use std::sync::Arc;
 
 pub const ACTIVITY_TYPE: &str = "application/activity+json";
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(transparent)]
+pub struct Verified<T: Clone>(pub T);
+impl<T: Clone> std::ops::Deref for Verified<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<T: Clone> Verified<T> {
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+impl Verified<activitystreams::activity::ActivityBox> {
+    pub fn into_concrete_activity<
+        T: activitystreams::Activity + serde::de::DeserializeOwned + Clone,
+    >(
+        self,
+    ) -> Result<Verified<T>, std::io::Error> {
+        Ok(Verified(self.0.into_concrete()?))
+    }
+}
+impl<
+        T: std::convert::TryInto<activitystreams::object::ObjectBox, Error = std::io::Error> + Clone,
+    > Verified<T>
+{
+    pub fn try_box_object(
+        self,
+    ) -> Result<Verified<activitystreams::object::ObjectBox>, std::io::Error> {
+        Ok(Verified(self.0.try_into()?))
+    }
+}
+impl Verified<activitystreams::object::ObjectBox> {
+    pub fn into_concrete_object<
+        T: activitystreams::Object + serde::de::DeserializeOwned + Clone,
+    >(
+        self,
+    ) -> Result<Verified<T>, std::io::Error> {
+        Ok(Verified(self.0.into_concrete()?))
+    }
+}
+
+pub struct Contained<'a, T: activitystreams::Base + Clone>(pub Cow<'a, Verified<T>>);
+impl<'a, T: activitystreams::Base + Clone> std::ops::Deref for Contained<'a, T> {
+    type Target = Verified<T>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+impl<'a, T: activitystreams::Base + Clone> Contained<'a, T> {
+    pub fn with_owned(self) -> Contained<'static, T> {
+        Contained(Cow::Owned(self.0.into_owned()))
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublicKey<'a> {
@@ -743,7 +801,7 @@ pub fn community_follow_accept_to_ap(
 pub fn spawn_enqueue_send_community_follow_accept(
     local_community: CommunityLocalID,
     follower: UserLocalID,
-    follow: activitystreams::activity::Follow,
+    follow: Contained<'static, activitystreams::activity::Follow>,
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
@@ -1238,32 +1296,30 @@ pub fn maybe_get_local_community_id_from_uri(
 }
 
 pub async fn handle_recieved_object_for_local_community(
-    obj: activitystreams::object::ObjectBox,
+    obj: Verified<activitystreams::object::ObjectBox>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    use std::convert::TryInto;
-
     let (to, in_reply_to, obj_id, obj) = match obj.kind() {
         Some("Page") => {
             let obj = obj
-                .into_concrete::<activitystreams::object::Page>()
+                .into_concrete_object::<activitystreams::object::Page>()
                 .unwrap();
             (
                 obj.object_props.to.clone(),
                 None,
                 obj.object_props.id.clone(),
-                obj.try_into().unwrap(),
+                obj.try_box_object().unwrap(),
             )
         }
         Some("Note") => {
             let obj = obj
-                .into_concrete::<activitystreams::object::Note>()
+                .into_concrete_object::<activitystreams::object::Note>()
                 .unwrap();
             (
                 obj.object_props.to.clone(),
                 obj.object_props.in_reply_to.clone(),
                 obj.object_props.id.clone(),
-                obj.try_into().unwrap(),
+                obj.try_box_object().unwrap(),
             )
         }
         _ => (None, None, None, obj),
@@ -1295,7 +1351,7 @@ pub async fn handle_recieved_object_for_local_community(
         // not to a community, but might still match as a reply
         if let Some(in_reply_to) = in_reply_to {
             if let Some(obj_id) = obj_id {
-                if let Ok(obj) = obj.into_concrete::<activitystreams::object::Note>() {
+                if let Ok(obj) = obj.into_concrete_object::<activitystreams::object::Note>() {
                     // TODO deduplicate this?
 
                     let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
@@ -1330,14 +1386,14 @@ pub async fn handle_recieved_object_for_local_community(
 pub async fn handle_recieved_object_for_community(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
-    obj: activitystreams::object::ObjectBox,
+    obj: Verified<activitystreams::object::ObjectBox>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     println!("recieved object: {:?}", obj);
 
     match obj.kind() {
         Some("Page") => {
-            let obj: activitystreams::object::Page = obj.into_concrete().unwrap();
+            let obj: Verified<activitystreams::object::Page> = obj.into_concrete_object().unwrap();
             let title = obj
                 .as_ref()
                 .get_summary_xsd_string()
@@ -1372,7 +1428,7 @@ pub async fn handle_recieved_object_for_community(
             }
         }
         Some("Note") => {
-            let obj: activitystreams::object::Note = obj.into_concrete().unwrap();
+            let obj: Verified<activitystreams::object::Note> = obj.into_concrete_object().unwrap();
             let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
             let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
             let created = obj.as_ref().get_published().map(|x| x.as_datetime());
@@ -1624,7 +1680,7 @@ async fn handle_recieved_reply(
 }
 
 pub async fn handle_like(
-    activity: activitystreams::activity::Like,
+    activity: Verified<activitystreams::activity::Like>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
@@ -1729,7 +1785,7 @@ pub async fn handle_like(
 }
 
 pub async fn handle_delete(
-    activity: activitystreams::activity::Delete,
+    activity: Verified<activitystreams::activity::Delete>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
@@ -1763,7 +1819,7 @@ pub async fn handle_delete(
 }
 
 pub async fn handle_undo(
-    activity: activitystreams::activity::Undo,
+    activity: Verified<activitystreams::activity::Undo>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let activity_id = activity
@@ -1853,7 +1909,7 @@ pub async fn verify_incoming_activity(
     db: &tokio_postgres::Client,
     http_client: &crate::HttpClient,
     apub_proxy_rewrites: bool,
-) -> Result<activitystreams::activity::ActivityBox, crate::Error> {
+) -> Result<Verified<activitystreams::activity::ActivityBox>, crate::Error> {
     let req_body = hyper::body::to_bytes(req.body_mut()).await?;
 
     match req.headers().get("signature") {
@@ -1867,7 +1923,7 @@ pub async fn verify_incoming_activity(
 
             let res_body = fetch_ap_object(ap_id.as_str(), http_client).await?;
 
-            Ok(serde_json::from_value(res_body)?)
+            Ok(Verified(serde_json::from_value(res_body)?))
         }
         Some(signature) => {
             let raw_activity_props: activitystreams::activity::properties::ActorOptOriginAndTargetProperties = serde_json::from_slice(&req_body)?;
@@ -1917,7 +1973,7 @@ pub async fn verify_incoming_activity(
             )
             .await?
             {
-                Ok(serde_json::from_slice(&req_body)?)
+                Ok(Verified(serde_json::from_slice(&req_body)?))
             } else {
                 Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::FORBIDDEN,

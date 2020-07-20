@@ -229,7 +229,7 @@ async fn inbox_common(
     match activity.kind() {
         Some("Accept") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Accept>()
+                .into_concrete_activity::<activitystreams::activity::Accept>()
                 .unwrap();
 
             let activity_id = activity
@@ -278,7 +278,7 @@ async fn inbox_common(
         }
         Some("Announce") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Announce>()
+                .into_concrete_activity::<activitystreams::activity::Announce>()
                 .unwrap();
             let activity_id = activity
                 .object_props
@@ -306,7 +306,7 @@ async fn inbox_common(
                 let object_id = {
                     if let activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectEnum::Term(
                         req_obj,
-                    ) = activity.announce_props.object
+                    ) = activity.into_inner().announce_props.object
                     {
                         match req_obj {
                             activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectTermEnum::XsdAnyUri(id) => Some(id),
@@ -338,6 +338,7 @@ async fn inbox_common(
                             crate::apub_util::fetch_ap_object(object_id.as_str(), &ctx.http_client)
                                 .await?;
                         let obj: activitystreams::object::ObjectBox = serde_json::from_value(body)?;
+                        let obj = crate::apub_util::Verified(obj);
                         crate::apub_util::handle_recieved_object_for_community(
                             community_local_id,
                             community_is_local,
@@ -351,32 +352,32 @@ async fn inbox_common(
         }
         Some("Create") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Create>()
+                .into_concrete_activity::<activitystreams::activity::Create>()
                 .unwrap();
             inbox_common_create(activity, ctx).await?;
         }
         Some("Delete") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Delete>()
+                .into_concrete_activity::<activitystreams::activity::Delete>()
                 .unwrap();
 
             crate::apub_util::handle_delete(activity, ctx).await?;
         }
         Some("Like") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Like>()
+                .into_concrete_activity::<activitystreams::activity::Like>()
                 .unwrap();
             crate::apub_util::handle_like(activity, ctx).await?;
         }
         Some("Undo") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Undo>()
+                .into_concrete_activity::<activitystreams::activity::Undo>()
                 .unwrap();
             crate::apub_util::handle_undo(activity, ctx).await?;
         }
         Some("Update") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Update>()
+                .into_concrete_activity::<activitystreams::activity::Update>()
                 .unwrap();
 
             let activity_id = activity
@@ -417,10 +418,10 @@ async fn inbox_common(
 }
 
 pub async fn inbox_common_create(
-    activity: activitystreams::activity::Create,
+    activity: crate::apub_util::Verified<activitystreams::activity::Create>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let req_obj = activity.create_props.object;
+    let req_obj = activity.into_inner().create_props.object;
     if let activitystreams::activity::properties::ActorAndObjectPropertiesObjectEnum::Term(
         req_obj,
     ) = req_obj
@@ -447,6 +448,7 @@ pub async fn inbox_common_create(
             let body =
                 crate::apub_util::fetch_ap_object(object_id.as_str(), &ctx.http_client).await?;
             let obj: activitystreams::object::ObjectBox = serde_json::from_value(body)?;
+            let obj = crate::apub_util::Verified(obj);
 
             crate::apub_util::handle_recieved_object_for_local_community(obj, ctx).await?;
         }

@@ -379,7 +379,7 @@ async fn handler_communities_inbox_post(
         Some("Create") => {
             super::inbox_common_create(
                 activity
-                    .into_concrete::<activitystreams::activity::Create>()
+                    .into_concrete_activity::<activitystreams::activity::Create>()
                     .unwrap(),
                 ctx,
             )
@@ -387,7 +387,7 @@ async fn handler_communities_inbox_post(
         }
         Some("Follow") => {
             let follow = activity
-                .into_concrete::<activitystreams::activity::Follow>()
+                .into_concrete_activity::<activitystreams::activity::Follow>()
                 .unwrap();
 
             let follower_ap_id = follow.follow_props.get_actor_xsd_any_uri();
@@ -403,6 +403,7 @@ async fn handler_communities_inbox_post(
                     activity_ap_id.as_url(),
                     follower_ap_id.as_url(),
                 )?;
+                let follow = crate::apub_util::Contained(Cow::Borrowed(&follow));
 
                 let follower_local_id = crate::apub_util::get_or_fetch_user_local_id(
                     follower_ap_id.as_str(),
@@ -430,7 +431,7 @@ async fn handler_communities_inbox_post(
                                 crate::apub_util::spawn_enqueue_send_community_follow_accept(
                                     community_id,
                                     follower_local_id,
-                                    follow,
+                                    follow.with_owned(),
                                     ctx,
                                 );
                             }
@@ -445,21 +446,21 @@ async fn handler_communities_inbox_post(
         }
         Some("Delete") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Delete>()
+                .into_concrete_activity::<activitystreams::activity::Delete>()
                 .unwrap();
 
             crate::apub_util::handle_delete(activity, ctx).await?;
         }
         Some("Like") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Like>()
+                .into_concrete_activity::<activitystreams::activity::Like>()
                 .unwrap();
 
             crate::apub_util::handle_like(activity, ctx).await?;
         }
         Some("Undo") => {
             let activity = activity
-                .into_concrete::<activitystreams::activity::Undo>()
+                .into_concrete_activity::<activitystreams::activity::Undo>()
                 .unwrap();
             crate::apub_util::handle_undo(activity, ctx).await?;
         }
