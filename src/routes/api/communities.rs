@@ -65,6 +65,8 @@ async fn route_unstable_communities_create(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let lang = crate::get_lang_for_req(&req);
+
     let mut db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -81,7 +83,8 @@ async fn route_unstable_communities_create(
         if !super::USERNAME_ALLOWED_CHARS.contains(&ch) {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                "Community name contains disallowed characters",
+                lang.tr("community_name_disallowed_chars", None)
+                    .into_owned(),
             )));
         }
     }
@@ -103,7 +106,7 @@ async fn route_unstable_communities_create(
                 if err.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
                     crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::BAD_REQUEST,
-                        "That name is already in use",
+                        lang.tr("name_in_use", None).into_owned(),
                     ))
                 } else {
                     err.into()
@@ -138,6 +141,7 @@ async fn route_unstable_communities_get(
 
     let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let row = {
@@ -156,7 +160,7 @@ async fn route_unstable_communities_get(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                "No such community",
+                lang.tr("no_such_community", None).into_owned(),
             ))
         })?
     };
@@ -209,6 +213,7 @@ async fn route_unstable_communities_patch(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community_id,) = params;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -231,7 +236,7 @@ async fn route_unstable_communities_patch(
         match row {
             None => Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                "No such community",
+                lang.tr("no_such_community", None).into_owned(),
             ))),
             Some(row) => {
                 let created_by = row.get::<_, Option<_>>(0).map(UserLocalID);
@@ -240,7 +245,7 @@ async fn route_unstable_communities_patch(
                 } else {
                     Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::FORBIDDEN,
-                        "You are not authorized to modify this community",
+                        lang.tr("community_edit_denied", None).into_owned(),
                     )))
                 }
             }
@@ -267,6 +272,7 @@ async fn route_unstable_communities_follow(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community,) = params;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -286,7 +292,7 @@ async fn route_unstable_communities_follow(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                "No such community",
+                lang.tr("no_such_community", None).into_owned(),
             ))
         })?;
 
@@ -379,12 +385,13 @@ async fn route_unstable_communities_unfollow(
 async fn route_unstable_communities_posts_list(
     params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
+    req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community_id,) = params;
 
     use futures::stream::TryStreamExt;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let community_row = db
@@ -396,7 +403,7 @@ async fn route_unstable_communities_posts_list(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                "No such community",
+                lang.tr("no_such_community", None).into_owned(),
             ))
         })?;
 

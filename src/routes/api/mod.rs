@@ -255,11 +255,12 @@ fn parse_lookup(src: &str) -> Result<Lookup, crate::Error> {
 async fn route_unstable_actors_lookup(
     params: (String,),
     ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
+    req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (query,) = params;
     println!("lookup {}", query);
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let lookup = parse_lookup(&query)?;
@@ -327,7 +328,7 @@ async fn route_unstable_actors_lookup(
     } else {
         Ok(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            "Not a group",
+            lang.tr("not_group", None).into_owned(),
         ))
     }
 }
@@ -337,6 +338,7 @@ async fn route_unstable_logins_create(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
@@ -358,7 +360,7 @@ async fn route_unstable_logins_create(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                "No local user found by that name",
+                lang.tr("no_such_local_user_by_name", None).into_owned(),
             ))
         })?;
 
@@ -368,7 +370,7 @@ async fn route_unstable_logins_create(
     let passhash = passhash.ok_or_else(|| {
         crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            "No password set for this user",
+            lang.tr("no_password", None).into_owned(),
         ))
     })?;
 
@@ -387,7 +389,7 @@ async fn route_unstable_logins_create(
     } else {
         Ok(crate::simple_response(
             hyper::StatusCode::FORBIDDEN,
-            "Incorrect password",
+            lang.tr("password_incorrect", None).into_owned(),
         ))
     }
 }
@@ -511,6 +513,7 @@ async fn route_unstable_posts_create(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -531,14 +534,14 @@ async fn route_unstable_posts_create(
     if body.href.is_none() && body.content_text.is_none() && body.content_markdown.is_none() {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            "Post must contain one of href, content_text, or content_markdown",
+            lang.tr("post_needs_content", None).into_owned(),
         )));
     }
 
     if body.content_markdown.is_some() && body.content_text.is_some() {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            "content_markdown and content_text are mutually exclusive",
+            lang.tr("post_content_conflict", None).into_owned(),
         )));
     }
 
@@ -842,6 +845,7 @@ async fn route_unstable_posts_get(
 
     let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let include_your_for = if query.include_your {
@@ -887,7 +891,7 @@ async fn route_unstable_posts_get(
     match row {
         None => Ok(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            "No such post",
+            lang.tr("no_such_post", None).into_owned(),
         )),
         Some(row) => {
             let href = row.get(1);
@@ -965,6 +969,7 @@ async fn route_unstable_posts_delete(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (post_id,) = params;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -982,7 +987,7 @@ async fn route_unstable_posts_delete(
             if author != Some(user) {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::FORBIDDEN,
-                    "That's not your post",
+                    lang.tr("post_not_yours", None).into_owned(),
                 )));
             }
 
@@ -1226,6 +1231,7 @@ async fn route_unstable_posts_replies_create(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (post_id,) = params;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -1243,7 +1249,7 @@ async fn route_unstable_posts_replies_create(
     if !(body.content_markdown.is_some() ^ body.content_text.is_some()) {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            "Exactly one of content_markdown and content_text must be specified",
+            lang.tr("comment_content_conflict", None).into_owned(),
         )));
     }
 
@@ -1304,6 +1310,7 @@ async fn route_unstable_comments_get(
 
     let (comment_id,) = params;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let include_your_for = if query.include_your {
@@ -1336,7 +1343,7 @@ async fn route_unstable_comments_get(
     match row {
         None => Ok(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            "No such comment",
+            lang.tr("no_such_comment", None).into_owned(),
         )),
         Some(row) => {
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
@@ -1404,6 +1411,7 @@ async fn route_unstable_comments_delete(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (comment_id,) = params;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -1421,7 +1429,7 @@ async fn route_unstable_comments_delete(
             if author != Some(user) {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::FORBIDDEN,
-                    "That's not your comment",
+                    lang.tr("comment_not_yours", None).into_owned(),
                 )));
             }
 
@@ -1669,6 +1677,7 @@ async fn route_unstable_comments_replies_create(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (parent_id,) = params;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -1685,7 +1694,7 @@ async fn route_unstable_comments_replies_create(
     if !(body.content_markdown.is_some() ^ body.content_text.is_some()) {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            "Exactly one of content_markdown and content_text must be specified",
+            lang.tr("comment_content_conflict", None).into_owned(),
         )));
     }
 
@@ -1707,7 +1716,7 @@ async fn route_unstable_comments_replies_create(
     {
         None => Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            "No such comment",
+            lang.tr("no_such_comment", None).into_owned(),
         ))),
         Some(row) => Ok(PostLocalID(row.get(0))),
     }?;
@@ -1747,6 +1756,7 @@ async fn route_unstable_users_create(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let lang = crate::get_lang_for_req(&req);
     let mut db = ctx.db_pool.get().await?;
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
@@ -1765,7 +1775,7 @@ async fn route_unstable_users_create(
         if !USERNAME_ALLOWED_CHARS.contains(&ch) {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                "Username contains disallowed characters",
+                lang.tr("user_name_disallowed_chars", None).into_owned(),
             )));
         }
     }
@@ -1787,7 +1797,7 @@ async fn route_unstable_users_create(
                 if err.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
                     crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::BAD_REQUEST,
-                        "That name is already in use",
+                        lang.tr("name_in_use", None).into_owned(),
                     ))
                 } else {
                     err.into()
@@ -1875,10 +1885,11 @@ async fn route_unstable_users_me_following_posts_list(
 async fn route_unstable_users_get(
     params: (UserLocalID,),
     ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
+    req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (user_id,) = params;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let row = db
@@ -1891,7 +1902,7 @@ async fn route_unstable_users_get(
     let row = row.ok_or_else(|| {
         crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            "No such user",
+            lang.tr("no_such_user", None).into_owned(),
         ))
     })?;
 

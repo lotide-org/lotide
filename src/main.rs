@@ -1,5 +1,6 @@
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 use trout::hyper::RoutingFailureExtHyper;
 
@@ -273,6 +274,81 @@ pub async fn res_to_error(
             String::from_utf8_lossy(&bytes)
         )))
     }
+}
+
+lazy_static::lazy_static! {
+    static ref LANG_MAP: HashMap<unic_langid::LanguageIdentifier, fluent::FluentResource> = {
+        let mut result = HashMap::new();
+
+        result.insert(unic_langid::langid!("en"), fluent::FluentResource::try_new(include_str!("../res/lang/en.flt").to_owned()).expect("Failed to parse translation"));
+        result.insert(unic_langid::langid!("eo"), fluent::FluentResource::try_new(include_str!("../res/lang/eo.flt").to_owned()).expect("Failed to parse translation"));
+
+        result
+    };
+
+    static ref LANGS: Vec<unic_langid::LanguageIdentifier> = {
+        LANG_MAP.keys().cloned().collect()
+    };
+}
+
+pub struct Translator {
+    bundle: fluent::concurrent::FluentBundle<&'static fluent::FluentResource>,
+}
+impl Translator {
+    pub fn tr<'a>(&'a self, key: &str, args: Option<&'a fluent::FluentArgs>) -> Cow<'a, str> {
+        let mut errors = Vec::with_capacity(0);
+        let out = self.bundle.format_pattern(
+            self.bundle
+                .get_message(key)
+                .expect("Missing message in translation")
+                .value
+                .expect("Missing value for translation key"),
+            args,
+            &mut errors,
+        );
+        if !errors.is_empty() {
+            eprintln!("Errors in translation: {:?}", errors);
+        }
+
+        out
+    }
+}
+
+pub fn get_lang_for_req(req: &hyper::Request<hyper::Body>) -> Translator {
+    let default = unic_langid::langid!("en");
+    let languages = match req
+        .headers()
+        .get(hyper::header::ACCEPT_LANGUAGE)
+        .and_then(|x| x.to_str().ok())
+    {
+        Some(accept_language) => {
+            let requested = fluent_langneg::accepted_languages::parse(accept_language);
+            fluent_langneg::negotiate_languages(
+                &requested,
+                &LANGS,
+                Some(&default),
+                fluent_langneg::NegotiationStrategy::Filtering,
+            )
+        }
+        None => vec![&default],
+    };
+
+    let mut bundle = fluent::concurrent::FluentBundle::new(languages.iter().map(|x| *x));
+    for lang in languages {
+        if let Err(errors) = bundle.add_resource(&LANG_MAP[lang]) {
+            for err in errors {
+                match err {
+                    fluent::FluentError::Overriding { .. } => {}
+                    _ => {
+                        eprintln!("Failed to add language resource: {:?}", err);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    Translator { bundle }
 }
 
 pub async fn authenticate(
