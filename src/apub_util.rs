@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 pub const ACTIVITY_TYPE: &str = "application/activity+json";
 
+pub const SIGALG_RSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
+pub const SIGALG_RSA_SHA512: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512";
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
 pub struct Verified<T: Clone>(pub T);
@@ -70,6 +73,7 @@ pub struct PublicKey<'a> {
     pub id: Cow<'a, str>,
     pub owner: Cow<'a, str>,
     pub public_key_pem: Cow<'a, str>,
+    pub signature_algorithm: Option<Cow<'a, str>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -183,30 +187,36 @@ pub fn do_sign(
 
 pub fn do_verify(
     key: &openssl::pkey::PKey<openssl::pkey::Public>,
+    alg: openssl::hash::MessageDigest,
     src: &[u8],
     sig: &[u8],
 ) -> Result<bool, openssl::error::ErrorStack> {
-    let mut verifier = openssl::sign::Verifier::new(openssl::hash::MessageDigest::sha256(), &key)?;
+    let mut verifier = openssl::sign::Verifier::new(alg, &key)?;
     verifier.update(&src)?;
     Ok(verifier.verify(sig)?)
+}
+
+pub struct PubKeyInfo {
+    algorithm: Option<openssl::hash::MessageDigest>,
+    key: Vec<u8>,
 }
 
 pub enum ActorLocalInfo {
     User {
         id: UserLocalID,
-        public_key: Option<Vec<u8>>,
+        public_key: Option<PubKeyInfo>,
     },
     Community {
         id: CommunityLocalID,
-        public_key: Option<Vec<u8>>,
+        public_key: Option<PubKeyInfo>,
     },
 }
 
 impl ActorLocalInfo {
-    pub fn public_key(&self) -> Option<&[u8]> {
+    pub fn public_key(&self) -> Option<&PubKeyInfo> {
         match self {
-            ActorLocalInfo::User { public_key, .. } => public_key.as_deref(),
-            ActorLocalInfo::Community { public_key, .. } => public_key.as_deref(),
+            ActorLocalInfo::User { public_key, .. } => public_key.as_ref(),
+            ActorLocalInfo::Community { public_key, .. } => public_key.as_ref(),
         }
     }
 }
@@ -299,6 +309,11 @@ pub async fn fetch_actor(
                 .public_key
                 .as_ref()
                 .map(|key| key.public_key_pem.as_bytes());
+            let public_key_sigalg = person
+                .extension
+                .public_key
+                .as_ref()
+                .and_then(|key| key.signature_algorithm.as_deref());
             let description = person
                 .as_ref()
                 .get_summary_xsd_string()
@@ -306,13 +321,16 @@ pub async fn fetch_actor(
                 .unwrap_or("");
 
             let id = UserLocalID(db.query_one(
-                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, description) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, description=$6 RETURNING id",
-                &[&username, &ap_id, &inbox, &shared_inbox, &public_key, &description],
+                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6, $7) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7 RETURNING id",
+                &[&username, &ap_id, &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description],
             ).await?.get(0));
 
             Ok(ActorLocalInfo::User {
                 id,
-                public_key: public_key.map(|x| x.to_owned()),
+                public_key: public_key.map(|key| PubKeyInfo {
+                    algorithm: get_message_digest(public_key_sigalg),
+                    key: key.to_owned(),
+                }),
             })
         }
         Some("Group") => {
@@ -345,15 +363,23 @@ pub async fn fetch_actor(
                 .public_key
                 .as_ref()
                 .map(|key| key.public_key_pem.as_bytes());
+            let public_key_sigalg = group
+                .extension
+                .public_key
+                .as_ref()
+                .and_then(|key| key.signature_algorithm.as_deref());
 
             let id = CommunityLocalID(db.query_one(
-                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, description) VALUES ($1, FALSE, $2, $3, $4, $5, $6) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, description=$6 RETURNING id",
-                &[&name, &ap_id, &inbox, &shared_inbox, &public_key, &description],
+                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7 RETURNING id",
+                &[&name, &ap_id, &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description],
             ).await?.get(0));
 
             Ok(ActorLocalInfo::Community {
                 id,
-                public_key: public_key.map(|x| x.to_owned()),
+                public_key: public_key.map(|key| PubKeyInfo {
+                    algorithm: get_message_digest(public_key_sigalg),
+                    key: key.to_owned(),
+                }),
             })
         }
         _ => Err(crate::Error::InternalStrStatic("Unrecognized actor type")),
@@ -1857,6 +1883,14 @@ pub async fn handle_undo(
     Ok(())
 }
 
+fn get_message_digest(src: Option<&str>) -> Option<openssl::hash::MessageDigest> {
+    match src {
+        None | Some(SIGALG_RSA_SHA256) => Some(openssl::hash::MessageDigest::sha256()),
+        Some(SIGALG_RSA_SHA512) => Some(openssl::hash::MessageDigest::sha512()),
+        _ => None,
+    }
+}
+
 pub async fn check_signature_for_actor(
     signature: &hyper::header::HeaderValue,
     request_method: &hyper::Method,
@@ -1866,19 +1900,28 @@ pub async fn check_signature_for_actor(
     db: &tokio_postgres::Client,
     http_client: &crate::HttpClient,
 ) -> Result<bool, crate::Error> {
-    let found_key = db.query_opt("(SELECT public_key FROM person WHERE ap_id=$1) UNION ALL (SELECT public_key FROM community WHERE ap_id=$1) LIMIT 1", &[&actor_ap_id]).await?
-        .and_then(|row| row.get::<_, Option<&[u8]>>(0).map(openssl::pkey::PKey::public_key_from_pem)).transpose()?;
+    let found_key = db.query_opt("(SELECT public_key, public_key_sigalg FROM person WHERE ap_id=$1) UNION ALL (SELECT public_key, public_key_sigalg FROM community WHERE ap_id=$1) LIMIT 1", &[&actor_ap_id]).await?
+        .and_then(|row| {
+            row.get::<_, Option<&[u8]>>(0).map(|key| {
+                openssl::pkey::PKey::public_key_from_pem(key)
+                    .map(|key| (key, get_message_digest(row.get(1))))
+            })
+        }).transpose()?;
 
     println!("signature: {:?}", signature);
+    println!("found_key: {:?}", found_key.is_some());
 
     let signature = hancock::Signature::parse(signature)?;
 
-    if let Some(key) = found_key {
+    if let Some((key, algorithm)) = found_key {
+        let algorithm = algorithm.ok_or(crate::Error::InternalStrStatic(
+            "Cannot verify signature, unknown algorithm",
+        ))?;
         if signature.verify(
             request_method,
             request_path_and_query,
             headers,
-            |bytes, sig| do_verify(&key, bytes, sig),
+            |bytes, sig| do_verify(&key, algorithm, bytes, sig),
         )? {
             return Ok(true);
         }
@@ -1889,13 +1932,16 @@ pub async fn check_signature_for_actor(
 
     let actor = fetch_actor(actor_ap_id, db, http_client).await?;
 
-    if let Some(key) = actor.public_key() {
-        let key = openssl::pkey::PKey::public_key_from_pem(key)?;
+    if let Some(key_info) = actor.public_key() {
+        let key = openssl::pkey::PKey::public_key_from_pem(&key_info.key)?;
+        let algorithm = key_info.algorithm.ok_or(crate::Error::InternalStrStatic(
+            "Cannot verify signature, unknown algorithm",
+        ))?;
         Ok(signature.verify(
             request_method,
             request_path_and_query,
             headers,
-            |bytes, sig| do_verify(&key, bytes, sig),
+            |bytes, sig| do_verify(&key, algorithm, bytes, sig),
         )?)
     } else {
         Err(crate::Error::InternalStrStatic(

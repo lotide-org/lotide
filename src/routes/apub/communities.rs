@@ -135,6 +135,7 @@ async fn handler_communities_get(
                         id: (&key_id).into(),
                         owner: (&community_ap_id).into(),
                         public_key_pem: public_key.into(),
+                        signature_algorithm: Some(crate::apub_util::SIGALG_RSA_SHA256.into()),
                     }),
                 };
 
