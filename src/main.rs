@@ -453,10 +453,12 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                             &[&parent],
                         ).await?;
 
+                        let author_local_id = row.get::<_, Option<_>>(2).map(UserLocalID);
+
                         if row.get(0) {
-                            Ok(Some((crate::apub_util::get_local_comment_apub_id(parent, &ctx.host_url_apub), Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(2)), &ctx.host_url_apub)))))
+                            Ok(Some((crate::apub_util::get_local_comment_apub_id(parent, &ctx.host_url_apub), Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(2)), &ctx.host_url_apub)), true, author_local_id)))
                         } else {
-                            Ok(row.get::<_, Option<String>>(1).map(|x| (x, row.get(3))))
+                            Ok(row.get::<_, Option<String>>(1).map(|x| (x, row.get(3), false, author_local_id)))
                         }
                     },
                     None => Ok(None),
@@ -484,25 +486,80 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                 ),
             };
 
-            let (parent_ap_id, post_or_parent_author_ap_id) = match comment.parent {
-                None => (
-                    None,
-                    if post_local {
-                        Some(crate::apub_util::get_local_person_apub_id(
-                            UserLocalID(row.get(6)),
-                            &ctx.host_url_apub,
-                        ))
-                    } else {
-                        row.get(7)
-                    },
-                ),
-                Some(_) => match res.1 {
-                    None => (None, None),
-                    Some((parent_ap_id, parent_author_ap_id)) => {
-                        (Some(parent_ap_id), parent_author_ap_id)
+            let (parent_ap_id, post_or_parent_author_local_id, post_or_parent_author_ap_id) =
+                match comment.parent {
+                    None => {
+                        let author_id = UserLocalID(row.get(6));
+                        if post_local {
+                            (
+                                None,
+                                Some(author_id),
+                                Some(Cow::<str>::Owned(
+                                    crate::apub_util::get_local_person_apub_id(
+                                        author_id,
+                                        &ctx.host_url_apub,
+                                    ),
+                                )),
+                            )
+                        } else {
+                            (
+                                None,
+                                Some(author_id),
+                                row.get::<_, Option<_>>(7).map(Cow::Borrowed),
+                            )
+                        }
                     }
-                },
-            };
+                    Some(_) => match &res.1 {
+                        None => (None, None, None),
+                        Some((parent_ap_id, parent_author_ap_id, _, parent_author_local_id)) => (
+                            Some(parent_ap_id),
+                            *parent_author_local_id,
+                            parent_author_ap_id.as_deref().map(Cow::Borrowed),
+                        ),
+                    },
+                };
+
+            // Generate notifications
+            match comment.parent {
+                Some(parent_id) => {
+                    if let Some((_, _, parent_local, parent_author_id)) = res.1 {
+                        if parent_local {
+                            if let Some(parent_author_id) = parent_author_id {
+                                let ctx = ctx.clone();
+                                let comment_id = comment.id;
+                                crate::spawn_task(async move {
+                                    let db = ctx.db_pool.get().await?;
+                                    db.execute(
+                                        "INSERT INTO notification (kind, created_at, to_user, reply, parent_reply) VALUES ('reply_reply', current_timestamp, $1, $2, $3)",
+                                        &[&parent_author_id, &comment_id.raw(), &parent_id.raw()],
+                                    ).await?;
+
+                                    Ok(())
+                                });
+                            }
+                        }
+                    }
+                }
+                None => {
+                    if post_local {
+                        if let Some(post_or_parent_author_local_id) = post_or_parent_author_local_id
+                        {
+                            let ctx = ctx.clone();
+                            let comment_id = comment.id;
+                            let comment_post = comment.post;
+                            crate::spawn_task(async move {
+                                let db = ctx.db_pool.get().await?;
+                                db.execute(
+                                    "INSERT INTO notification (kind, created_at, to_user, reply, parent_post) VALUES ('post_reply', current_timestamp, $1, $2, $3)",
+                                    &[&post_or_parent_author_local_id.raw(), &comment_id.raw(), &comment_post.raw()],
+                                ).await?;
+
+                                Ok(())
+                            });
+                        }
+                    }
+                }
+            }
 
             if let Some(post_ap_id) = post_ap_id {
                 if community_local {
@@ -514,7 +571,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                         row.get(2),
                         row.get(3),
                         post_ap_id,
-                        parent_ap_id,
+                        parent_ap_id.cloned(),
                         post_or_parent_author_ap_id.as_deref(),
                         ctx,
                     );

@@ -70,12 +70,19 @@ struct RespPostListPost<'a> {
 }
 
 #[derive(Serialize)]
-struct RespPostCommentInfo<'a> {
+struct RespMinimalCommentInfo<'a> {
     id: CommentLocalID,
-    author: Option<RespMinimalAuthorInfo<'a>>,
-    created: Cow<'a, str>,
     content_text: Option<Cow<'a, str>>,
     content_html: Option<Cow<'a, str>>,
+}
+
+#[derive(Serialize)]
+struct RespPostCommentInfo<'a> {
+    #[serde(flatten)]
+    base: RespMinimalCommentInfo<'a>,
+
+    author: Option<RespMinimalAuthorInfo<'a>>,
+    created: String,
     deleted: bool,
     replies: Option<Vec<RespPostCommentInfo<'a>>>,
     has_replies: bool,
@@ -96,9 +103,8 @@ enum RespThingInfo<'a> {
     },
     #[serde(rename = "comment")]
     Comment {
-        id: CommentLocalID,
-        content_text: Option<&'a str>,
-        content_html: Option<&'a str>,
+        #[serde(flatten)]
+        base: RespMinimalCommentInfo<'a>,
         created: String,
         post: RespMinimalPostInfo<'a>,
     },
@@ -197,6 +203,13 @@ pub fn route_api() -> crate::RouteNode<()> {
                                 crate::RouteNode::new().with_handler_async(
                                     "GET",
                                     route_unstable_users_me_following_posts_list,
+                                ),
+                            )
+                            .with_child(
+                                "notifications",
+                                crate::RouteNode::new().with_handler_async(
+                                    "GET",
+                                    route_unstable_users_me_notifications_list,
                                 ),
                             ),
                     )
@@ -623,14 +636,14 @@ async fn apply_comments_replies<'a, T>(
 ) -> Result<(), crate::Error> {
     let ids = comments
         .iter()
-        .map(|(_, comment)| comment.id)
+        .map(|(_, comment)| comment.base.id)
         .collect::<Vec<_>>();
     if depth > 0 {
         let mut replies =
             get_comments_replies_box(&ids, include_your_for, depth - 1, db, local_hostname).await?;
 
         for (_, comment) in comments {
-            let current = replies.remove(&comment.id).unwrap_or_else(Vec::new);
+            let current = replies.remove(&comment.base.id).unwrap_or_else(Vec::new);
             comment.has_replies = !current.is_empty();
             comment.replies = Some(current);
         }
@@ -651,7 +664,7 @@ async fn apply_comments_replies<'a, T>(
             .await?;
 
         for (_, comment) in comments {
-            comment.has_replies = with_replies.contains(&comment.id);
+            comment.has_replies = with_replies.contains(&comment.base.id);
         }
     }
 
@@ -740,10 +753,13 @@ async fn get_comments_replies<'a>(
             futures::future::ok((
                 parent,
                 RespPostCommentInfo {
-                    id,
+                    base: RespMinimalCommentInfo {
+                        id,
+                        content_text: content_text.map(From::from),
+                        content_html: content_html.map(From::from),
+                    },
+
                     author,
-                    content_text: content_text.map(From::from),
-                    content_html: content_html.map(From::from),
                     created: created.to_rfc3339().into(),
                     deleted: row.get(9),
                     replies: None,
@@ -822,10 +838,13 @@ async fn get_post_comments<'a>(
             futures::future::ok((
                 (),
                 RespPostCommentInfo {
-                    id,
+                    base: RespMinimalCommentInfo {
+                        id,
+                        content_text: content_text.map(From::from),
+                        content_html: content_html.map(From::from),
+                    },
+
                     author,
-                    content_text: content_text.map(From::from),
-                    content_html: content_html.map(From::from),
                     created: created.to_rfc3339().into(),
                     deleted: row.get(8),
                     replies: None,
@@ -1391,12 +1410,15 @@ async fn route_unstable_comments_get(
 
             let output = RespCommentInfo {
                 base: RespPostCommentInfo {
+                    base: RespMinimalCommentInfo {
+                        id: comment_id,
+                        content_text: row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
+                        content_html: row.get::<_, Option<&str>>(5).map(Cow::Borrowed),
+                    },
+
                     author,
-                    content_text: row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
-                    content_html: row.get::<_, Option<&str>>(5).map(Cow::Borrowed),
                     created: created.to_rfc3339().into(),
                     deleted: row.get(10),
-                    id: comment_id,
                     has_replies: !replies.is_empty(),
                     replies: Some(replies),
                     your_vote,
@@ -1891,6 +1913,131 @@ async fn route_unstable_users_me_following_posts_list(
         .body(body.into())?)
 }
 
+async fn route_unstable_users_me_notifications_list(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let mut db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let limit: i64 = 30;
+
+    let rows = {
+        let trans = db.transaction().await?;
+
+        let rows = trans.query(
+            "SELECT notification.kind, (notification.created_at > (SELECT last_checked_notifications FROM person WHERE id=$1)), reply.id, reply.content_text, reply.content_html, parent_reply.id, parent_reply_post.id, parent_reply_post.title, parent_post.id, parent_post.title FROM notification LEFT OUTER JOIN reply ON (reply.id = notification.reply) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = notification.parent_reply) LEFT OUTER JOIN post AS parent_reply_post ON (parent_reply_post.id = parent_reply.post) LEFT OUTER JOIN post AS parent_post ON (parent_post.id = notification.parent_post) WHERE notification.to_user = $1 AND NOT COALESCE(reply.deleted OR parent_reply.deleted OR parent_reply_post.deleted OR parent_post.deleted, FALSE) ORDER BY created_at DESC LIMIT $2",
+            &[&user, &limit],
+        ).await?;
+        trans
+            .execute(
+                "UPDATE person SET last_checked_notifications=current_timestamp WHERE id=$1",
+                &[&user],
+            )
+            .await?;
+
+        trans.commit().await?;
+
+        rows
+    };
+
+    #[derive(Serialize)]
+    #[serde(tag = "type")]
+    #[serde(rename_all = "snake_case")]
+    enum RespNotificationInfo<'a> {
+        PostReply {
+            reply: RespMinimalCommentInfo<'a>,
+            post: RespMinimalPostInfo<'a>,
+        },
+        CommentReply {
+            reply: RespMinimalCommentInfo<'a>,
+            comment: CommentLocalID,
+            post: Option<RespMinimalPostInfo<'a>>,
+        },
+    }
+
+    #[derive(Serialize)]
+    struct RespNotification<'a> {
+        #[serde(flatten)]
+        info: RespNotificationInfo<'a>,
+
+        unseen: bool,
+    }
+
+    let notifications: Vec<_> = rows
+        .iter()
+        .filter_map(|row| {
+            let kind: &str = row.get(0);
+            let unseen: bool = row.get(1);
+            let info = match kind {
+                "post_reply" => {
+                    if let Some(reply_id) = row.get(2) {
+                        if let Some(post_id) = row.get(8) {
+                            let comment = RespMinimalCommentInfo {
+                                id: CommentLocalID(reply_id),
+                                content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
+                                content_html: row.get::<_, Option<_>>(4).map(Cow::Borrowed),
+                            };
+                            let post = RespMinimalPostInfo {
+                                id: PostLocalID(post_id),
+                                title: row.get(9),
+                            };
+
+                            Some(RespNotificationInfo::PostReply {
+                                reply: comment,
+                                post,
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                "reply_reply" => {
+                    if let Some(reply_id) = row.get(2) {
+                        if let Some(parent_id) = row.get(5) {
+                            let reply = RespMinimalCommentInfo {
+                                id: CommentLocalID(reply_id),
+                                content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
+                                content_html: row.get::<_, Option<_>>(4).map(Cow::Borrowed),
+                            };
+                            let parent_id = CommentLocalID(parent_id);
+                            let post =
+                                row.get::<_, Option<_>>(6)
+                                    .map(|post_id| RespMinimalPostInfo {
+                                        id: PostLocalID(post_id),
+                                        title: row.get(7),
+                                    });
+
+                            Some(RespNotificationInfo::CommentReply {
+                                reply,
+                                comment: parent_id,
+                                post,
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            info.map(|info| RespNotification { info, unseen })
+        })
+        .collect();
+
+    let body = serde_json::to_vec(&notifications)?;
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body.into())?)
+}
+
 async fn route_unstable_users_get(
     params: (UserLocalID,),
     ctx: Arc<crate::RouteContext>,
@@ -1984,9 +2131,11 @@ async fn route_unstable_users_things_list(
                 }
             } else {
                 RespThingInfo::Comment {
-                    id: CommentLocalID(row.get(1)),
-                    content_text: row.get(2),
-                    content_html: row.get(3),
+                    base: RespMinimalCommentInfo {
+                        id: CommentLocalID(row.get(1)),
+                        content_text: row.get::<_, Option<_>>(2).map(Cow::Borrowed),
+                        content_html: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
+                    },
                     created,
                     post: RespMinimalPostInfo {
                         id: PostLocalID(row.get(5)),
