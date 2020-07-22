@@ -3,6 +3,7 @@ RUN apk add --no-cache cargo openssl-dev
 WORKDIR /usr/src/lotide
 COPY Cargo.* ./
 COPY src ./src
+COPY res ./res
 RUN cargo build --release
 
 FROM alpine:3.12
