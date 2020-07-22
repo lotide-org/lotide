@@ -12,6 +12,7 @@ no_such_user = No such user
 not_group = Not a group
 password_incorrect = Incorrect password
 post_content_conflict = content_markdown and content_text are mutually exclusive
+post_href_invalid = Specified URL is not valid
 post_needs_content = Post must contain one of href, content_text, or content_markdown
 post_not_yours = That's not your post
 root = lotide is running. Note that lotide itself does not include a frontend, and you'll need to install one separately.

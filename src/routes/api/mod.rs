@@ -545,6 +545,15 @@ async fn route_unstable_posts_create(
         )));
     }
 
+    if let Some(href) = &body.href {
+        if let Err(_) = url::Url::parse(href) {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                lang.tr("post_href_invalid", None).into_owned(),
+            )));
+        }
+    }
+
     // TODO validate permissions to post
 
     let (content_text, content_markdown, content_html) = match body.content_markdown {

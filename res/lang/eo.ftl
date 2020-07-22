@@ -12,6 +12,7 @@ no_such_user = Neniu tia uzanto
 not_group = Ne estas grupo
 password_incorrect = Pasvorto malĝustas
 post_content_conflict = content_markdown kaj content_text konfliktas
+post_href_invalid = URL nevalidas.
 post_needs_content = Poŝto devas enhavi unu el href, content_text, kaj content_markdown
 post_not_yours = Tio ne estas via poŝto
 root = lotide funkcias. Notu: lotide ne enhavas klienton, kaj vi devos instali tiun aparte.
