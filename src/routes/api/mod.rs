@@ -416,7 +416,15 @@ async fn route_unstable_logins_current_get(
 
     let user = crate::require_login(&req, &db).await?;
 
-    let body = serde_json::to_vec(&serde_json::json!({"user": {"id": user}}))?.into();
+    let has_notifications: bool = {
+        let row = db.query_one("SELECT EXISTS(SELECT 1 FROM notification WHERE to_user = $1 AND created_at > (SELECT last_checked_notifications FROM person WHERE id=$1))", &[&user]).await?;
+        row.get(0)
+    };
+
+    let body = serde_json::to_vec(
+        &serde_json::json!({"user": {"id": user, "has_unread_notifications": has_notifications}}),
+    )?
+    .into();
 
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
