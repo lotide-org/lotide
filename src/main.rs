@@ -523,7 +523,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
             match comment.parent {
                 Some(parent_id) => {
                     if let Some((_, _, parent_local, parent_author_id)) = res.1 {
-                        if parent_local {
+                        if parent_local && parent_author_id != comment.author {
                             if let Some(parent_author_id) = parent_author_id {
                                 let ctx = ctx.clone();
                                 let comment_id = comment.id;
@@ -541,7 +541,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                     }
                 }
                 None => {
-                    if post_local {
+                    if post_local && post_or_parent_author_local_id != comment.author {
                         if let Some(post_or_parent_author_local_id) = post_or_parent_author_local_id
                         {
                             let ctx = ctx.clone();
