@@ -79,7 +79,7 @@ impl<T: 'static + std::error::Error + Send> From<T> for Error {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum APIDOrLocal {
     Local,
     APID(String),
@@ -565,7 +565,7 @@ pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) 
                 if community_local {
                     let community = CommunityLocalID(row.get(0));
                     crate::on_community_add_comment(community, comment.id, &comment_ap_id, ctx);
-                } else {
+                } else if comment.ap_id == APIDOrLocal::Local {
                     crate::apub_util::spawn_enqueue_send_comment_to_community(
                         comment,
                         row.get(2),

@@ -1671,11 +1671,6 @@ async fn handle_recieved_reply(
                     ReplyTarget::Comment { id, post } => (post, Some(id)),
                 };
 
-                let local_community_maybe = {
-                    let row = db.query_opt("SELECT id FROM community WHERE id=(SELECT community FROM post WHERE id=$1) AND local", &[&post]).await?;
-                    row.map(|row| CommunityLocalID(row.get(0)))
-                };
-
                 let content_is_html = media_type.is_none() || media_type == Some(&mime::TEXT_HTML);
                 let (content_text, content_html) = if content_is_html {
                     (None, Some(content))
@@ -1689,14 +1684,22 @@ async fn handle_recieved_reply(
                     ).await?;
 
                 if let Some(row) = row {
-                    if let Some(local_community) = local_community_maybe {
-                        crate::on_community_add_comment(
-                            local_community,
-                            CommentLocalID(row.get(0)),
-                            object_id,
-                            ctx,
-                        );
-                    }
+                    let info = crate::CommentInfo {
+                        id: CommentLocalID(row.get(0)),
+                        author,
+                        post,
+                        parent,
+                        content_text: content_text.map(|x| x.to_owned()),
+                        content_markdown: None,
+                        content_html: content_html.map(|x| x.to_owned()),
+                        created: created.map(|x| *x).unwrap_or_else(|| {
+                            chrono::offset::Utc::now()
+                                .with_timezone(&chrono::offset::FixedOffset::west(0))
+                        }),
+                        ap_id: crate::APIDOrLocal::APID(object_id.to_owned()),
+                    };
+
+                    crate::on_post_add_comment(info, ctx);
                 }
             }
         }
