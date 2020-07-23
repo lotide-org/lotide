@@ -19,6 +19,11 @@ lazy_static::lazy_static! {
 #[derive(Serialize)]
 struct Empty {}
 
+#[derive(Serialize)]
+struct JustID<T: serde::Serialize> {
+    pub id: T,
+}
+
 #[derive(Deserialize)]
 struct MaybeIncludeYour {
     #[serde(default)]
@@ -1341,6 +1346,7 @@ async fn route_unstable_comments_get(
     struct RespCommentInfo<'a> {
         #[serde(flatten)]
         base: RespPostCommentInfo<'a>,
+        parent: Option<JustID<CommentLocalID>>,
         post: Option<RespMinimalPostInfo<'a>>,
     }
 
@@ -1358,7 +1364,7 @@ async fn route_unstable_comments_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
             &[&comment_id],
         )
         .map_err(crate::Error::from),
@@ -1431,6 +1437,9 @@ async fn route_unstable_comments_get(
                     replies: Some(replies),
                     your_vote,
                 },
+                parent: row.get::<_, Option<_>>(11).map(|id| JustID {
+                    id: CommentLocalID(id),
+                }),
                 post,
             };
 
