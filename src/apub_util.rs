@@ -182,6 +182,28 @@ pub fn get_local_community_apub_id(community: CommunityLocalID, host_url_apub: &
     format!("{}/communities/{}", host_url_apub, community)
 }
 
+pub fn get_local_community_outbox_apub_id(
+    community: CommunityLocalID,
+    host_url_apub: &str,
+) -> String {
+    format!(
+        "{}/outbox",
+        get_local_community_apub_id(community, host_url_apub)
+    )
+}
+
+pub fn get_local_community_outbox_page_apub_id(
+    community: CommunityLocalID,
+    page: &TimestampOrLatest,
+    host_url_apub: &str,
+) -> String {
+    format!(
+        "{}/page/{}",
+        get_local_community_outbox_apub_id(community, host_url_apub),
+        page
+    )
+}
+
 pub fn get_local_community_follow_apub_id(
     community: CommunityLocalID,
     follower: UserLocalID,

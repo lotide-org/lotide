@@ -38,6 +38,19 @@ pub fn route_communities() -> crate::RouteNode<()> {
                 crate::RouteNode::new().with_handler_async("POST", handler_communities_inbox_post),
             )
             .with_child(
+                "outbox",
+                crate::RouteNode::new()
+                    .with_handler_async("GET", handler_communities_outbox_get)
+                    .with_child(
+                        "page",
+                        crate::RouteNode::new()
+                            .with_child_parse::<crate::apub_util::TimestampOrLatest, _>(
+                                crate::RouteNode::new()
+                                    .with_handler_async("GET", handler_communities_outbox_page_get),
+                            ),
+                    ),
+            )
+            .with_child(
                 "posts",
                 crate::RouteNode::new().with_child_parse::<PostLocalID, _>(
                     crate::RouteNode::new().with_child(
@@ -115,6 +128,10 @@ async fn handler_communities_get(
             actor_props.set_inbox(format!(
                 "{}/communities/{}/inbox",
                 ctx.host_url_apub, community_id
+            ))?;
+            actor_props.set_outbox(crate::apub_util::get_local_community_outbox_apub_id(
+                community_id,
+                &ctx.host_url_apub,
             ))?;
             actor_props.set_followers(format!(
                 "{}/communities/{}/followers",
@@ -469,6 +486,113 @@ async fn handler_communities_inbox_post(
     }
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+}
+
+async fn handler_communities_outbox_get(
+    params: (CommunityLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id,) = params;
+    let page_ap_id = crate::apub_util::get_local_community_outbox_page_apub_id(
+        community_id,
+        &crate::apub_util::TimestampOrLatest::Latest,
+        &ctx.host_url_apub,
+    );
+
+    let collection = serde_json::json!({
+        "@context": activitystreams::context(),
+        "type": activitystreams::collection::kind::OrderedCollectionType,
+        "id": crate::apub_util::get_local_community_outbox_apub_id(community_id, &ctx.host_url_apub),
+        "first": &page_ap_id,
+        "current": &page_ap_id
+    });
+
+    let body = serde_json::to_vec(&collection)?.into();
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+        .body(body)?)
+}
+
+async fn handler_communities_outbox_page_get(
+    params: (CommunityLocalID, crate::apub_util::TimestampOrLatest),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    use crate::apub_util::TimestampOrLatest;
+
+    let (community_id, page) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let limit: i64 = 30;
+
+    let mut values: Vec<&(dyn postgres_types::ToSql + Sync)> = vec![&community_id, &limit];
+
+    let extra_condition = match &page {
+        TimestampOrLatest::Latest => "",
+        TimestampOrLatest::Timestamp(ts) => {
+            values.push(ts);
+            " AND post.created < $3"
+        }
+    };
+
+    let sql: &str = &format!("SELECT post.id, post.local, post.ap_id, post.created FROM post WHERE community=$1{} ORDER BY created DESC LIMIT $2", extra_condition);
+
+    let rows = db.query(sql, &values[..]).await?;
+
+    let last_created = rows.last().map(|row| {
+        let created: chrono::DateTime<chrono::offset::FixedOffset> = row.get(3);
+        created
+    });
+
+    let items: Result<Vec<activitystreams::activity::Announce>, _> = rows
+        .into_iter()
+        .map(|row| {
+            let post_id = PostLocalID(row.get(0));
+            let post_ap_id = if row.get(1) {
+                Cow::Owned(crate::apub_util::get_local_post_apub_id(
+                    post_id,
+                    &ctx.host_url_apub,
+                ))
+            } else {
+                Cow::Borrowed(row.get(2))
+            };
+
+            crate::apub_util::local_community_post_announce_ap(
+                community_id,
+                post_id,
+                &post_ap_id,
+                &ctx.host_url_apub,
+            )
+        })
+        .collect();
+
+    let items = items?;
+
+    let next = match last_created {
+        Some(ts) => Some(crate::apub_util::get_local_community_outbox_page_apub_id(
+            community_id,
+            &crate::apub_util::TimestampOrLatest::Timestamp(ts),
+            &ctx.host_url_apub,
+        )),
+        None => None,
+    };
+
+    let info = serde_json::json!({
+        "@context": activitystreams::context(),
+        "type": activitystreams::collection::kind::OrderedCollectionPageType,
+        "partOf": crate::apub_util::get_local_community_outbox_apub_id(community_id, &ctx.host_url_apub),
+        "orderedItems": items,
+        "next": next,
+    });
+
+    let body = serde_json::to_vec(&info)?.into();
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+        .body(body)?)
 }
 
 async fn handler_communities_posts_announce_get(
