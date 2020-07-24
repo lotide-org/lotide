@@ -17,6 +17,21 @@ pub fn route_apub() -> crate::RouteNode<()> {
                         "inbox",
                         crate::RouteNode::new()
                             .with_handler_async("POST", handler_users_inbox_post),
+                    )
+                    .with_child(
+                        "outbox",
+                        crate::RouteNode::new()
+                            .with_handler_async("GET", handler_users_outbox_get)
+                            .with_child(
+                                "page",
+                                crate::RouteNode::new()
+                                    .with_child_parse::<crate::apub_util::TimestampOrLatest, _>(
+                                        crate::RouteNode::new().with_handler_async(
+                                            "GET",
+                                            handler_users_outbox_page_get,
+                                        ),
+                                    ),
+                            ),
                     ),
             ),
         )
@@ -178,6 +193,10 @@ async fn handler_users_get(
 
             let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
             actor_props.set_inbox(format!("{}/users/{}/inbox", ctx.host_url_apub, user_id))?;
+            actor_props.set_outbox(crate::apub_util::get_local_person_outbox_apub_id(
+                user_id,
+                &ctx.host_url_apub,
+            ))?;
             actor_props.set_endpoints(endpoints)?;
             actor_props.set_preferred_username(username)?;
 
@@ -466,6 +485,184 @@ async fn handler_users_inbox_post(
     inbox_common(ctx, req).await
 }
 
+async fn handler_users_outbox_get(
+    params: (UserLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (user,) = params;
+    let page_ap_id = crate::apub_util::get_local_person_outbox_page_apub_id(
+        user,
+        &crate::apub_util::TimestampOrLatest::Latest,
+        &ctx.host_url_apub,
+    );
+
+    let collection = serde_json::json!({
+        "@context": activitystreams::context(),
+        "type": activitystreams::collection::kind::OrderedCollectionType,
+        "id": crate::apub_util::get_local_person_outbox_apub_id(user, &ctx.host_url_apub),
+        "first": &page_ap_id,
+        "current": &page_ap_id
+    });
+
+    let body = serde_json::to_vec(&collection)?.into();
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+        .body(body)?)
+}
+
+async fn handler_users_outbox_page_get(
+    params: (UserLocalID, crate::apub_util::TimestampOrLatest),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    use crate::apub_util::TimestampOrLatest;
+
+    let (user, page) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let limit: i64 = 30;
+
+    let mut values: Vec<&(dyn postgres_types::ToSql + Sync)> = vec![&user, &limit];
+
+    let (extra_conditions_posts, extra_conditions_comments) = match &page {
+        TimestampOrLatest::Latest => ("", ""),
+        TimestampOrLatest::Timestamp(ts) => {
+            values.push(ts);
+            (" AND post.created < $3", " AND reply.created < $3")
+        }
+    };
+
+    let sql: &str = &format!("(SELECT TRUE, post.id, post.href, post.title, post.created, post.content_text, post.content_markdown, post.content_html, community.id, community.local, community.ap_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted{}) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, parent_or_post_author.ap_id, reply.content_markdown, parent_reply.ap_id, post.id, post.local, post.ap_id, parent_reply.id, parent_reply.local, parent_or_post_author.id, parent_or_post_author.local, community.id, community.local, community.ap_id FROM reply INNER JOIN post ON (post.id = reply.post) INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = reply.parent) LEFT OUTER JOIN person AS parent_or_post_author ON (parent_or_post_author.id = COALESCE(parent_reply.author, post.author)) WHERE reply.author = $1 AND NOT reply.deleted{}) ORDER BY created DESC LIMIT $2", extra_conditions_posts, extra_conditions_comments);
+
+    let rows = db.query(sql, &values[..]).await?;
+
+    let mut last_created = None;
+
+    let items: Result<Vec<activitystreams::BaseBox>, _> = rows
+        .into_iter()
+        .map(|row| {
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
+
+            if row.get(0) {
+                let community_id = CommunityLocalID(row.get(8));
+                let community_local = row.get(9);
+                let community_ap_id = if community_local {
+                    Cow::Owned(crate::apub_util::get_local_community_apub_id(
+                        community_id,
+                        &ctx.host_url_apub,
+                    ))
+                } else {
+                    Cow::Borrowed(row.get(10))
+                };
+
+                let post_info = crate::PostInfo {
+                    id: PostLocalID(row.get(1)),
+                    author: Some(user),
+                    href: row.get(2),
+                    content_text: row.get(5),
+                    content_markdown: row.get(6),
+                    content_html: row.get(7),
+                    title: row.get(3),
+                    created: &created,
+                    community: community_id,
+                };
+
+                let res =
+                    crate::apub_util::post_to_ap(&post_info, &community_ap_id, &ctx.host_url_apub);
+                last_created = Some(created);
+                res
+            } else {
+                use std::convert::TryInto;
+
+                let id = CommentLocalID(row.get(1));
+                let post_id = PostLocalID(row.get(8));
+                let parent_id = row.get::<_, Option<_>>(11).map(CommentLocalID);
+                let comment_info = crate::CommentInfo {
+                    id,
+                    author: Some(user),
+                    post: post_id,
+                    parent: parent_id,
+                    content_text: row.get::<_, Option<_>>(2).map(Cow::Borrowed),
+                    content_markdown: row.get::<_, Option<_>>(6).map(Cow::Borrowed),
+                    content_html: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
+                    created,
+                    ap_id: crate::APIDOrLocal::Local,
+                };
+
+                let res = crate::apub_util::local_comment_to_ap(
+                    &comment_info,
+                    &(if row.get(9) {
+                        Cow::Owned(crate::apub_util::get_local_post_apub_id(
+                            post_id,
+                            &ctx.host_url_apub,
+                        ))
+                    } else {
+                        Cow::Borrowed(row.get(10))
+                    }),
+                    match row.get(12) {
+                        Some(true) => Some(Cow::Owned(
+                            crate::apub_util::get_local_comment_apub_id(id, &ctx.host_url_apub),
+                        )),
+                        Some(false) => Some(Cow::Borrowed(row.get(7))),
+                        None => None,
+                    }
+                    .as_deref(),
+                    match row.get(14) {
+                        Some(true) => Some(Cow::Owned(crate::apub_util::get_local_person_apub_id(
+                            UserLocalID(row.get(13)),
+                            &ctx.host_url_apub,
+                        ))),
+                        Some(false) => Some(Cow::Borrowed(row.get(5))),
+                        None => None,
+                    }
+                    .as_deref(),
+                    &(if row.get(16) {
+                        Cow::Owned(crate::apub_util::get_local_community_apub_id(
+                            CommunityLocalID(row.get(15)),
+                            &ctx.host_url_apub,
+                        ))
+                    } else {
+                        Cow::Borrowed(row.get(17))
+                    }),
+                    &ctx.host_url_apub,
+                )
+                .and_then(|x| Ok(x.try_into()?));
+
+                last_created = Some(created);
+                res
+            }
+        })
+        .collect();
+
+    let items = items?;
+
+    let next = match last_created {
+        Some(ts) => Some(crate::apub_util::get_local_person_outbox_page_apub_id(
+            user,
+            &crate::apub_util::TimestampOrLatest::Timestamp(ts),
+            &ctx.host_url_apub,
+        )),
+        None => None,
+    };
+
+    let info = serde_json::json!({
+        "@context": activitystreams::context(),
+        "type": activitystreams::collection::kind::OrderedCollectionPageType,
+        "partOf": crate::apub_util::get_local_person_outbox_apub_id(user, &ctx.host_url_apub),
+        "orderedItems": items,
+        "next": next,
+    });
+
+    let body = serde_json::to_vec(&info)?.into();
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+        .body(body)?)
+}
+
 async fn handler_comments_get(
     params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
@@ -531,9 +728,10 @@ async fn handler_comments_get(
 
             let parent_local_id = row.get::<_, Option<_>>(5).map(CommentLocalID);
 
-            let content_text = row.get(1);
-            let content_markdown = row.get(20);
-            let content_html = row.get(21);
+            let content_text = row.get::<_, Option<_>>(1).map(Cow::Borrowed);
+            let content_markdown = row.get::<_, Option<_>>(20).map(Cow::Borrowed);
+            let content_html = row.get::<_, Option<_>>(21).map(Cow::Borrowed);
+
 
             let info = crate::CommentInfo {
                 author: Some(UserLocalID(row.get(0))),
@@ -650,9 +848,9 @@ async fn handler_comments_create_get(
 
             let parent_local_id = row.get::<_, Option<_>>(5).map(CommentLocalID);
 
-            let content_text = row.get(1);
-            let content_markdown = row.get(20);
-            let content_html = row.get(21);
+            let content_text = row.get::<_, Option<_>>(1).map(Cow::Borrowed);
+            let content_markdown = row.get::<_, Option<_>>(20).map(Cow::Borrowed);
+            let content_html = row.get::<_, Option<_>>(21).map(Cow::Borrowed);
 
             let info = crate::CommentInfo {
                 author: Some(UserLocalID(row.get(0))),

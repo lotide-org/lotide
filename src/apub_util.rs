@@ -88,6 +88,44 @@ impl<'a, T: activitystreams::actor::Actor> activitystreams::ext::Extension<T>
 {
 }
 
+pub enum TimestampOrLatest {
+    Latest,
+    Timestamp(chrono::DateTime<chrono::offset::FixedOffset>),
+}
+
+impl std::fmt::Display for TimestampOrLatest {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            TimestampOrLatest::Latest => write!(f, "latest"),
+            TimestampOrLatest::Timestamp(ts) => write!(f, "{}", ts.timestamp()),
+        }
+    }
+}
+
+pub enum TimestampOrLatestParseError {
+    Number(std::num::ParseIntError),
+    Timestamp,
+}
+
+impl std::str::FromStr for TimestampOrLatest {
+    type Err = TimestampOrLatestParseError;
+
+    fn from_str(src: &str) -> Result<Self, Self::Err> {
+        if src == "latest" {
+            Ok(TimestampOrLatest::Latest)
+        } else {
+            use chrono::offset::TimeZone;
+
+            let ts = src.parse().map_err(TimestampOrLatestParseError::Number)?;
+            let ts = chrono::offset::Utc
+                .timestamp_opt(ts, 0)
+                .single()
+                .ok_or(TimestampOrLatestParseError::Timestamp)?;
+            Ok(TimestampOrLatest::Timestamp(ts.into()))
+        }
+    }
+}
+
 pub fn get_local_post_apub_id(post: PostLocalID, host_url_apub: &str) -> String {
     format!("{}/posts/{}", host_url_apub, post)
 }
@@ -122,6 +160,22 @@ pub fn get_local_comment_like_apub_id(
 
 pub fn get_local_person_apub_id(person: UserLocalID, host_url_apub: &str) -> String {
     format!("{}/users/{}", host_url_apub, person)
+}
+
+pub fn get_local_person_outbox_apub_id(person: UserLocalID, host_url_apub: &str) -> String {
+    format!("{}/outbox", get_local_person_apub_id(person, host_url_apub))
+}
+
+pub fn get_local_person_outbox_page_apub_id(
+    person: UserLocalID,
+    page: &TimestampOrLatest,
+    host_url_apub: &str,
+) -> String {
+    format!(
+        "{}/page/{}",
+        get_local_person_outbox_apub_id(person, host_url_apub),
+        page
+    )
 }
 
 pub fn get_local_community_apub_id(community: CommunityLocalID, host_url_apub: &str) -> String {
@@ -994,8 +1048,6 @@ pub fn local_comment_to_ap(
         .set_published(comment.created)?
         .set_in_reply_to_xsd_any_uri(parent_ap_id.unwrap_or(post_ap_id))?;
 
-    println!("{:?}", comment);
-
     if let Some(html) = &comment.content_html {
         obj.as_mut()
             .set_content_xsd_string(html.as_ref())?
@@ -1689,9 +1741,9 @@ async fn handle_recieved_reply(
                         author,
                         post,
                         parent,
-                        content_text: content_text.map(|x| x.to_owned()),
+                        content_text: content_text.map(|x| Cow::Owned(x.to_owned())),
                         content_markdown: None,
-                        content_html: content_html.map(|x| x.to_owned()),
+                        content_html: content_html.map(|x| Cow::Owned(x.to_owned())),
                         created: created.map(|x| *x).unwrap_or_else(|| {
                             chrono::offset::Utc::now()
                                 .with_timezone(&chrono::offset::FixedOffset::west(0))

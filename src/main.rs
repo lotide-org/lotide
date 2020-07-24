@@ -188,15 +188,15 @@ impl<'a> Into<PostInfo<'a>> for &'a PostInfoOwned {
 }
 
 #[derive(Debug)]
-pub struct CommentInfo {
+pub struct CommentInfo<'a> {
     id: CommentLocalID,
     author: Option<UserLocalID>,
     post: PostLocalID,
     parent: Option<CommentLocalID>,
-    content_text: Option<String>,
+    content_text: Option<Cow<'a, str>>,
     #[allow(dead_code)]
-    content_markdown: Option<String>,
-    content_html: Option<String>,
+    content_markdown: Option<Cow<'a, str>>,
+    content_html: Option<Cow<'a, str>>,
     created: chrono::DateTime<chrono::FixedOffset>,
     ap_id: APIDOrLocal,
 }
@@ -435,7 +435,7 @@ pub fn on_community_add_comment(
     );
 }
 
-pub fn on_post_add_comment(comment: CommentInfo, ctx: Arc<crate::RouteContext>) {
+pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteContext>) {
     println!("on_post_add_comment");
     spawn_task(async move {
         let db = ctx.db_pool.get().await?;
