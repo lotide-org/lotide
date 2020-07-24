@@ -541,7 +541,7 @@ async fn handler_users_outbox_page_get(
 
     let mut last_created = None;
 
-    let items: Result<Vec<activitystreams::BaseBox>, _> = rows
+    let items: Result<Vec<activitystreams::activity::Create>, _> = rows
         .into_iter()
         .map(|row| {
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
@@ -570,8 +570,11 @@ async fn handler_users_outbox_page_get(
                     community: community_id,
                 };
 
-                let res =
-                    crate::apub_util::post_to_ap(&post_info, &community_ap_id, &ctx.host_url_apub);
+                let res = crate::apub_util::local_post_to_create_ap(
+                    &post_info,
+                    &community_ap_id,
+                    &ctx.host_url_apub,
+                );
                 last_created = Some(created);
                 res
             } else {
@@ -592,7 +595,7 @@ async fn handler_users_outbox_page_get(
                     ap_id: crate::APIDOrLocal::Local,
                 };
 
-                let res = crate::apub_util::local_comment_to_ap(
+                let res = crate::apub_util::local_comment_to_create_ap(
                     &comment_info,
                     &(if row.get(9) {
                         Cow::Owned(crate::apub_util::get_local_post_apub_id(
