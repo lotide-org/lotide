@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "lotide"
-version = "0.4.0-pre"
+version = "0.4.0"
 dependencies = [
  "activitystreams",
  "async-trait",
