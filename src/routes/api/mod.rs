@@ -194,6 +194,11 @@ pub fn route_api() -> crate::RouteNode<()> {
                                 .with_handler_async("POST", route_unstable_comments_like),
                         )
                         .with_child(
+                            "likes",
+                            crate::RouteNode::new()
+                                .with_handler_async("GET", route_unstable_comments_likes_list),
+                        )
+                        .with_child(
                             "unlike",
                             crate::RouteNode::new()
                                 .with_handler_async("POST", route_unstable_comments_unlike),
@@ -1730,6 +1735,112 @@ async fn route_unstable_comments_like(
     }
 
     Ok(crate::empty_response())
+}
+
+async fn route_unstable_comments_likes_list(
+    params: (CommentLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    use chrono::offset::TimeZone;
+    use std::convert::TryInto;
+
+    let (comment_id,) = params;
+
+    #[derive(Deserialize)]
+    struct LikesListQuery<'a> {
+        pub page: Option<Cow<'a, str>>,
+    }
+
+    let query: LikesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    let page: Option<(chrono::DateTime<chrono::offset::FixedOffset>, i64)> = query
+        .page
+        .map(|src| {
+            let mut spl = src.split(',');
+
+            let ts = spl.next().ok_or(())?;
+            let u = spl.next().ok_or(())?;
+            if spl.next().is_some() {
+                Err(())
+            } else {
+                let ts: i64 = ts.parse().map_err(|_| ())?;
+                let u: i64 = u.parse().map_err(|_| ())?;
+
+                let ts = chrono::offset::Utc.timestamp_nanos(ts);
+
+                Ok((ts.into(), u))
+            }
+        })
+        .transpose()
+        .map_err(|_| {
+            crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Invalid page",
+            ))
+        })?;
+
+    let limit: i64 = 30;
+    let real_limit = limit + 1;
+
+    let db = ctx.db_pool.get().await?;
+
+    let mut values: Vec<&(dyn postgres_types::ToSql + Sync)> = vec![&comment_id, &real_limit];
+    let page_conditions = match &page {
+        Some((ts, u)) => {
+            values.push(ts);
+            values.push(u);
+
+            " AND (reply_like.created_local < $3 OR (reply_like.created_local = $3 AND reply_like.person <= $4))"
+        }
+        None => "",
+    };
+
+    let sql: &str = &format!("SELECT person.id, person.username, person.local, person.ap_id, reply_like.created_local FROM reply_like, person WHERE person.id = reply_like.person AND reply_like.reply = $1{} ORDER BY reply_like.created_local DESC, reply_like.person DESC LIMIT $2", page_conditions);
+
+    let mut rows = db.query(sql, &values).await?;
+
+    let next_page = if rows.len() > limit.try_into().unwrap() {
+        let row = rows.pop().unwrap();
+
+        let ts: chrono::DateTime<chrono::offset::FixedOffset> = row.get(4);
+        let ts = ts.timestamp_nanos();
+
+        let u: i64 = row.get(0);
+
+        Some(format!("{},{}", ts, u))
+    } else {
+        None
+    };
+
+    let likes = rows
+        .iter()
+        .map(|row| {
+            let id = UserLocalID(row.get(0));
+            let username: &str = row.get(1);
+            let local: bool = row.get(2);
+            let ap_id: Option<&str> = row.get(3);
+
+            JustUser {
+                user: RespMinimalAuthorInfo {
+                    id,
+                    username: Cow::Borrowed(username),
+                    local,
+                    host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
+                    remote_url: ap_id.map(From::from),
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let body = serde_json::json!({
+        "items": likes,
+        "next_page": next_page,
+    });
+    let body = serde_json::to_vec(&body)?.into();
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body)?)
 }
 
 async fn route_unstable_comments_unlike(
