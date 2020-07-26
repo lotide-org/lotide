@@ -88,44 +88,6 @@ impl<'a, T: activitystreams::actor::Actor> activitystreams::ext::Extension<T>
 {
 }
 
-pub enum TimestampOrLatest {
-    Latest,
-    Timestamp(chrono::DateTime<chrono::offset::FixedOffset>),
-}
-
-impl std::fmt::Display for TimestampOrLatest {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            TimestampOrLatest::Latest => write!(f, "latest"),
-            TimestampOrLatest::Timestamp(ts) => write!(f, "{}", ts.timestamp()),
-        }
-    }
-}
-
-pub enum TimestampOrLatestParseError {
-    Number(std::num::ParseIntError),
-    Timestamp,
-}
-
-impl std::str::FromStr for TimestampOrLatest {
-    type Err = TimestampOrLatestParseError;
-
-    fn from_str(src: &str) -> Result<Self, Self::Err> {
-        if src == "latest" {
-            Ok(TimestampOrLatest::Latest)
-        } else {
-            use chrono::offset::TimeZone;
-
-            let ts = src.parse().map_err(TimestampOrLatestParseError::Number)?;
-            let ts = chrono::offset::Utc
-                .timestamp_opt(ts, 0)
-                .single()
-                .ok_or(TimestampOrLatestParseError::Timestamp)?;
-            Ok(TimestampOrLatest::Timestamp(ts.into()))
-        }
-    }
-}
-
 pub fn get_local_post_apub_id(post: PostLocalID, host_url_apub: &str) -> String {
     format!("{}/posts/{}", host_url_apub, post)
 }
@@ -168,7 +130,7 @@ pub fn get_local_person_outbox_apub_id(person: UserLocalID, host_url_apub: &str)
 
 pub fn get_local_person_outbox_page_apub_id(
     person: UserLocalID,
-    page: &TimestampOrLatest,
+    page: &crate::TimestampOrLatest,
     host_url_apub: &str,
 ) -> String {
     format!(
@@ -194,7 +156,7 @@ pub fn get_local_community_outbox_apub_id(
 
 pub fn get_local_community_outbox_page_apub_id(
     community: CommunityLocalID,
-    page: &TimestampOrLatest,
+    page: &crate::TimestampOrLatest,
     host_url_apub: &str,
 ) -> String {
     format!(

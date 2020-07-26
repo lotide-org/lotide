@@ -43,11 +43,10 @@ pub fn route_communities() -> crate::RouteNode<()> {
                     .with_handler_async("GET", handler_communities_outbox_get)
                     .with_child(
                         "page",
-                        crate::RouteNode::new()
-                            .with_child_parse::<crate::apub_util::TimestampOrLatest, _>(
-                                crate::RouteNode::new()
-                                    .with_handler_async("GET", handler_communities_outbox_page_get),
-                            ),
+                        crate::RouteNode::new().with_child_parse::<crate::TimestampOrLatest, _>(
+                            crate::RouteNode::new()
+                                .with_handler_async("GET", handler_communities_outbox_page_get),
+                        ),
                     ),
             )
             .with_child(
@@ -496,7 +495,7 @@ async fn handler_communities_outbox_get(
     let (community_id,) = params;
     let page_ap_id = crate::apub_util::get_local_community_outbox_page_apub_id(
         community_id,
-        &crate::apub_util::TimestampOrLatest::Latest,
+        &crate::TimestampOrLatest::Latest,
         &ctx.host_url_apub,
     );
 
@@ -516,11 +515,11 @@ async fn handler_communities_outbox_get(
 }
 
 async fn handler_communities_outbox_page_get(
-    params: (CommunityLocalID, crate::apub_util::TimestampOrLatest),
+    params: (CommunityLocalID, crate::TimestampOrLatest),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    use crate::apub_util::TimestampOrLatest;
+    use crate::TimestampOrLatest;
 
     let (community_id, page) = params;
 
@@ -574,7 +573,7 @@ async fn handler_communities_outbox_page_get(
     let next = match last_created {
         Some(ts) => Some(crate::apub_util::get_local_community_outbox_page_apub_id(
             community_id,
-            &crate::apub_util::TimestampOrLatest::Timestamp(ts),
+            &crate::TimestampOrLatest::Timestamp(ts),
             &ctx.host_url_apub,
         )),
         None => None,

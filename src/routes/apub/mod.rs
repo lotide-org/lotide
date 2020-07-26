@@ -25,7 +25,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
                             .with_child(
                                 "page",
                                 crate::RouteNode::new()
-                                    .with_child_parse::<crate::apub_util::TimestampOrLatest, _>(
+                                    .with_child_parse::<crate::TimestampOrLatest, _>(
                                         crate::RouteNode::new().with_handler_async(
                                             "GET",
                                             handler_users_outbox_page_get,
@@ -493,7 +493,7 @@ async fn handler_users_outbox_get(
     let (user,) = params;
     let page_ap_id = crate::apub_util::get_local_person_outbox_page_apub_id(
         user,
-        &crate::apub_util::TimestampOrLatest::Latest,
+        &crate::TimestampOrLatest::Latest,
         &ctx.host_url_apub,
     );
 
@@ -513,11 +513,11 @@ async fn handler_users_outbox_get(
 }
 
 async fn handler_users_outbox_page_get(
-    params: (UserLocalID, crate::apub_util::TimestampOrLatest),
+    params: (UserLocalID, crate::TimestampOrLatest),
     ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    use crate::apub_util::TimestampOrLatest;
+    use crate::TimestampOrLatest;
 
     let (user, page) = params;
 
@@ -645,7 +645,7 @@ async fn handler_users_outbox_page_get(
     let next = match last_created {
         Some(ts) => Some(crate::apub_util::get_local_person_outbox_page_apub_id(
             user,
-            &crate::apub_util::TimestampOrLatest::Timestamp(ts),
+            &crate::TimestampOrLatest::Timestamp(ts),
             &ctx.host_url_apub,
         )),
         None => None,

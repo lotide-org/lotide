@@ -85,6 +85,44 @@ pub enum APIDOrLocal {
     APID(String),
 }
 
+pub enum TimestampOrLatest {
+    Latest,
+    Timestamp(chrono::DateTime<chrono::offset::FixedOffset>),
+}
+
+impl std::fmt::Display for TimestampOrLatest {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            TimestampOrLatest::Latest => write!(f, "latest"),
+            TimestampOrLatest::Timestamp(ts) => write!(f, "{}", ts.timestamp()),
+        }
+    }
+}
+
+pub enum TimestampOrLatestParseError {
+    Number(std::num::ParseIntError),
+    Timestamp,
+}
+
+impl std::str::FromStr for TimestampOrLatest {
+    type Err = TimestampOrLatestParseError;
+
+    fn from_str(src: &str) -> Result<Self, Self::Err> {
+        if src == "latest" {
+            Ok(TimestampOrLatest::Latest)
+        } else {
+            use chrono::offset::TimeZone;
+
+            let ts = src.parse().map_err(TimestampOrLatestParseError::Number)?;
+            let ts = chrono::offset::Utc
+                .timestamp_opt(ts, 0)
+                .single()
+                .ok_or(TimestampOrLatestParseError::Timestamp)?;
+            Ok(TimestampOrLatest::Timestamp(ts.into()))
+        }
+    }
+}
+
 macro_rules! id_wrapper {
     ($ty:ident) => {
         #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
