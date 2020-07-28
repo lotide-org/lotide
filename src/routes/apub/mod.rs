@@ -1,7 +1,7 @@
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
-use activitystreams::ext::Extensible;
-use serde_derive::Deserialize;
+use activitystreams::prelude::*;
 use std::borrow::Cow;
+use std::ops::Deref;
 use std::sync::Arc;
 
 mod communities;
@@ -104,31 +104,6 @@ pub fn route_apub() -> crate::RouteNode<()> {
         )
 }
 
-fn get_object_id(
-    aao_props: &activitystreams::activity::properties::ActorAndObjectProperties,
-) -> Result<Option<Cow<'_, activitystreams::primitives::XsdAnyUri>>, crate::Error> {
-    match aao_props.get_object_xsd_any_uri() {
-        Some(uri) => Ok(Some(Cow::Borrowed(uri))),
-        None => match aao_props.get_object_base_box() {
-            Some(base_box) => {
-                #[derive(Deserialize)]
-                struct WithMaybeID {
-                    id: Option<activitystreams::primitives::XsdAnyUri>,
-                }
-
-                impl activitystreams::Base for WithMaybeID {}
-
-                let value: WithMaybeID = base_box.clone().into_concrete()?;
-                match value.id {
-                    Some(id) => Ok(Some(Cow::Owned(id))),
-                    None => Ok(None),
-                }
-            }
-            None => Ok(None),
-        },
-    }
-}
-
 pub fn route_inbox() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_handler_async("POST", handler_inbox_post)
 }
@@ -179,28 +154,35 @@ async fn handler_users_get(
                 crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
 
             let mut info = activitystreams::actor::Person::new();
-            info.object_props.set_many_context_xsd_any_uris(vec![
+            info.set_many_contexts(vec![
                 activitystreams::context(),
                 activitystreams::security(),
-            ])?;
-            info.as_mut()
-                .set_id(user_ap_id.as_ref())?
-                .set_name_xsd_string(username.as_ref())?
-                .set_summary_xsd_string(description)?;
+            ]);
+            info.set_id(user_ap_id.deref().clone())
+                .set_name(username.as_ref())
+                .set_summary(description);
 
-            let mut endpoints = activitystreams::endpoint::EndpointProperties::default();
-            endpoints.set_shared_inbox(format!("{}/inbox", ctx.host_url_apub))?;
+            let endpoints = activitystreams::actor::Endpoints {
+                shared_inbox: Some(
+                    crate::apub_util::get_local_shared_inbox(&ctx.host_url_apub).into(),
+                ),
+                ..Default::default()
+            };
 
-            let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
-            actor_props.set_inbox(format!("{}/users/{}/inbox", ctx.host_url_apub, user_id))?;
-            actor_props.set_outbox(crate::apub_util::get_local_person_outbox_apub_id(
-                user_id,
-                &ctx.host_url_apub,
-            ))?;
-            actor_props.set_endpoints(endpoints)?;
-            actor_props.set_preferred_username(username)?;
-
-            let info = info.extend(actor_props);
+            let mut info = activitystreams::actor::ApActor::new(
+                {
+                    let mut res = user_ap_id.clone();
+                    res.path_segments_mut().push("inbox");
+                    res.into()
+                },
+                info,
+            );
+            info.set_outbox(
+                crate::apub_util::get_local_person_outbox_apub_id(user_id, &ctx.host_url_apub)
+                    .into(),
+            )
+            .set_endpoints(endpoints)
+            .set_preferred_username(username);
 
             let key_id = format!("{}/users/{}#main-key", ctx.host_url_apub, user_id);
 
@@ -208,13 +190,13 @@ async fn handler_users_get(
                 let public_key_ext = crate::apub_util::PublicKeyExtension {
                     public_key: Some(crate::apub_util::PublicKey {
                         id: (&key_id).into(),
-                        owner: (&user_ap_id).into(),
+                        owner: user_ap_id.as_str().into(),
                         public_key_pem: public_key.into(),
                         signature_algorithm: Some(crate::apub_util::SIGALG_RSA_SHA256.into()),
                     }),
                 };
 
-                let info = info.extend(public_key_ext);
+                let info = activitystreams_ext::Ext1::new(info, public_key_ext);
 
                 serde_json::to_vec(&info)
             } else {
@@ -236,9 +218,11 @@ async fn inbox_common(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    use crate::apub_util::{KnownObject, Verified};
+
     let db = ctx.db_pool.get().await?;
 
-    let activity = crate::apub_util::verify_incoming_activity(
+    let object = crate::apub_util::verify_incoming_object(
         req,
         &db,
         &ctx.http_client,
@@ -246,23 +230,18 @@ async fn inbox_common(
     )
     .await?;
 
-    match activity.kind() {
-        Some("Accept") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Accept>()
-                .unwrap();
-
+    match object.into_inner() {
+        KnownObject::Accept(activity) => {
             let activity_id = activity
-                .object_props
-                .get_id()
+                .id_unchecked()
                 .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
             let actor_ap_id = activity
-                .accept_props
-                .get_actor_xsd_any_uri()
+                .actor_unchecked()
+                .as_single_id()
                 .ok_or(crate::Error::InternalStrStatic("Missing actor for Accept"))?;
 
-            crate::apub_util::require_containment(activity_id.as_url(), actor_ap_id.as_url())?;
+            crate::apub_util::require_containment(activity_id, actor_ap_id)?;
 
             let actor_ap_id = actor_ap_id.as_str();
 
@@ -273,13 +252,13 @@ async fn inbox_common(
             };
 
             if let Some(community_local_id) = community_local_id {
-                let object_id = get_object_id(&activity.accept_props)?
+                let object_id = activity
+                    .object()
+                    .as_single_id()
                     .ok_or(crate::Error::InternalStrStatic("Missing object for Accept"))?;
 
-                let object_id = object_id.as_str();
-
-                if object_id.starts_with(&ctx.host_url_apub) {
-                    let remaining = &object_id[ctx.host_url_apub.len()..];
+                if object_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
+                    let remaining = &object_id.as_str()[ctx.host_url_apub.as_str().len()..];
                     if remaining.starts_with("/communities/") {
                         let remaining = &remaining[13..];
                         let next_expected = format!("{}/followers/", community_local_id);
@@ -296,16 +275,12 @@ async fn inbox_common(
                 }
             }
         }
-        Some("Announce") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Announce>()
-                .unwrap();
+        KnownObject::Announce(activity) => {
             let activity_id = activity
-                .object_props
-                .get_id()
+                .id_unchecked()
                 .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
-            let community_ap_id = activity.announce_props.get_actor_xsd_any_uri().ok_or(
+            let community_ap_id = activity.actor_unchecked().as_single_id().ok_or(
                 crate::Error::InternalStrStatic("Missing actor for Announce"),
             )?;
 
@@ -318,47 +293,15 @@ async fn inbox_common(
                 .map(|row| (CommunityLocalID(row.get(0)), row.get(1)));
 
             if let Some((community_local_id, community_is_local)) = community_local_info {
-                crate::apub_util::require_containment(
-                    activity_id.as_url(),
-                    community_ap_id.as_url(),
-                )?;
+                crate::apub_util::require_containment(activity_id, community_ap_id)?;
 
-                let object_id = {
-                    if let activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectEnum::Term(
-                        req_obj,
-                    ) = activity.into_inner().announce_props.object
-                    {
-                        match req_obj {
-                            activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectTermEnum::XsdAnyUri(id) => Some(id),
-                            activitystreams::activity::properties::ActorAndObjectOptTargetPropertiesObjectTermEnum::BaseBox(req_obj) => {
-                                match req_obj.kind() {
-                                    Some("Page") => {
-                                        let req_obj = req_obj.into_concrete::<activitystreams::object::Page>().unwrap();
-
-                                        Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
-                                    },
-                                    Some("Note") => {
-                                        let req_obj = req_obj.into_concrete::<activitystreams::object::Note>().unwrap();
-
-                                        Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
-                                    },
-                                    _ => None,
-                                }
-                            }
-                        }
-                    } else {
-                        None
-                    }
-                };
+                let object_id = activity.object().as_single_id();
 
                 if let Some(object_id) = object_id {
-                    if !object_id.as_str().starts_with(&ctx.host_url_apub) {
+                    if !object_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
                         // don't need announces for local objects
-                        let body =
-                            crate::apub_util::fetch_ap_object(object_id.as_str(), &ctx.http_client)
-                                .await?;
-                        let obj: activitystreams::object::ObjectBox = serde_json::from_value(body)?;
-                        let obj = crate::apub_util::Verified(obj);
+                        let obj =
+                            crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?;
                         crate::apub_util::handle_recieved_object_for_community(
                             community_local_id,
                             community_is_local,
@@ -370,60 +313,43 @@ async fn inbox_common(
                 }
             }
         }
-        Some("Create") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Create>()
-                .unwrap();
-            inbox_common_create(activity, ctx).await?;
+        KnownObject::Create(activity) => inbox_common_create(Verified(activity), ctx).await?,
+        KnownObject::Delete(activity) => {
+            crate::apub_util::handle_delete(Verified(activity), ctx).await?
         }
-        Some("Delete") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Delete>()
-                .unwrap();
-
-            crate::apub_util::handle_delete(activity, ctx).await?;
+        KnownObject::Like(activity) => {
+            crate::apub_util::handle_like(Verified(activity), ctx).await?
         }
-        Some("Like") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Like>()
-                .unwrap();
-            crate::apub_util::handle_like(activity, ctx).await?;
+        KnownObject::Undo(activity) => {
+            crate::apub_util::handle_undo(Verified(activity), ctx).await?
         }
-        Some("Undo") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Undo>()
-                .unwrap();
-            crate::apub_util::handle_undo(activity, ctx).await?;
-        }
-        Some("Update") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Update>()
-                .unwrap();
-
+        KnownObject::Update(activity) => {
             let activity_id = activity
-                .object_props
-                .get_id()
+                .id_unchecked()
                 .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
-            let object_id = activity
-                .update_props
-                .get_object_xsd_any_uri()
-                .ok_or(crate::Error::InternalStrStatic("Missing object for Update"))?;
+            let object_id =
+                activity
+                    .object()
+                    .as_single_id()
+                    .ok_or(crate::Error::InternalStrStatic(
+                        "Missing object ID for Update",
+                    ))?;
 
-            crate::apub_util::require_containment(activity_id.as_url(), object_id.as_url())?;
+            crate::apub_util::require_containment(activity_id, object_id)?;
 
-            let object_id = object_id.as_str().to_owned();
+            let object_id = object_id.clone();
 
             crate::spawn_task(async move {
                 let row = db
                     .query_opt(
                         "SELECT 1 FROM community WHERE ap_id=$1 LIMIT 1",
-                        &[&object_id],
+                        &[&object_id.as_str()],
                     )
                     .await?;
                 if row.is_some() {
                     ctx.enqueue_task(&crate::tasks::FetchActor {
-                        actor_ap_id: object_id.into(),
+                        actor_ap_id: Cow::Owned(object_id),
                     })
                     .await?;
                 }
@@ -441,36 +367,13 @@ pub async fn inbox_common_create(
     activity: crate::apub_util::Verified<activitystreams::activity::Create>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let req_obj = activity.into_inner().create_props.object;
-    if let activitystreams::activity::properties::ActorAndObjectPropertiesObjectEnum::Term(
-        req_obj,
-    ) = req_obj
-    {
-        let object_id = match req_obj {
-            activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::XsdAnyUri(id) => Some(id),
-            activitystreams::activity::properties::ActorAndObjectPropertiesObjectTermEnum::BaseBox(req_obj) => {
-                match req_obj.kind() {
-                    Some("Page") => {
-                        let req_obj = req_obj.into_concrete::<activitystreams::object::Page>().unwrap();
+    for req_obj in activity.object().iter() {
+        let object_id = req_obj.id();
 
-                        Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
-                    },
-                    Some("Note") => {
-                        let req_obj = req_obj.into_concrete::<activitystreams::object::Note>().unwrap();
-
-                        Some(req_obj.object_props.id.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "Missing id in object")))?)
-                    },
-                    _ => None,
-                }
-            }
-        };
         if let Some(object_id) = object_id {
-            let body =
-                crate::apub_util::fetch_ap_object(object_id.as_str(), &ctx.http_client).await?;
-            let obj: activitystreams::object::ObjectBox = serde_json::from_value(body)?;
-            let obj = crate::apub_util::Verified(obj);
+            let obj = crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?;
 
-            crate::apub_util::handle_recieved_object_for_local_community(obj, ctx).await?;
+            crate::apub_util::handle_recieved_object_for_local_community(obj, ctx.clone()).await?;
         }
     }
 
@@ -499,7 +402,7 @@ async fn handler_users_outbox_get(
 
     let collection = serde_json::json!({
         "@context": activitystreams::context(),
-        "type": activitystreams::collection::kind::OrderedCollectionType,
+        "type": activitystreams::collection::kind::OrderedCollectionType::OrderedCollection,
         "id": crate::apub_util::get_local_person_outbox_apub_id(user, &ctx.host_url_apub),
         "first": &page_ap_id,
         "current": &page_ap_id
@@ -550,12 +453,9 @@ async fn handler_users_outbox_page_get(
                 let community_id = CommunityLocalID(row.get(8));
                 let community_local = row.get(9);
                 let community_ap_id = if community_local {
-                    Cow::Owned(crate::apub_util::get_local_community_apub_id(
-                        community_id,
-                        &ctx.host_url_apub,
-                    ))
+                    crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub)
                 } else {
-                    Cow::Borrowed(row.get(10))
+                    row.get::<_, &str>(10).parse()?
                 };
 
                 let post_info = crate::PostInfo {
@@ -572,7 +472,7 @@ async fn handler_users_outbox_page_get(
 
                 let res = crate::apub_util::local_post_to_create_ap(
                     &post_info,
-                    &community_ap_id,
+                    community_ap_id.into(),
                     &ctx.host_url_apub,
                 );
                 last_created = Some(created);
@@ -598,38 +498,38 @@ async fn handler_users_outbox_page_get(
                 let res = crate::apub_util::local_comment_to_create_ap(
                     &comment_info,
                     &(if row.get(9) {
-                        Cow::Owned(crate::apub_util::get_local_post_apub_id(
-                            post_id,
-                            &ctx.host_url_apub,
-                        ))
+                        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into()
                     } else {
-                        Cow::Borrowed(row.get(10))
+                        std::str::FromStr::from_str(row.get(10))?
                     }),
                     match row.get(12) {
-                        Some(true) => Some(Cow::Owned(
-                            crate::apub_util::get_local_comment_apub_id(id, &ctx.host_url_apub),
-                        )),
-                        Some(false) => Some(Cow::Borrowed(row.get(7))),
+                        Some(true) => Some(
+                            crate::apub_util::get_local_comment_apub_id(id, &ctx.host_url_apub)
+                                .into(),
+                        ),
+                        Some(false) => Some(std::str::FromStr::from_str(row.get(7))?),
                         None => None,
-                    }
-                    .as_deref(),
+                    },
                     match row.get(14) {
-                        Some(true) => Some(Cow::Owned(crate::apub_util::get_local_person_apub_id(
-                            UserLocalID(row.get(13)),
-                            &ctx.host_url_apub,
-                        ))),
-                        Some(false) => Some(Cow::Borrowed(row.get(5))),
+                        Some(true) => Some(
+                            crate::apub_util::get_local_person_apub_id(
+                                UserLocalID(row.get(13)),
+                                &ctx.host_url_apub,
+                            )
+                            .into(),
+                        ),
+                        Some(false) => Some(std::str::FromStr::from_str(row.get(5))?),
                         None => None,
-                    }
-                    .as_deref(),
-                    &(if row.get(16) {
-                        Cow::Owned(crate::apub_util::get_local_community_apub_id(
+                    },
+                    if row.get(16) {
+                        crate::apub_util::get_local_community_apub_id(
                             CommunityLocalID(row.get(15)),
                             &ctx.host_url_apub,
-                        ))
+                        )
+                        .into()
                     } else {
-                        Cow::Borrowed(row.get(17))
-                    }),
+                        std::str::FromStr::from_str(row.get(17))?
+                    },
                     &ctx.host_url_apub,
                 )
                 .and_then(|x| Ok(x.try_into()?));
@@ -653,7 +553,7 @@ async fn handler_users_outbox_page_get(
 
     let info = serde_json::json!({
         "@context": activitystreams::context(),
-        "type": activitystreams::collection::kind::OrderedCollectionPageType,
+        "type": activitystreams::collection::kind::OrderedCollectionPageType::OrderedCollectionPage,
         "partOf": crate::apub_util::get_local_person_outbox_apub_id(user, &ctx.host_url_apub),
         "orderedItems": items,
         "next": next,
@@ -697,9 +597,10 @@ async fn handler_comments_get(
 
             if row.get(19) {
                 let mut body = activitystreams::object::Tombstone::new();
-                body.tombstone_props.set_former_type_xsd_string("Note")?;
-                body.object_props.set_context_xsd_any_uri(activitystreams::context())?;
-                body.object_props.set_id(crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub))?;
+                body
+                    .set_former_type("Note".to_owned())
+                    .set_context(activitystreams::context())
+                    .set_id(crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub).into());
 
                 let body = serde_json::to_vec(&body)?.into();
 
@@ -720,13 +621,13 @@ async fn handler_comments_get(
             let community_ap_id = if row.get(9) {
                 crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
             } else {
-                row.get(10)
+                std::str::FromStr::from_str(row.get(10))?
             };
 
             let post_ap_id = if row.get(6) {
                 crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
             } else {
-                row.get(7)
+                std::str::FromStr::from_str(row.get(7))?
             };
 
             let parent_local_id = row.get::<_, Option<_>>(5).map(CommentLocalID);
@@ -751,7 +652,7 @@ async fn handler_comments_get(
             let parent_ap_id = match row.get(11) {
                 None => None,
                 Some(true) => Some(crate::apub_util::get_local_comment_apub_id(parent_local_id.unwrap(), &ctx.host_url_apub)),
-                Some(false) => row.get(12),
+                Some(false) => row.get::<_, Option<&str>>(12).map(|x| x.parse()).transpose()?,
             };
 
             let post_or_parent_author_ap_id = match parent_local_id {
@@ -762,7 +663,7 @@ async fn handler_comments_get(
                             if post_author_local {
                                 Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(13)), &ctx.host_url_apub))
                             } else {
-                                row.get(15)
+                                Some(std::str::FromStr::from_str(row.get(15))?)
                             }
                         },
                         None => None,
@@ -774,7 +675,7 @@ async fn handler_comments_get(
                             if parent_author_local {
                                 Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(16)), &ctx.host_url_apub))
                             } else {
-                                row.get(18)
+                                Some(std::str::FromStr::from_str(row.get(18))?)
                             }
                         },
                         None => None,
@@ -782,7 +683,7 @@ async fn handler_comments_get(
                 },
             };
 
-            let body = crate::apub_util::local_comment_to_ap(&info, &post_ap_id, parent_ap_id.as_deref(), post_or_parent_author_ap_id.as_deref(), &community_ap_id, &ctx.host_url_apub)?;
+            let body = crate::apub_util::local_comment_to_ap(&info, &post_ap_id, parent_ap_id.map(From::from), post_or_parent_author_ap_id.map(From::from), community_ap_id.into(), &ctx.host_url_apub)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
@@ -840,13 +741,13 @@ async fn handler_comments_create_get(
             let community_ap_id = if row.get(9) {
                 crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
             } else {
-                row.get(10)
+                std::str::FromStr::from_str(row.get(10))?
             };
 
             let post_ap_id = if row.get(6) {
                 crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
             } else {
-                row.get(7)
+                std::str::FromStr::from_str(row.get(7))?
             };
 
             let parent_local_id = row.get::<_, Option<_>>(5).map(CommentLocalID);
@@ -870,7 +771,7 @@ async fn handler_comments_create_get(
             let parent_ap_id = match row.get(11) {
                 None => None,
                 Some(true) => Some(crate::apub_util::get_local_comment_apub_id(parent_local_id.unwrap(), &ctx.host_url_apub)),
-                Some(false) => row.get(12),
+                Some(false) => row.get::<_, Option<&str>>(12).map(std::str::FromStr::from_str).transpose()?,
             };
 
             let post_or_parent_author_ap_id = match parent_local_id {
@@ -881,7 +782,7 @@ async fn handler_comments_create_get(
                             if post_author_local {
                                 Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(13)), &ctx.host_url_apub))
                             } else {
-                                row.get(15)
+                                Some(std::str::FromStr::from_str(row.get(15))?)
                             }
                         },
                         None => None,
@@ -893,7 +794,7 @@ async fn handler_comments_create_get(
                             if parent_author_local {
                                 Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(16)), &ctx.host_url_apub))
                             } else {
-                                row.get(18)
+                                Some(std::str::FromStr::from_str(row.get(18))?)
                             }
                         },
                         None => None,
@@ -901,7 +802,7 @@ async fn handler_comments_create_get(
                 },
             };
 
-            let body = crate::apub_util::local_comment_to_create_ap(&info, &post_ap_id, parent_ap_id.as_deref(), post_or_parent_author_ap_id.as_deref(), &community_ap_id, &ctx.host_url_apub)?;
+            let body = crate::apub_util::local_comment_to_create_ap(&info, &post_ap_id, parent_ap_id.map(From::from), post_or_parent_author_ap_id.map(From::from), community_ap_id.into(), &ctx.host_url_apub)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
@@ -997,17 +898,14 @@ async fn handler_comments_likes_get(
                 .await?;
             let comment_local = row.get(0);
             let comment_ap_id = if comment_local {
-                Cow::Owned(crate::apub_util::get_local_comment_apub_id(
-                    comment_id,
-                    &ctx.host_url_apub,
-                ))
+                crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub)
             } else {
-                Cow::Borrowed(row.get(1))
+                std::str::FromStr::from_str(row.get(1))?
             };
 
             let like = crate::apub_util::local_comment_like_to_ap(
                 comment_id,
-                &comment_ap_id,
+                comment_ap_id,
                 user_id,
                 &ctx.host_url_apub,
             )?;
@@ -1151,9 +1049,12 @@ async fn handler_posts_get(
                 let had_href: Option<bool> = row.get(7);
 
                 let mut body = activitystreams::object::Tombstone::new();
-                body.tombstone_props.set_former_type_xsd_string(if had_href == Some(true) { "Page" } else { "Note" })?;
-                body.object_props.set_context_xsd_any_uri(activitystreams::context())?;
-                body.object_props.set_id(crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub))?;
+                body
+                    .set_former_type(
+                        (if had_href == Some(true) { "Page" } else { "Note" }).to_owned()
+                    )
+                    .set_context(activitystreams::context())
+                    .set_id(crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into());
 
                 let body = serde_json::to_vec(&body)?.into();
 
@@ -1170,7 +1071,7 @@ async fn handler_posts_get(
             let community_local_id = CommunityLocalID(row.get(4));
 
             let community_ap_id = match row.get(11) {
-                Some(ap_id) => ap_id,
+                Option::<&str>::Some(ap_id) => ap_id.parse()?,
                 None => {
                     // assume local (might be a problem?)
                     crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
@@ -1189,7 +1090,7 @@ async fn handler_posts_get(
                 title: row.get(2),
             };
 
-            let body = crate::apub_util::post_to_ap(&post_info, &community_ap_id, &ctx.host_url_apub)?;
+            let body = crate::apub_util::post_to_ap(&post_info, community_ap_id.into(), &ctx.host_url_apub)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
@@ -1244,7 +1145,7 @@ async fn handler_posts_create_get(
             let community_local_id = CommunityLocalID(row.get(4));
 
             let community_ap_id = match row.get(10) {
-                Some(ap_id) => ap_id,
+                Option::<&str>::Some(ap_id) => ap_id.parse()?,
                 None => {
                     // assume local (might be a problem?)
                     crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
@@ -1263,7 +1164,7 @@ async fn handler_posts_create_get(
                 title: row.get(3),
             };
 
-            let body = crate::apub_util::local_post_to_create_ap(&post_info, &community_ap_id, &ctx.host_url_apub)?;
+            let body = crate::apub_util::local_post_to_create_ap(&post_info, community_ap_id.into(), &ctx.host_url_apub)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
@@ -1360,17 +1261,14 @@ async fn handler_posts_likes_get(
                 .await?;
             let post_local = row.get(0);
             let post_ap_id = if post_local {
-                Cow::Owned(crate::apub_util::get_local_post_apub_id(
-                    post_id,
-                    &ctx.host_url_apub,
-                ))
+                crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub)
             } else {
-                Cow::Borrowed(row.get(1))
+                std::str::FromStr::from_str(row.get(1))?
             };
 
             let like = crate::apub_util::local_post_like_to_ap(
                 post_id,
-                &post_ap_id,
+                post_ap_id,
                 user_id,
                 &ctx.host_url_apub,
             )?;

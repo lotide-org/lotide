@@ -72,8 +72,8 @@ async fn handler_webfinger_get(
         Name(&'a str),
     }
 
-    let found_ref = if query.resource.starts_with(&ctx.host_url_apub) {
-        let rest = &query.resource[ctx.host_url_apub.len()..];
+    let found_ref = if query.resource.starts_with(&ctx.host_url_apub.as_str()) {
+        let rest = &query.resource[ctx.host_url_apub.as_str().len()..];
         if rest.starts_with("/users/") {
             if let Ok(id) = rest[7..].parse() {
                 Some(LocalRef::UserID(id))
@@ -147,14 +147,15 @@ async fn handler_webfinger_get(
                     crate::apub_util::get_local_community_apub_id(id, &ctx.host_url_apub)
                 }
             };
+            let alias = alias.as_str();
 
             let body = FingerResponse {
                 subject: subject.into(),
-                aliases: vec![(&alias).into()],
+                aliases: vec![alias.into()],
                 links: vec![FingerLink {
                     rel: "self".into(),
                     type_: Some(crate::apub_util::ACTIVITY_TYPE.into()),
-                    href: Some((&alias).into()),
+                    href: Some(alias.into()),
                 }],
             };
 

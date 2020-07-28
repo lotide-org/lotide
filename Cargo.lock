@@ -2,11 +2,10 @@
 # It is not intended for manual editing.
 [[package]]
 name = "activitystreams"
-version = "0.6.2"
+version = "0.7.0-alpha.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "464cb473bfb402b857cc15b1153974c203a43f1485da4dda15cd17a738548958"
+checksum = "e3490e8e9d7744aada19fb2fb4e2564f8c22fd080a3561093ac91ed7d10bfe78"
 dependencies = [
- "activitystreams-derive",
  "chrono",
  "mime",
  "serde",
@@ -16,14 +15,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "activitystreams-derive"
-version = "0.6.1"
+name = "activitystreams-ext"
+version = "0.1.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c39ba5929399e9f921055bac76dd8f47419fa5b6b6da1ac4c1e82b94ed0ac7b4"
+checksum = "bb8e19a0810cc25df3535061a08b7d8f8a734d309ea4411c57a9767e4a2ffa0e"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn",
+ "activitystreams",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -814,6 +813,7 @@ name = "lotide"
 version = "0.5.0-pre"
 dependencies = [
  "activitystreams",
+ "activitystreams-ext",
  "async-trait",
  "bcrypt",
  "bytes",
@@ -1764,6 +1764,7 @@ dependencies = [
  "idna",
  "matches",
  "percent-encoding",
+ "serde",
 ]
 
 [[package]]

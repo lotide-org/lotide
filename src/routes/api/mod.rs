@@ -261,13 +261,13 @@ async fn insert_token(
 }
 
 enum Lookup<'a> {
-    URI(hyper::Uri),
+    URL(url::Url),
     WebFinger { user: &'a str, host: &'a str },
 }
 
 fn parse_lookup(src: &str) -> Result<Lookup, crate::Error> {
     if src.starts_with("http") {
-        return Ok(Lookup::URI(src.parse()?));
+        return Ok(Lookup::URL(src.parse()?));
     }
     if let Some(at_idx) = src.rfind('@') {
         let mut user = &src[..at_idx];
@@ -299,7 +299,7 @@ async fn route_unstable_actors_lookup(
     let lookup = parse_lookup(&query)?;
 
     let uri = match lookup {
-        Lookup::URI(uri) => Some(uri),
+        Lookup::URL(uri) => Some(uri),
         Lookup::WebFinger { user, host } => {
             let uri = format!(
                 "https://{}/.well-known/webfinger?{}",
@@ -350,9 +350,7 @@ async fn route_unstable_actors_lookup(
         }
     };
 
-    let uri_str = uri.to_string();
-
-    let actor = crate::apub_util::fetch_actor(&uri_str, &db, &ctx.http_client).await?;
+    let actor = crate::apub_util::fetch_actor(&uri, &db, &ctx.http_client).await?;
 
     if let crate::apub_util::ActorLocalInfo::Community { id, .. } = actor {
         Ok(hyper::Response::builder()
@@ -637,7 +635,7 @@ async fn route_unstable_posts_create(
                 crate::on_community_add_post(
                     post.community,
                     post.id,
-                    &crate::apub_util::get_local_post_apub_id(post.id, &ctx.host_url_apub),
+                    crate::apub_util::get_local_post_apub_id(post.id, &ctx.host_url_apub).into(),
                     ctx,
                 );
             } else {
@@ -1074,7 +1072,7 @@ async fn route_unstable_posts_delete(
                         if let Some(community_inbox) = community_inbox {
                             crate::spawn_task(async move {
                                 ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                                    inbox: community_inbox.into(),
+                                    inbox: Cow::Owned(community_inbox.parse()?),
                                     sign_as: Some(crate::ActorLocalRef::Person(user)),
                                     object: serde_json::to_string(&delete_ap)?,
                                 })
@@ -1116,13 +1114,10 @@ async fn route_unstable_posts_like(
             ).await?;
             if let Some(row) = row {
                 let post_local = row.get(0);
-                let post_ap_id: &str = &if post_local {
-                    Cow::Owned(crate::apub_util::get_local_post_apub_id(
-                        post_id,
-                        &ctx.host_url_apub,
-                    ))
+                let post_ap_id = if post_local {
+                    crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub)
                 } else {
-                    Cow::Borrowed(row.get(1))
+                    row.get::<_, &str>(1).parse()?
                 };
 
                 let mut inboxes = HashSet::new();
@@ -1153,7 +1148,7 @@ async fn route_unstable_posts_like(
 
                 for inbox in inboxes {
                     ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                        inbox: inbox.into(),
+                        inbox: Cow::Owned(inbox.parse()?),
                         sign_as: Some(crate::ActorLocalRef::Person(user)),
                         object: (&body).into(),
                     })
@@ -1361,7 +1356,7 @@ async fn route_unstable_posts_unlike(
 
                 for inbox in inboxes {
                     ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                        inbox: inbox.into(),
+                        inbox: Cow::Owned(inbox.parse()?),
                         sign_as: Some(crate::ActorLocalRef::Person(user)),
                         object: (&body).into(),
                     })
@@ -1633,7 +1628,7 @@ async fn route_unstable_comments_delete(
                         if let Some(community_inbox) = community_inbox {
                             crate::spawn_task(async move {
                                 ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                                    inbox: community_inbox.into(),
+                                    inbox: Cow::Owned(community_inbox.parse()?),
                                     sign_as: Some(crate::ActorLocalRef::Person(user)),
                                     object: body,
                                 })
@@ -1675,13 +1670,11 @@ async fn route_unstable_comments_like(
             ).await?;
             if let Some(row) = row {
                 let comment_local = row.get(0);
-                let comment_ap_id: &str = &if comment_local {
-                    Cow::Owned(crate::apub_util::get_local_comment_apub_id(
-                        comment_id,
-                        &ctx.host_url_apub,
-                    ))
+                let comment_ap_id = if comment_local {
+                    crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub)
                 } else {
-                    Cow::Borrowed(row.get(1))
+                    let src: &str = row.get(1);
+                    src.parse()?
                 };
 
                 let mut inboxes = HashSet::new();
@@ -1712,7 +1705,7 @@ async fn route_unstable_comments_like(
 
                 for inbox in inboxes {
                     ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                        inbox: inbox.into(),
+                        inbox: Cow::Owned(inbox.parse()?),
                         sign_as: Some(crate::ActorLocalRef::Person(user)),
                         object: (&body).into(),
                     })
@@ -1920,7 +1913,7 @@ async fn route_unstable_comments_unlike(
 
                 for inbox in inboxes {
                     ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                        inbox: inbox.into(),
+                        inbox: Cow::Owned(inbox.parse()?),
                         sign_as: Some(crate::ActorLocalRef::Person(user)),
                         object: (&body).into(),
                     })

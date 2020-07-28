@@ -1,6 +1,7 @@
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
-use activitystreams::ext::Extensible;
+use activitystreams::prelude::*;
 use std::borrow::Cow;
+use std::ops::Deref;
 use std::sync::Arc;
 
 pub fn route_communities() -> crate::RouteNode<()> {
@@ -113,32 +114,35 @@ async fn handler_communities_get(
                 crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub);
 
             let mut info = activitystreams::actor::Group::new();
-            info.as_mut()
-                .set_many_context_xsd_any_uris(vec![
-                    activitystreams::context(),
-                    activitystreams::security(),
-                ])?
-                .set_id(community_ap_id.as_ref())?
-                .set_name_xsd_string(name.as_ref())?
-                .set_summary_xsd_string(description)?;
+            info.set_many_contexts(vec![
+                activitystreams::context(),
+                activitystreams::security(),
+            ])
+            .set_id(community_ap_id.deref().clone())
+            .set_name(name.as_ref())
+            .set_summary(description);
 
-            let mut actor_props = activitystreams::actor::properties::ApActorProperties::default();
+            let inbox = {
+                let mut res = community_ap_id.clone();
+                res.path_segments_mut().push("inbox");
+                res
+            };
 
-            actor_props.set_inbox(format!(
-                "{}/communities/{}/inbox",
-                ctx.host_url_apub, community_id
-            ))?;
-            actor_props.set_outbox(crate::apub_util::get_local_community_outbox_apub_id(
-                community_id,
-                &ctx.host_url_apub,
-            ))?;
-            actor_props.set_followers(format!(
-                "{}/communities/{}/followers",
-                ctx.host_url_apub, community_id
-            ))?;
-            actor_props.set_preferred_username(name)?;
+            let mut info = activitystreams::actor::ApActor::new(inbox.into(), info);
 
-            let info = info.extend(actor_props);
+            info.set_outbox(
+                crate::apub_util::get_local_community_outbox_apub_id(
+                    community_id,
+                    &ctx.host_url_apub,
+                )
+                .into(),
+            )
+            .set_followers({
+                let mut res = community_ap_id.clone();
+                res.path_segments_mut().push("followers");
+                res.into()
+            })
+            .set_preferred_username(name);
 
             let key_id = format!(
                 "{}/communities/{}#main-key",
@@ -149,13 +153,13 @@ async fn handler_communities_get(
                 let public_key_ext = crate::apub_util::PublicKeyExtension {
                     public_key: Some(crate::apub_util::PublicKey {
                         id: (&key_id).into(),
-                        owner: (&community_ap_id).into(),
+                        owner: community_ap_id.as_str().into(),
                         public_key_pem: public_key.into(),
                         signature_algorithm: Some(crate::apub_util::SIGALG_RSA_SHA256.into()),
                     }),
                 };
 
-                let info = info.extend(public_key_ext);
+                let info = activitystreams_ext::Ext1::new(info, public_key_ext);
 
                 serde_json::to_vec(&info)
             } else {
@@ -203,12 +207,12 @@ async fn handler_communities_comments_announce_get(
 
             let comment_local_id = CommentLocalID(row.get(0));
             let comment_ap_id = if row.get(1) {
-                Cow::Owned(crate::apub_util::get_local_comment_apub_id(comment_local_id, &ctx.host_url_apub))
+                crate::apub_util::get_local_comment_apub_id(comment_local_id, &ctx.host_url_apub)
             } else {
-                Cow::Borrowed(row.get(2))
+                std::str::FromStr::from_str(row.get(2))?
             };
 
-            let body = crate::apub_util::local_community_comment_announce_ap(community_id, comment_local_id, &comment_ap_id, &ctx.host_url_apub)?;
+            let body = crate::apub_util::local_community_comment_announce_ap(community_id, comment_local_id, comment_ap_id.into(), &ctx.host_url_apub)?;
             let body = serde_json::to_vec(&body)?;
 
             Ok(hyper::Response::builder()
@@ -277,35 +281,33 @@ async fn handler_communities_followers_get(
             let community_ap_id = if community_local {
                 crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub)
             } else {
-                let community_ap_id: Option<String> = row.get(2);
-                community_ap_id.ok_or_else(|| {
+                let community_ap_id: Option<&str> = row.get(2);
+                std::str::FromStr::from_str(community_ap_id.ok_or_else(|| {
                     crate::Error::InternalStr(format!(
                         "Missing ap_id for community {}",
                         community_id
                     ))
-                })?
+                })?)?
             };
-
-            let mut follow = activitystreams::activity::Follow::new();
-
-            follow
-                .object_props
-                .set_context_xsd_any_uri(activitystreams::context())?;
-
-            follow.object_props.set_id(format!(
-                "{}/communities/{}/followers/{}",
-                ctx.host_url_apub, community_id, user_id
-            ))?;
 
             let person_ap_id =
                 crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
 
-            follow.follow_props.set_actor_xsd_any_uri(person_ap_id)?;
+            let mut follow =
+                activitystreams::activity::Follow::new(person_ap_id, community_ap_id.clone());
 
             follow
-                .follow_props
-                .set_object_xsd_any_uri(community_ap_id.as_ref())?;
-            follow.object_props.set_to_xsd_any_uri(community_ap_id)?;
+                .set_context(activitystreams::context())
+                .set_id({
+                    let mut res = crate::apub_util::get_local_community_apub_id(
+                        community_id,
+                        &ctx.host_url_apub,
+                    );
+                    res.path_segments_mut()
+                        .extend(&["followers", &user_id.to_string()]);
+                    res.into()
+                })
+                .set_to(community_ap_id);
 
             let body = serde_json::to_vec(&follow)?.into();
 
@@ -345,11 +347,11 @@ async fn handler_communities_followers_accept_get(
 
             let follower_local = row.get(3);
             let follow_ap_id = if follower_local {
-                Cow::Owned(crate::apub_util::get_local_follow_apub_id(
+                crate::apub_util::get_local_follow_apub_id(
                     community_id,
                     UserLocalID(row.get(2)),
                     &ctx.host_url_apub,
-                ))
+                )
             } else {
                 let follow_ap_id: Option<&str> = row.get(1);
                 follow_ap_id
@@ -359,13 +361,13 @@ async fn handler_communities_followers_accept_get(
                             community_id, user_id
                         ))
                     })?
-                    .into()
+                    .parse()?
             };
 
             let body = crate::apub_util::community_follow_accept_to_ap(
-                &crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
                 user_id,
-                &follow_ap_id,
+                follow_ap_id.into(),
             )?;
             let body = serde_json::to_vec(&body)?.into();
 
@@ -381,10 +383,12 @@ async fn handler_communities_inbox_post(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    use crate::apub_util::{KnownObject, Verified};
+
     let (community_id,) = params;
     let db = ctx.db_pool.get().await?;
 
-    let activity = crate::apub_util::verify_incoming_activity(
+    let object = crate::apub_util::verify_incoming_object(
         req,
         &db,
         &ctx.http_client,
@@ -392,38 +396,25 @@ async fn handler_communities_inbox_post(
     )
     .await?;
 
-    match activity.kind() {
-        Some("Create") => {
-            super::inbox_common_create(
-                activity
-                    .into_concrete_activity::<activitystreams::activity::Create>()
-                    .unwrap(),
-                ctx,
-            )
-            .await?;
+    match object.into_inner() {
+        KnownObject::Create(create) => {
+            super::inbox_common_create(Verified(create), ctx).await?;
         }
-        Some("Follow") => {
-            let follow = activity
-                .into_concrete_activity::<activitystreams::activity::Follow>()
-                .unwrap();
-
-            let follower_ap_id = follow.follow_props.get_actor_xsd_any_uri();
-            let target_community = follow.follow_props.get_object_xsd_any_uri();
+        KnownObject::Follow(follow) => {
+            let follow = Verified(follow);
+            let follower_ap_id = follow.actor_unchecked().as_single_id();
+            let target_community = follow.object().as_single_id();
 
             if let Some(follower_ap_id) = follower_ap_id {
                 let activity_ap_id = follow
-                    .object_props
-                    .get_id()
+                    .id_unchecked()
                     .ok_or(crate::Error::InternalStrStatic("Missing activitity ID"))?;
 
-                crate::apub_util::require_containment(
-                    activity_ap_id.as_url(),
-                    follower_ap_id.as_url(),
-                )?;
+                crate::apub_util::require_containment(activity_ap_id, follower_ap_id)?;
                 let follow = crate::apub_util::Contained(Cow::Borrowed(&follow));
 
                 let follower_local_id = crate::apub_util::get_or_fetch_user_local_id(
-                    follower_ap_id.as_str(),
+                    follower_ap_id,
                     &db,
                     &ctx.host_url_apub,
                     &ctx.http_client,
@@ -431,11 +422,12 @@ async fn handler_communities_inbox_post(
                 .await?;
 
                 if let Some(target_community) = target_community {
-                    if target_community.as_str()
+                    if target_community
                         == crate::apub_util::get_local_community_apub_id(
                             community_id,
                             &ctx.host_url_apub,
                         )
+                        .deref()
                     {
                         let row = db
                             .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
@@ -461,25 +453,14 @@ async fn handler_communities_inbox_post(
                 }
             }
         }
-        Some("Delete") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Delete>()
-                .unwrap();
-
-            crate::apub_util::handle_delete(activity, ctx).await?;
+        KnownObject::Delete(activity) => {
+            crate::apub_util::handle_delete(Verified(activity), ctx).await?;
         }
-        Some("Like") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Like>()
-                .unwrap();
-
-            crate::apub_util::handle_like(activity, ctx).await?;
+        KnownObject::Like(activity) => {
+            crate::apub_util::handle_like(Verified(activity), ctx).await?;
         }
-        Some("Undo") => {
-            let activity = activity
-                .into_concrete_activity::<activitystreams::activity::Undo>()
-                .unwrap();
-            crate::apub_util::handle_undo(activity, ctx).await?;
+        KnownObject::Undo(activity) => {
+            crate::apub_util::handle_undo(Verified(activity), ctx).await?;
         }
         _ => {}
     }
@@ -501,7 +482,7 @@ async fn handler_communities_outbox_get(
 
     let collection = serde_json::json!({
         "@context": activitystreams::context(),
-        "type": activitystreams::collection::kind::OrderedCollectionType,
+        "type": activitystreams::collection::kind::OrderedCollectionType::OrderedCollection,
         "id": crate::apub_util::get_local_community_outbox_apub_id(community_id, &ctx.host_url_apub),
         "first": &page_ap_id,
         "current": &page_ap_id
@@ -551,18 +532,15 @@ async fn handler_communities_outbox_page_get(
         .map(|row| {
             let post_id = PostLocalID(row.get(0));
             let post_ap_id = if row.get(1) {
-                Cow::Owned(crate::apub_util::get_local_post_apub_id(
-                    post_id,
-                    &ctx.host_url_apub,
-                ))
+                crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub)
             } else {
-                Cow::Borrowed(row.get(2))
+                std::str::FromStr::from_str(row.get(2))?
             };
 
             crate::apub_util::local_community_post_announce_ap(
                 community_id,
                 post_id,
-                &post_ap_id,
+                post_ap_id.into(),
                 &ctx.host_url_apub,
             )
         })
@@ -581,7 +559,7 @@ async fn handler_communities_outbox_page_get(
 
     let info = serde_json::json!({
         "@context": activitystreams::context(),
-        "type": activitystreams::collection::kind::OrderedCollectionPageType,
+        "type": activitystreams::collection::kind::OrderedCollectionPageType::OrderedCollectionPage,
         "partOf": crate::apub_util::get_local_community_outbox_apub_id(community_id, &ctx.host_url_apub),
         "orderedItems": items,
         "next": next,
@@ -626,15 +604,15 @@ async fn handler_communities_posts_announce_get(
                 Some(true) => {
                     let post_local_id = PostLocalID(row.get(0));
                     let post_ap_id = if row.get(1) {
-                        Cow::Owned(crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub))
+                        crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
                     } else {
-                        Cow::Borrowed(row.get(2))
+                        std::str::FromStr::from_str(row.get(2))?
                     };
 
                     let body = crate::apub_util::local_community_post_announce_ap(
                         community_id,
                         post_local_id,
-                        &post_ap_id,
+                        post_ap_id.into(),
                         &ctx.host_url_apub,
                     )?;
                     let body = serde_json::to_vec(&body)?;

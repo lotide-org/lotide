@@ -176,7 +176,7 @@ async fn route_unstable_communities_get(
             host: if community_local {
                 (&ctx.local_hostname).into()
             } else {
-                match community_ap_id.and_then(crate::get_url_host) {
+                match community_ap_id.and_then(crate::get_url_host_from_str) {
                     Some(host) => host.into(),
                     None => "[unknown]".into(),
                 }
@@ -419,7 +419,7 @@ async fn route_unstable_communities_posts_list(
             host: if community_local {
                 (&ctx.local_hostname).into()
             } else {
-                match community_ap_id.and_then(crate::get_url_host) {
+                match community_ap_id.and_then(crate::get_url_host_from_str) {
                     Some(host) => host.into(),
                     None => "[unknown]".into(),
                 }
@@ -459,7 +459,7 @@ async fn route_unstable_communities_posts_list(
                     host: if author_local {
                         (&ctx.local_hostname).into()
                     } else {
-                        match author_ap_id.and_then(crate::get_url_host) {
+                        match author_ap_id.and_then(crate::get_url_host_from_str) {
                             Some(host) => host.into(),
                             None => "[unknown]".into(),
                         }

@@ -11,7 +11,7 @@ pub trait TaskDef: Serialize + std::fmt::Debug + Sync {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct DeliverToInbox<'a> {
-    pub inbox: Cow<'a, str>,
+    pub inbox: Cow<'a, url::Url>,
     pub sign_as: Option<crate::ActorLocalRef>,
     pub object: String,
 }
@@ -23,7 +23,7 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
     async fn perform(self, ctx: &crate::BaseContext) -> Result<(), crate::Error> {
         let db = ctx.db_pool.get().await?;
 
-        let signing_info = match self.sign_as {
+        let signing_info: Option<(_, _)> = match self.sign_as {
             None => None,
             Some(actor_ref) => Some(
                 crate::apub_util::fetch_or_create_local_actor_privkey(
@@ -35,7 +35,7 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
             ),
         };
 
-        let mut req = hyper::Request::post(self.inbox.as_ref())
+        let mut req = hyper::Request::post(self.inbox.as_str().parse::<hyper::Uri>()?)
             .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
             .body(self.object.into())?;
 
@@ -45,7 +45,7 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
 
             if let Some((privkey, key_id)) = signing_info {
                 let signature = hancock::Signature::create_legacy(
-                    &key_id,
+                    key_id.as_str(),
                     &hyper::Method::POST,
                     &path_and_query,
                     req.headers(),
@@ -94,7 +94,7 @@ impl TaskDef for DeliverToFollowers {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct FetchActor<'a> {
-    pub actor_ap_id: Cow<'a, str>,
+    pub actor_ap_id: Cow<'a, url::Url>,
 }
 
 #[async_trait]

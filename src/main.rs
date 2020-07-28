@@ -1,6 +1,8 @@
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::convert::TryInto;
+use std::ops::Deref;
 use std::sync::Arc;
 use trout::hyper::RoutingFailureExtHyper;
 
@@ -9,13 +11,88 @@ mod routes;
 mod tasks;
 mod worker;
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(try_from = "url::Url")]
+#[serde(into = "url::Url")]
+pub struct BaseURL(url::Url);
+impl BaseURL {
+    pub fn path_segments_mut(&mut self) -> url::PathSegmentsMut {
+        self.0.path_segments_mut().unwrap()
+    }
+    pub fn set_fragment(&mut self, fragment: Option<&str>) {
+        self.0.set_fragment(fragment);
+    }
+}
+
+impl std::ops::Deref for BaseURL {
+    type Target = url::Url;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for BaseURL {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+#[derive(Debug)]
+pub struct CannotBeABase;
+impl std::fmt::Display for CannotBeABase {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "That URL cannot be a base")
+    }
+}
+
+impl std::convert::TryFrom<url::Url> for BaseURL {
+    type Error = CannotBeABase;
+
+    fn try_from(src: url::Url) -> Result<BaseURL, Self::Error> {
+        if src.cannot_be_a_base() {
+            Err(CannotBeABase)
+        } else {
+            Ok(BaseURL(src))
+        }
+    }
+}
+
+impl std::str::FromStr for BaseURL {
+    type Err = crate::Error;
+
+    fn from_str(src: &str) -> Result<Self, Self::Err> {
+        let url: url::Url = src.parse()?;
+
+        url.try_into()
+            .map_err(|_| crate::Error::InternalStrStatic("Parsed URL cannot be a base"))
+    }
+}
+
+impl From<BaseURL> for url::Url {
+    fn from(src: BaseURL) -> url::Url {
+        src.0
+    }
+}
+
+impl Into<activitystreams::base::AnyBase> for BaseURL {
+    fn into(self) -> activitystreams::base::AnyBase {
+        self.0.into()
+    }
+}
+
+impl Into<activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>> for BaseURL {
+    fn into(self) -> activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase> {
+        self.0.into()
+    }
+}
+
 pub type DbPool = deadpool_postgres::Pool;
 pub type HttpClient = hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>;
 
 pub struct BaseContext {
     pub db_pool: DbPool,
     pub host_url_api: String,
-    pub host_url_apub: String,
+    pub host_url_apub: BaseURL,
     pub http_client: HttpClient,
     pub apub_proxy_rewrites: bool,
 
@@ -82,7 +159,7 @@ impl<T: 'static + std::error::Error + Send> From<T> for Error {
 #[derive(Debug, PartialEq)]
 pub enum APIDOrLocal {
     Local,
-    APID(String),
+    APID(url::Url),
 }
 
 pub enum TimestampOrLatest {
@@ -241,13 +318,15 @@ pub struct CommentInfo<'a> {
 
 pub const KEY_BITS: u32 = 2048;
 
-pub fn get_url_host(url: &str) -> Option<String> {
-    url::Url::parse(url).ok().and_then(|url| {
-        url.host_str().map(|host| match url.port() {
-            Some(port) => format!("{}:{}", host, port),
-            None => host.to_owned(),
-        })
+pub fn get_url_host(url: &url::Url) -> Option<String> {
+    url.host_str().map(|host| match url.port() {
+        Some(port) => format!("{}:{}", host, port),
+        None => host.to_owned(),
     })
+}
+
+pub fn get_url_host_from_str(src: &str) -> Option<String> {
+    src.parse().ok().as_ref().and_then(get_url_host)
 }
 
 pub fn get_actor_host<'a>(
@@ -258,7 +337,7 @@ pub fn get_actor_host<'a>(
     if local {
         Some(local_hostname.into())
     } else {
-        ap_id.and_then(get_url_host).map(Cow::from)
+        ap_id.and_then(get_url_host_from_str).map(Cow::from)
     }
 }
 
@@ -270,8 +349,7 @@ pub fn get_actor_host_or_unknown<'a>(
     get_actor_host(local, ap_id, local_hostname).unwrap_or(Cow::Borrowed("[unknown]"))
 }
 
-pub fn get_path_and_query(url: &str) -> Result<String, url::ParseError> {
-    let url = url::Url::parse(&url)?;
+pub fn get_path_and_query(url: &url::Url) -> Result<String, url::ParseError> {
     Ok(format!("{}{}", url.path(), url.query().unwrap_or("")))
 }
 
@@ -452,7 +530,7 @@ pub fn render_markdown(src: &str) -> String {
 pub fn on_community_add_post(
     community: CommunityLocalID,
     post_local_id: PostLocalID,
-    post_ap_id: &str,
+    post_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
     println!("on_community_add_post");
@@ -462,7 +540,7 @@ pub fn on_community_add_post(
 pub fn on_community_add_comment(
     community: CommunityLocalID,
     comment_local_id: CommentLocalID,
-    comment_ap_id: &str,
+    comment_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::apub_util::spawn_announce_community_comment(
@@ -474,6 +552,8 @@ pub fn on_community_add_comment(
 }
 
 pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteContext>) {
+    use futures::future::TryFutureExt;
+
     println!("on_post_add_comment");
     spawn_task(async move {
         let db = ctx.db_pool.get().await?;
@@ -482,9 +562,10 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
             db.query_opt(
                 "SELECT community.id, community.local, community.ap_id, community.ap_inbox, post.local, post.ap_id, person.id, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.id = $1 AND post.community = community.id",
                 &[&comment.post.raw()],
-            ),
+            )
+            .map_err(crate::Error::from),
             async {
-                match comment.parent {
+                let res: Result<Option<(BaseURL, Option<BaseURL>, bool, Option<UserLocalID>)>, crate::Error> = match comment.parent {
                     Some(parent) => {
                         let row = db.query_one(
                             "SELECT reply.local, reply.ap_id, person.id, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE reply.id=$1",
@@ -496,11 +577,12 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                         if row.get(0) {
                             Ok(Some((crate::apub_util::get_local_comment_apub_id(parent, &ctx.host_url_apub), Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(2)), &ctx.host_url_apub)), true, author_local_id)))
                         } else {
-                            Ok(row.get::<_, Option<String>>(1).map(|x| (x, row.get(3), false, author_local_id)))
+                            row.get::<_, Option<&str>>(1).map(|x: &str| -> Result<(BaseURL, Option<BaseURL>, bool, Option<UserLocalID>), crate::Error> { Ok((x.parse()?, row.get::<_, Option<&str>>(3).map(std::str::FromStr::from_str).transpose()?, false, author_local_id)) }).transpose()
                         }
                     },
                     None => Ok(None),
-                }
+                };
+                res
             }
         ).await?;
 
@@ -514,14 +596,17 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                     &ctx.host_url_apub,
                 ))
             } else {
-                row.get(5)
+                row.get::<_, Option<&str>>(5)
+                    .map(std::str::FromStr::from_str)
+                    .transpose()?
             };
 
             let comment_ap_id = match &comment.ap_id {
-                crate::APIDOrLocal::APID(apid) => Cow::Borrowed(apid),
-                crate::APIDOrLocal::Local => Cow::Owned(
-                    crate::apub_util::get_local_comment_apub_id(comment.id, &ctx.host_url_apub),
-                ),
+                crate::APIDOrLocal::APID(apid) => apid.clone(),
+                crate::APIDOrLocal::Local => {
+                    crate::apub_util::get_local_comment_apub_id(comment.id, &ctx.host_url_apub)
+                        .into()
+                }
             };
 
             let (parent_ap_id, post_or_parent_author_local_id, post_or_parent_author_ap_id) =
@@ -532,18 +617,19 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             (
                                 None,
                                 Some(author_id),
-                                Some(Cow::<str>::Owned(
-                                    crate::apub_util::get_local_person_apub_id(
-                                        author_id,
-                                        &ctx.host_url_apub,
-                                    ),
-                                )),
+                                Some(Cow::Owned(crate::apub_util::get_local_person_apub_id(
+                                    author_id,
+                                    &ctx.host_url_apub,
+                                ))),
                             )
                         } else {
                             (
                                 None,
                                 Some(author_id),
-                                row.get::<_, Option<_>>(7).map(Cow::Borrowed),
+                                row.get::<_, Option<_>>(7)
+                                    .map(std::str::FromStr::from_str)
+                                    .transpose()?
+                                    .map(Cow::Owned),
                             )
                         }
                     }
@@ -552,7 +638,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                         Some((parent_ap_id, parent_author_ap_id, _, parent_author_local_id)) => (
                             Some(parent_ap_id),
                             *parent_author_local_id,
-                            parent_author_ap_id.as_deref().map(Cow::Borrowed),
+                            parent_author_ap_id.as_ref().map(Cow::Borrowed),
                         ),
                     },
                 };
@@ -602,15 +688,15 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
             if let Some(post_ap_id) = post_ap_id {
                 if community_local {
                     let community = CommunityLocalID(row.get(0));
-                    crate::on_community_add_comment(community, comment.id, &comment_ap_id, ctx);
+                    crate::on_community_add_comment(community, comment.id, comment_ap_id, ctx);
                 } else if comment.ap_id == APIDOrLocal::Local {
                     crate::apub_util::spawn_enqueue_send_comment_to_community(
                         comment,
-                        row.get(2),
-                        row.get(3),
-                        post_ap_id,
-                        parent_ap_id.cloned(),
-                        post_or_parent_author_ap_id.as_deref(),
+                        std::str::FromStr::from_str(row.get(2))?,
+                        std::str::FromStr::from_str(row.get(3))?,
+                        post_ap_id.into(),
+                        parent_ap_id.map(|x| x.deref().clone()),
+                        post_or_parent_author_ap_id.map(|x| x.into_owned().into()),
                         ctx,
                     );
                 }
@@ -650,9 +736,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         _ => 3333,
     };
 
+    let host_url_apub: url::Url = host_url_apub
+        .parse()
+        .expect("Failed to parse HOST_URL_ACTIVITYPUB");
+    let host_url_apub: BaseURL = host_url_apub
+        .try_into()
+        .expect("HOST_URL_ACTIVITYPUB is not a valid base URL");
+
     let routes = Arc::new(routes::route_root());
     let base_context = Arc::new(BaseContext {
-        local_hostname: get_url_host(&host_url_apub).expect("Failed to parse HOST_URL_ACTIVITYPUB"),
+        local_hostname: get_url_host(&host_url_apub)
+            .expect("Couldn't find host in HOST_URL_ACTIVITYPUB"),
 
         db_pool,
         host_url_api,

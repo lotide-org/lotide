@@ -1,7 +1,9 @@
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID};
-use serde_derive::{Deserialize, Serialize};
+use crate::{BaseURL, CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID};
+use activitystreams::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
+use std::ops::Deref;
 use std::sync::Arc;
 
 pub const ACTIVITY_TYPE: &str = "application/activity+json";
@@ -24,47 +26,59 @@ impl<T: Clone> Verified<T> {
         self.0
     }
 }
-impl Verified<activitystreams::activity::ActivityBox> {
-    pub fn into_concrete_activity<
-        T: activitystreams::Activity + serde::de::DeserializeOwned + Clone,
-    >(
-        self,
-    ) -> Result<Verified<T>, std::io::Error> {
-        Ok(Verified(self.0.into_concrete()?))
-    }
-}
-impl<
-        T: std::convert::TryInto<activitystreams::object::ObjectBox, Error = std::io::Error> + Clone,
-    > Verified<T>
-{
-    pub fn try_box_object(
-        self,
-    ) -> Result<Verified<activitystreams::object::ObjectBox>, std::io::Error> {
-        Ok(Verified(self.0.try_into()?))
-    }
-}
-impl Verified<activitystreams::object::ObjectBox> {
-    pub fn into_concrete_object<
-        T: activitystreams::Object + serde::de::DeserializeOwned + Clone,
-    >(
-        self,
-    ) -> Result<Verified<T>, std::io::Error> {
-        Ok(Verified(self.0.into_concrete()?))
-    }
-}
 
-pub struct Contained<'a, T: activitystreams::Base + Clone>(pub Cow<'a, Verified<T>>);
-impl<'a, T: activitystreams::Base + Clone> std::ops::Deref for Contained<'a, T> {
+pub struct Contained<'a, T: activitystreams::markers::Base + Clone>(pub Cow<'a, Verified<T>>);
+impl<'a, T: activitystreams::markers::Base + Clone> std::ops::Deref for Contained<'a, T> {
     type Target = Verified<T>;
 
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
-impl<'a, T: activitystreams::Base + Clone> Contained<'a, T> {
+impl<'a, T: activitystreams::markers::Base + Clone> Contained<'a, T> {
+    pub fn into_inner(self) -> Cow<'a, Verified<T>> {
+        self.0
+    }
     pub fn with_owned(self) -> Contained<'static, T> {
         Contained(Cow::Owned(self.0.into_owned()))
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum KnownObject {
+    Accept(activitystreams::activity::Accept),
+    Announce(activitystreams::activity::Announce),
+    Create(activitystreams::activity::Create),
+    Delete(activitystreams::activity::Delete),
+    Follow(activitystreams::activity::Follow),
+    Like(activitystreams::activity::Like),
+    Undo(activitystreams::activity::Undo),
+    Update(activitystreams::activity::Update),
+    Person(
+        activitystreams_ext::Ext1<
+            activitystreams::actor::ApActor<activitystreams::actor::Person>,
+            PublicKeyExtension<'static>,
+        >,
+    ),
+    Group(
+        activitystreams_ext::Ext1<
+            activitystreams::actor::ApActor<activitystreams::actor::Group>,
+            PublicKeyExtension<'static>,
+        >,
+    ),
+    Page(activitystreams::object::Page),
+    Note(activitystreams::object::Note),
+}
+
+#[derive(Deserialize)]
+pub struct JustMaybeAPID {
+    id: Option<BaseURL>,
+}
+
+#[derive(Deserialize)]
+pub struct JustActor {
+    actor: activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -83,127 +97,135 @@ pub struct PublicKeyExtension<'a> {
     pub public_key: Option<PublicKey<'a>>,
 }
 
-impl<'a, T: activitystreams::actor::Actor> activitystreams::ext::Extension<T>
-    for PublicKeyExtension<'a>
-{
+pub fn get_local_shared_inbox(host_url_apub: &BaseURL) -> BaseURL {
+    let mut res = host_url_apub.clone();
+    res.path_segments_mut().push("inbox");
+    res
 }
 
-pub fn get_local_post_apub_id(post: PostLocalID, host_url_apub: &str) -> String {
-    format!("{}/posts/{}", host_url_apub, post)
+pub fn get_local_post_apub_id(post: PostLocalID, host_url_apub: &BaseURL) -> BaseURL {
+    let mut res = host_url_apub.clone();
+    res.path_segments_mut()
+        .extend(&["posts", &post.to_string()]);
+    res
 }
 
 pub fn get_local_post_like_apub_id(
     post_local_id: PostLocalID,
     user: UserLocalID,
-    host_url_apub: &str,
-) -> String {
-    format!(
-        "{}/likes/{}",
-        crate::apub_util::get_local_post_apub_id(post_local_id, &host_url_apub),
-        user,
-    )
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = crate::apub_util::get_local_post_apub_id(post_local_id, &host_url_apub);
+    res.path_segments_mut()
+        .extend(&["likes", &user.to_string()]);
+    res
 }
 
-pub fn get_local_comment_apub_id(comment: CommentLocalID, host_url_apub: &str) -> String {
-    format!("{}/comments/{}", host_url_apub, comment)
+pub fn get_local_comment_apub_id(comment: CommentLocalID, host_url_apub: &BaseURL) -> BaseURL {
+    let mut res = host_url_apub.clone();
+    res.path_segments_mut()
+        .extend(&["comments", &comment.to_string()]);
+    res
 }
 
 pub fn get_local_comment_like_apub_id(
     comment_local_id: CommentLocalID,
     user: UserLocalID,
-    host_url_apub: &str,
-) -> String {
-    format!(
-        "{}/likes/{}",
-        crate::apub_util::get_local_comment_apub_id(comment_local_id, &host_url_apub),
-        user
-    )
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = crate::apub_util::get_local_comment_apub_id(comment_local_id, &host_url_apub);
+    res.path_segments_mut()
+        .extend(&["likes", &user.to_string()]);
+    res
 }
 
-pub fn get_local_person_apub_id(person: UserLocalID, host_url_apub: &str) -> String {
-    format!("{}/users/{}", host_url_apub, person)
+pub fn get_local_person_apub_id(person: UserLocalID, host_url_apub: &BaseURL) -> BaseURL {
+    let mut res = host_url_apub.clone();
+    res.path_segments_mut()
+        .extend(&["users", &person.to_string()]);
+    res
 }
 
-pub fn get_local_person_outbox_apub_id(person: UserLocalID, host_url_apub: &str) -> String {
-    format!("{}/outbox", get_local_person_apub_id(person, host_url_apub))
+pub fn get_local_person_outbox_apub_id(person: UserLocalID, host_url_apub: &BaseURL) -> BaseURL {
+    let mut res = get_local_person_apub_id(person, host_url_apub);
+    res.path_segments_mut().push(&person.to_string());
+    res
 }
 
 pub fn get_local_person_outbox_page_apub_id(
     person: UserLocalID,
     page: &crate::TimestampOrLatest,
-    host_url_apub: &str,
-) -> String {
-    format!(
-        "{}/page/{}",
-        get_local_person_outbox_apub_id(person, host_url_apub),
-        page
-    )
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_person_outbox_apub_id(person, host_url_apub);
+    res.path_segments_mut().extend(&["page", &page.to_string()]);
+    res
 }
 
-pub fn get_local_community_apub_id(community: CommunityLocalID, host_url_apub: &str) -> String {
-    format!("{}/communities/{}", host_url_apub, community)
+pub fn get_local_community_apub_id(
+    community: CommunityLocalID,
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = host_url_apub.clone();
+    res.path_segments_mut()
+        .extend(&["communities", &community.to_string()]);
+    res
 }
 
 pub fn get_local_community_outbox_apub_id(
     community: CommunityLocalID,
-    host_url_apub: &str,
-) -> String {
-    format!(
-        "{}/outbox",
-        get_local_community_apub_id(community, host_url_apub)
-    )
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_community_apub_id(community, host_url_apub);
+    res.path_segments_mut().push("outbox");
+    res
 }
 
 pub fn get_local_community_outbox_page_apub_id(
     community: CommunityLocalID,
     page: &crate::TimestampOrLatest,
-    host_url_apub: &str,
-) -> String {
-    format!(
-        "{}/page/{}",
-        get_local_community_outbox_apub_id(community, host_url_apub),
-        page
-    )
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_community_outbox_apub_id(community, host_url_apub);
+    res.path_segments_mut().extend(&["page", &page.to_string()]);
+    res
 }
 
 pub fn get_local_community_follow_apub_id(
     community: CommunityLocalID,
     follower: UserLocalID,
-    host_url_apub: &str,
-) -> String {
-    format!(
-        "{}/communities/{}/followers/{}",
-        host_url_apub, community, follower
-    )
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_community_apub_id(community, host_url_apub);
+    res.path_segments_mut()
+        .extend(&["followers", &follower.to_string()]);
+    res
 }
 
-pub fn get_local_person_pubkey_apub_id(person: UserLocalID, host_url_apub: &str) -> String {
-    format!(
-        "{}#main-key",
-        get_local_person_apub_id(person, host_url_apub)
-    )
+pub fn get_local_person_pubkey_apub_id(person: UserLocalID, host_url_apub: &BaseURL) -> BaseURL {
+    let mut res = get_local_person_apub_id(person, host_url_apub);
+    res.set_fragment(Some("main-key"));
+    res
 }
 
 pub fn get_local_community_pubkey_apub_id(
     community: CommunityLocalID,
-    host_url_apub: &str,
-) -> String {
-    format!(
-        "{}#main-key",
-        get_local_community_apub_id(community, host_url_apub)
-    )
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_community_apub_id(community, host_url_apub);
+    res.set_fragment(Some("main-key"));
+    res
 }
 
 pub fn get_local_follow_apub_id(
     community: CommunityLocalID,
     follower: UserLocalID,
-    host_url_apub: &str,
-) -> String {
-    format!(
-        "{}/followers/{}",
-        get_local_community_apub_id(community, host_url_apub),
-        follower
-    )
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_community_apub_id(community, host_url_apub);
+    res.path_segments_mut()
+        .extend(&["followers", &follower.to_string()]);
+    res
 }
 
 pub fn now_http_date() -> hyper::header::HeaderValue {
@@ -271,11 +293,11 @@ pub fn require_containment(object_id: &url::Url, actor_id: &url::Url) -> Result<
     }
 }
 
-pub async fn fetch_ap_object(
-    ap_id: &str,
+pub async fn fetch_ap_object_raw(
+    ap_id: &url::Url,
     http_client: &crate::HttpClient,
 ) -> Result<serde_json::Value, crate::Error> {
-    let mut current_id = hyper::Uri::try_from(ap_id)?;
+    let mut current_id = hyper::Uri::try_from(ap_id.as_str())?;
     for _ in 0..3u8 {
         // avoid infinite loop in malicious or broken cases
         let res = crate::res_to_error(
@@ -310,57 +332,56 @@ pub async fn fetch_ap_object(
     Err(crate::Error::InternalStrStatic("Recursion depth exceeded"))
 }
 
+pub async fn fetch_ap_object(
+    ap_id: &url::Url,
+    http_client: &crate::HttpClient,
+) -> Result<Verified<KnownObject>, crate::Error> {
+    let value = fetch_ap_object_raw(ap_id, http_client).await?;
+    let value: KnownObject = serde_json::from_value(value)?;
+    Ok(Verified(value))
+}
+
 pub async fn fetch_actor(
-    req_ap_id: &str,
+    req_ap_id: &url::Url,
     db: &tokio_postgres::Client,
     http_client: &crate::HttpClient,
 ) -> Result<ActorLocalInfo, crate::Error> {
     let obj = fetch_ap_object(req_ap_id, http_client).await?;
+    let ap_id = req_ap_id;
 
-    match obj.get("type").and_then(serde_json::Value::as_str) {
-        Some("Person") => {
-            let person: activitystreams::ext::Ext<
-                activitystreams::ext::Ext<
-                    activitystreams::actor::Person,
-                    activitystreams::actor::properties::ApActorProperties,
-                >,
-                crate::apub_util::PublicKeyExtension<'_>,
-            > = serde_json::from_value(obj)?;
-
-            let ap_id = person.base.base.object_props.id.as_ref().unwrap().as_str();
+    match obj.deref() {
+        KnownObject::Person(person) => {
             let username = person
-                .base
-                .extension
-                .get_preferred_username()
-                .map(|x| x.as_str())
-                .or_else(|| person.as_ref().get_name_xsd_string().map(|x| x.as_str()))
+                .preferred_username()
+                .or_else(|| {
+                    person
+                        .name()
+                        .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
+                })
                 .unwrap_or("");
-            let inbox = person.base.extension.inbox.as_str();
+            let inbox = person.inbox_unchecked().as_str();
             let shared_inbox = person
-                .base
-                .extension
-                .get_endpoints()
-                .and_then(|endpoints| endpoints.get_shared_inbox())
+                .endpoints_unchecked()
+                .and_then(|endpoints| endpoints.shared_inbox)
                 .map(|url| url.as_str());
             let public_key = person
-                .extension
+                .ext_one
                 .public_key
                 .as_ref()
                 .map(|key| key.public_key_pem.as_bytes());
             let public_key_sigalg = person
-                .extension
+                .ext_one
                 .public_key
                 .as_ref()
                 .and_then(|key| key.signature_algorithm.as_deref());
             let description = person
-                .as_ref()
-                .get_summary_xsd_string()
-                .map(|x| x.as_str())
+                .summary()
+                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
                 .unwrap_or("");
 
             let id = UserLocalID(db.query_one(
                 "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6, $7) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7 RETURNING id",
-                &[&username, &ap_id, &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description],
+                &[&username, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description],
             ).await?.get(0));
 
             Ok(ActorLocalInfo::User {
@@ -371,45 +392,37 @@ pub async fn fetch_actor(
                 }),
             })
         }
-        Some("Group") => {
-            let group: activitystreams::ext::Ext<
-                activitystreams::ext::Ext<
-                    activitystreams::actor::Group,
-                    activitystreams::actor::properties::ApActorProperties,
-                >,
-                crate::apub_util::PublicKeyExtension<'_>,
-            > = serde_json::from_value(obj)?;
-
-            let ap_id = group.base.base.object_props.id.as_ref().unwrap().as_str();
+        KnownObject::Group(group) => {
             let name = group
-                .base
-                .extension
-                .get_preferred_username()
-                .map(|x| x.as_str())
-                .or_else(|| group.as_ref().get_name_xsd_string().map(|x| x.as_str()))
+                .preferred_username()
+                .or_else(|| {
+                    group
+                        .name()
+                        .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
+                })
                 .unwrap_or("");
-            let description = group.as_ref().get_summary_xsd_string().map(|x| x.as_str());
-            let inbox = group.base.extension.inbox.as_str();
+            let description = group
+                .summary()
+                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next());
+            let inbox = group.inbox_unchecked().as_str();
             let shared_inbox = group
-                .base
-                .extension
-                .get_endpoints()
-                .and_then(|endpoints| endpoints.get_shared_inbox())
+                .endpoints_unchecked()
+                .and_then(|endpoints| endpoints.shared_inbox)
                 .map(|url| url.as_str());
             let public_key = group
-                .extension
+                .ext_one
                 .public_key
                 .as_ref()
                 .map(|key| key.public_key_pem.as_bytes());
             let public_key_sigalg = group
-                .extension
+                .ext_one
                 .public_key
                 .as_ref()
                 .and_then(|key| key.signature_algorithm.as_deref());
 
             let id = CommunityLocalID(db.query_one(
                 "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7 RETURNING id",
-                &[&name, &ap_id, &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description],
+                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description],
             ).await?.get(0));
 
             Ok(ActorLocalInfo::Community {
@@ -425,14 +438,14 @@ pub async fn fetch_actor(
 }
 
 pub async fn get_or_fetch_user_local_id(
-    ap_id: &str,
+    ap_id: &url::Url,
     db: &tokio_postgres::Client,
-    host_url_apub: &str,
+    host_url_apub: &BaseURL,
     http_client: &crate::HttpClient,
 ) -> Result<UserLocalID, crate::Error> {
-    if ap_id.starts_with(host_url_apub) {
-        if ap_id[host_url_apub.len()..].starts_with("/users/") {
-            Ok(ap_id[(host_url_apub.len() + 7)..].parse()?)
+    if ap_id.as_str().starts_with(host_url_apub.as_str()) {
+        if ap_id.as_str()[host_url_apub.as_str().len()..].starts_with("/users/") {
+            Ok(ap_id.as_str()[(host_url_apub.as_str().len() + 7)..].parse()?)
         } else {
             Err(crate::Error::InternalStr(format!(
                 "Unrecognized local AP ID: {:?}",
@@ -441,7 +454,7 @@ pub async fn get_or_fetch_user_local_id(
         }
     } else {
         match db
-            .query_opt("SELECT id FROM person WHERE ap_id=$1", &[&ap_id])
+            .query_opt("SELECT id FROM person WHERE ap_id=$1", &[&ap_id.as_str()])
             .await?
         {
             Some(row) => Ok(UserLocalID(row.get(0))),
@@ -535,8 +548,8 @@ pub async fn fetch_or_create_local_community_privkey(
 pub async fn fetch_or_create_local_actor_privkey(
     actor_ref: crate::ActorLocalRef,
     db: &tokio_postgres::Client,
-    host_url_apub: &str,
-) -> Result<(openssl::pkey::PKey<openssl::pkey::Private>, String), crate::Error> {
+    host_url_apub: &BaseURL,
+) -> Result<(openssl::pkey::PKey<openssl::pkey::Private>, BaseURL), crate::Error> {
     Ok(match actor_ref {
         crate::ActorLocalRef::Person(id) => (
             fetch_or_create_local_user_privkey(id, db).await?,
@@ -568,7 +581,7 @@ pub fn spawn_enqueue_send_community_follow(
     crate::spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
-        let (community_ap_id, community_inbox): (String, String) = {
+        let (community_ap_id, community_inbox): (url::Url, url::Url) = {
             let row = db
                 .query_one(
                     "SELECT local, ap_id, ap_inbox FROM community WHERE id=$1",
@@ -580,12 +593,12 @@ pub fn spawn_enqueue_send_community_follow(
                 // no need to send follows to ourself
                 return Ok(());
             } else {
-                let ap_id = row.get(1);
-                let ap_inbox = row.get(2);
+                let ap_id: Option<&str> = row.get(1);
+                let ap_inbox: Option<&str> = row.get(2);
 
                 (if let Some(ap_id) = ap_id {
                     if let Some(ap_inbox) = ap_inbox {
-                        Some((ap_id, ap_inbox))
+                        Some((ap_id.parse()?, ap_inbox.parse()?))
                     } else {
                         None
                     }
@@ -601,31 +614,22 @@ pub fn spawn_enqueue_send_community_follow(
             }
         };
 
-        let mut follow = activitystreams::activity::Follow::new();
-        follow
-            .object_props
-            .set_context_xsd_any_uri(activitystreams::context())?;
-        follow
-            .object_props
-            .set_id(get_local_community_follow_apub_id(
-                community,
-                local_follower,
-                &ctx.host_url_apub,
-            ))?;
-
         let person_ap_id = get_local_person_apub_id(local_follower, &ctx.host_url_apub);
 
-        follow.follow_props.set_actor_xsd_any_uri(person_ap_id)?;
-
+        let mut follow =
+            activitystreams::activity::Follow::new(person_ap_id, community_ap_id.clone());
         follow
-            .follow_props
-            .set_object_xsd_any_uri(community_ap_id.as_ref())?;
-        follow.object_props.set_to_xsd_any_uri(community_ap_id)?;
+            .set_context(activitystreams::context())
+            .set_id(
+                get_local_community_follow_apub_id(community, local_follower, &ctx.host_url_apub)
+                    .into(),
+            )
+            .set_to(community_ap_id);
 
         std::mem::drop(db);
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: (&community_inbox).into(),
+            inbox: Cow::Owned(community_inbox),
             sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
             object: serde_json::to_string(&follow)?,
         })
@@ -642,12 +646,12 @@ pub fn spawn_enqueue_send_community_follow_undo(
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
-        let (_community_ap_id, community_inbox): (String, String) = {
+        let community_inbox: url::Url = {
             let db = ctx.db_pool.get().await?;
 
             let row = db
                 .query_one(
-                    "SELECT local, ap_id, ap_inbox FROM community WHERE id=$1",
+                    "SELECT local, ap_inbox FROM community WHERE id=$1",
                     &[&community_local_id],
                 )
                 .await?;
@@ -656,24 +660,16 @@ pub fn spawn_enqueue_send_community_follow_undo(
                 // no need to send follow state to ourself
                 return Ok(());
             } else {
-                let ap_id = row.get(1);
-                let ap_inbox = row.get(2);
+                let ap_inbox: Option<&str> = row.get(1);
 
-                (if let Some(ap_id) = ap_id {
-                    if let Some(ap_inbox) = ap_inbox {
-                        Some((ap_id, ap_inbox))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                })
-                .ok_or_else(|| {
-                    crate::Error::InternalStr(format!(
-                        "Missing apub info for community {}",
-                        community_local_id,
-                    ))
-                })?
+                ap_inbox
+                    .ok_or_else(|| {
+                        crate::Error::InternalStr(format!(
+                            "Missing apub info for community {}",
+                            community_local_id,
+                        ))
+                    })?
+                    .parse()?
             }
         };
 
@@ -685,7 +681,7 @@ pub fn spawn_enqueue_send_community_follow_undo(
         )?;
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: (&community_inbox).into(),
+            inbox: Cow::Owned(community_inbox),
             sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
             object: serde_json::to_string(&undo)?,
         })
@@ -698,31 +694,28 @@ pub fn spawn_enqueue_send_community_follow_undo(
 pub fn local_community_post_announce_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
-    post_ap_id: &str,
-    host_url_apub: &str,
+    post_ap_id: url::Url,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Announce, crate::Error> {
-    let mut announce = activitystreams::activity::Announce::new();
-
     let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
 
-    announce
-        .object_props
-        .set_context_xsd_any_uri(activitystreams::context())?;
-    announce.object_props.set_id(format!(
-        "{}/posts/{}/announce",
-        community_ap_id, post_local_id,
-    ))?;
-    announce
-        .object_props
-        .set_to_xsd_any_uri(format!("{}/followers", community_ap_id))?;
-    announce
-        .object_props
-        .set_cc_xsd_any_uri(activitystreams::public())?;
+    let mut announce =
+        activitystreams::activity::Announce::new(community_ap_id.clone(), post_ap_id);
 
     announce
-        .announce_props
-        .set_actor_xsd_any_uri(community_ap_id)?;
-    announce.announce_props.set_object_xsd_any_uri(post_ap_id)?;
+        .set_context(activitystreams::context())
+        .set_id({
+            let mut res = community_ap_id.clone();
+            res.path_segments_mut()
+                .extend(&["posts", &post_local_id.to_string(), "announce"]);
+            res.into()
+        })
+        .set_to({
+            let mut res = community_ap_id;
+            res.path_segments_mut().push("followers");
+            BaseURL::from(res)
+        })
+        .set_cc(activitystreams::public());
 
     Ok(announce)
 }
@@ -730,27 +723,20 @@ pub fn local_community_post_announce_ap(
 pub fn local_community_comment_announce_ap(
     community_id: CommunityLocalID,
     comment_local_id: CommentLocalID,
-    comment_ap_id: &str,
-    host_url_apub: &str,
+    comment_ap_id: url::Url,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Announce, crate::Error> {
-    let mut announce = activitystreams::activity::Announce::new();
-
     let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
 
-    announce
-        .object_props
-        .set_context_xsd_any_uri(activitystreams::context())?;
-    announce.object_props.set_id(format!(
-        "{}/comments/{}/announce",
-        community_ap_id, comment_local_id,
-    ))?;
+    let mut announce =
+        activitystreams::activity::Announce::new(community_ap_id.deref().clone(), comment_ap_id);
 
-    announce
-        .announce_props
-        .set_actor_xsd_any_uri(community_ap_id)?;
-    announce
-        .announce_props
-        .set_object_xsd_any_uri(comment_ap_id)?;
+    announce.set_context(activitystreams::context()).set_id({
+        let mut res = community_ap_id;
+        res.path_segments_mut()
+            .extend(&["comments", &comment_local_id.to_string(), "announce"]);
+        res.into()
+    });
 
     Ok(announce)
 }
@@ -758,7 +744,7 @@ pub fn local_community_comment_announce_ap(
 pub fn spawn_announce_community_post(
     community: CommunityLocalID,
     post_local_id: PostLocalID,
-    post_ap_id: &str,
+    post_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
     // since post is borrowed, we can't move it
@@ -779,7 +765,7 @@ pub fn spawn_announce_community_post(
 pub fn spawn_announce_community_comment(
     community: CommunityLocalID,
     comment_local_id: CommentLocalID,
-    comment_ap_id: &str,
+    comment_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
     let announce = local_community_comment_announce_ap(
@@ -798,20 +784,19 @@ pub fn spawn_announce_community_comment(
 pub fn local_community_update_to_ap(
     community_id: CommunityLocalID,
     update_id: uuid::Uuid,
-    host_url_apub: &str,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Update, crate::Error> {
-    let mut update = activitystreams::activity::Update::new();
-
     let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
 
-    update
-        .object_props
-        .set_id(format!("{}/updates/{}", community_ap_id, update_id))?;
+    let mut update =
+        activitystreams::activity::Update::new(community_ap_id.clone(), community_ap_id.clone());
 
-    update
-        .update_props
-        .set_actor_xsd_any_uri(community_ap_id.as_ref())?
-        .set_object_xsd_any_uri(community_ap_id)?;
+    update.set_id({
+        let mut res = community_ap_id;
+        res.path_segments_mut()
+            .extend(&["updates", &update_id.to_string()]);
+        res.into()
+    });
 
     Ok(update)
 }
@@ -820,44 +805,35 @@ pub fn local_community_follow_undo_to_ap(
     undo_id: uuid::Uuid,
     community_local_id: CommunityLocalID,
     local_follower: UserLocalID,
-    host_url_apub: &str,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
-    let mut undo = activitystreams::activity::Undo::new();
-    undo.object_props
-        .set_context_xsd_any_uri(activitystreams::context())?;
-    undo.undo_props
-        .set_object_xsd_any_uri(get_local_community_follow_apub_id(
-            community_local_id,
-            local_follower,
-            &host_url_apub,
-        ))?;
-    undo.undo_props
-        .set_actor_xsd_any_uri(get_local_person_apub_id(local_follower, &host_url_apub))?;
-    undo.object_props.set_id(format!(
-        "{}/community_follow_undos/{}",
-        host_url_apub, undo_id
-    ))?;
+    let mut undo = activitystreams::activity::Undo::new(
+        get_local_person_apub_id(local_follower, &host_url_apub),
+        get_local_community_follow_apub_id(community_local_id, local_follower, &host_url_apub),
+    );
+    undo.set_context(activitystreams::context()).set_id({
+        let mut res = host_url_apub.clone();
+        res.path_segments_mut()
+            .extend(&["community_follow_undos", &undo_id.to_string()]);
+        res.into()
+    });
 
     Ok(undo)
 }
 
 pub fn community_follow_accept_to_ap(
-    community_ap_id: &str,
+    community_ap_id: BaseURL,
     follower_local_id: UserLocalID,
-    follow_ap_id: &str,
+    follow_ap_id: url::Url,
 ) -> Result<activitystreams::activity::Accept, crate::Error> {
-    let mut accept = activitystreams::activity::Accept::new();
+    let mut accept = activitystreams::activity::Accept::new(community_ap_id.clone(), follow_ap_id);
 
-    accept
-        .object_props
-        .set_context_xsd_any_uri(activitystreams::context())?;
-    accept.object_props.set_id(format!(
-        "{}/followers/{}/accept",
-        community_ap_id, follower_local_id
-    ))?;
-
-    accept.accept_props.set_actor_xsd_any_uri(community_ap_id)?;
-    accept.accept_props.set_object_xsd_any_uri(follow_ap_id)?;
+    accept.set_context(activitystreams::context()).set_id({
+        let mut res = community_ap_id;
+        res.path_segments_mut()
+            .extend(&["followers", &follower_local_id.to_string(), "accept"]);
+        res.into()
+    });
 
     Ok(accept)
 }
@@ -871,12 +847,15 @@ pub fn spawn_enqueue_send_community_follow_accept(
     crate::spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
-        let follow_ap_id = follow
-            .object_props
-            .get_id()
+        let follow_ap_id = {
+            (match follow.into_inner() {
+                Cow::Owned(follow) => follow.into_inner().take_id(),
+                Cow::Borrowed(follow) => follow.id_unchecked().cloned(),
+            })
             .ok_or(crate::Error::InternalStrStatic(
                 "Missing ID in Follow activity",
-            ))?;
+            ))?
+        };
 
         let community_ap_id = get_local_community_apub_id(local_community, &ctx.host_url_apub);
 
@@ -893,16 +872,20 @@ pub fn spawn_enqueue_send_community_follow_accept(
                 // Shouldn't happen, but fine to ignore it
                 return Ok(());
             } else {
-                let ap_inbox: Option<String> = row.get(1);
+                let ap_inbox: Option<&str> = row.get(1);
 
-                ap_inbox.ok_or_else(|| {
-                    crate::Error::InternalStr(format!("Missing apub info for user {}", follower))
-                })?
+                ap_inbox
+                    .ok_or_else(|| {
+                        crate::Error::InternalStr(format!(
+                            "Missing apub info for user {}",
+                            follower
+                        ))
+                    })?
+                    .parse()?
             }
         };
 
-        let accept =
-            community_follow_accept_to_ap(&community_ap_id, follower, follow_ap_id.as_str())?;
+        let accept = community_follow_accept_to_ap(community_ap_id, follower, follow_ap_id)?;
         println!("{:?}", accept);
 
         let body = serde_json::to_string(&accept)?;
@@ -910,7 +893,7 @@ pub fn spawn_enqueue_send_community_follow_accept(
         std::mem::drop(db);
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: (&follower_inbox).into(),
+            inbox: Cow::Owned(follower_inbox),
             sign_as: Some(crate::ActorLocalRef::Community(local_community)),
             object: body,
         })
@@ -922,23 +905,21 @@ pub fn spawn_enqueue_send_community_follow_accept(
 
 pub fn post_to_ap(
     post: &crate::PostInfo<'_>,
-    community_ap_id: &str,
-    host_url_apub: &str,
-) -> Result<activitystreams::BaseBox, crate::Error> {
-    use std::convert::TryInto;
-
-    let apply_content = |props: &mut activitystreams::object::properties::ObjectProperties| -> Result<(), crate::Error> {
+    community_ap_id: url::Url,
+    host_url_apub: &BaseURL,
+) -> Result<activitystreams::base::AnyBase, crate::Error> {
+    fn apply_content<
+        K,
+        O: activitystreams::object::ObjectExt<K> + activitystreams::base::BaseExt<K>,
+    >(
+        props: &mut O,
+        post: &crate::PostInfo,
+    ) {
         if let Some(html) = post.content_html {
-            props
-                .set_content_xsd_string(html)?
-                .set_media_type(mime::TEXT_HTML)?;
+            props.set_content(html).set_media_type(mime::TEXT_HTML);
         } else if let Some(text) = post.content_text {
-            props
-                .set_content_xsd_string(text)?
-                .set_media_type(mime::TEXT_PLAIN)?;
+            props.set_content(text).set_media_type(mime::TEXT_PLAIN);
         }
-
-        Ok(())
     };
 
     match post.href {
@@ -946,115 +927,97 @@ pub fn post_to_ap(
             let mut post_ap = activitystreams::object::Page::new();
 
             post_ap
-                .as_mut()
-                .set_context_xsd_any_uri(activitystreams::context())?
-                .set_id(get_local_post_apub_id(post.id, &host_url_apub))?
-                .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
+                .set_context(activitystreams::context())
+                .set_id(get_local_post_apub_id(post.id, &host_url_apub).into())
+                .set_attributed_to(get_local_person_apub_id(
                     post.author.unwrap(),
                     &host_url_apub,
-                ))?
-                .set_url_xsd_any_uri(href)?
-                .set_summary_xsd_string(post.title)?
-                .set_published(*post.created)?
-                .set_to_xsd_any_uri(community_ap_id)?
-                .set_cc_xsd_any_uri(activitystreams::public())?;
+                ))
+                .set_url(href.to_owned())
+                .set_summary(post.title)
+                .set_published(*post.created)
+                .set_to(community_ap_id)
+                .set_cc(activitystreams::public());
 
-            apply_content(post_ap.as_mut())?;
+            apply_content(&mut post_ap, post);
 
-            Ok(post_ap.try_into()?)
+            Ok(post_ap.into_any_base()?)
         }
         None => {
             let mut post_ap = activitystreams::object::Note::new();
 
             post_ap
-                .as_mut()
-                .set_context_xsd_any_uri(activitystreams::context())?
-                .set_id(get_local_post_apub_id(post.id, &host_url_apub))?
-                .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
+                .set_context(activitystreams::context())
+                .set_id(get_local_post_apub_id(post.id, &host_url_apub).into())
+                .set_attributed_to(Into::<url::Url>::into(get_local_person_apub_id(
                     post.author.unwrap(),
                     &host_url_apub,
-                ))?
-                .set_summary_xsd_string(post.title)?
-                .set_published(*post.created)?
-                .set_to_xsd_any_uri(community_ap_id)?
-                .set_cc_xsd_any_uri(activitystreams::public())?;
+                )))
+                .set_summary(post.title)
+                .set_published(*post.created)
+                .set_to(community_ap_id)
+                .set_cc(activitystreams::public());
 
-            apply_content(post_ap.as_mut())?;
+            apply_content(&mut post_ap, post);
 
-            Ok(post_ap.try_into()?)
+            Ok(post_ap.into_any_base()?)
         }
     }
 }
 
 pub fn local_post_to_create_ap(
     post: &crate::PostInfo<'_>,
-    community_ap_id: &str,
-    host_url_apub: &str,
+    community_ap_id: url::Url,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
-    let post_ap = post_to_ap(&post, &community_ap_id, &host_url_apub)?;
+    let post_ap = post_to_ap(&post, community_ap_id, &host_url_apub)?;
 
-    let mut create = activitystreams::activity::Create::new();
-    create
-        .create_props
-        .set_object_base_box(post_ap)?
-        .set_actor_xsd_any_uri(get_local_person_apub_id(
-            post.author.unwrap(),
-            &host_url_apub,
-        ))?;
-    create
-        .object_props
-        .set_context_xsd_any_uri(activitystreams::context())?
-        .set_id(format!(
-            "{}/create",
-            get_local_post_apub_id(post.id, host_url_apub)
-        ))?;
+    let mut create = activitystreams::activity::Create::new(
+        get_local_person_apub_id(post.author.unwrap(), &host_url_apub),
+        post_ap,
+    );
+    create.set_context(activitystreams::context()).set_id({
+        let mut res = get_local_post_apub_id(post.id, host_url_apub);
+        res.path_segments_mut().push("create");
+        res.into()
+    });
 
     Ok(create)
 }
 
 pub fn local_comment_to_ap(
     comment: &crate::CommentInfo,
-    post_ap_id: &str,
-    parent_ap_id: Option<&str>,
-    parent_or_post_author_ap_id: Option<&str>,
-    community_ap_id: &str,
-    host_url_apub: &str,
+    post_ap_id: &url::Url,
+    parent_ap_id: Option<url::Url>,
+    parent_or_post_author_ap_id: Option<url::Url>,
+    community_ap_id: url::Url,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::object::Note, crate::Error> {
     let mut obj = activitystreams::object::Note::new();
 
-    obj.as_mut()
-        .set_context_xsd_any_uri(activitystreams::context())?
-        .set_id(get_local_comment_apub_id(comment.id, &host_url_apub))?
-        .set_attributed_to_xsd_any_uri(get_local_person_apub_id(
+    obj.set_context(activitystreams::context())
+        .set_id(get_local_comment_apub_id(comment.id, &host_url_apub).into())
+        .set_attributed_to(url::Url::from(get_local_person_apub_id(
             comment.author.unwrap(),
             &host_url_apub,
-        ))?
-        .set_published(comment.created)?
-        .set_in_reply_to_xsd_any_uri(parent_ap_id.unwrap_or(post_ap_id))?;
+        )))
+        .set_published(comment.created)
+        .set_in_reply_to(parent_ap_id.unwrap_or_else(|| post_ap_id.clone()));
 
     if let Some(html) = &comment.content_html {
-        obj.as_mut()
-            .set_content_xsd_string(html.as_ref())?
-            .set_media_type(mime::TEXT_HTML)?;
+        obj.set_content(html.as_ref().to_owned())
+            .set_media_type(mime::TEXT_HTML);
     } else if let Some(text) = &comment.content_text {
-        obj.as_mut()
-            .set_content_xsd_string(text.as_ref())?
-            .set_media_type(mime::TEXT_PLAIN)?;
+        obj.set_content(text.as_ref().to_owned())
+            .set_media_type(mime::TEXT_PLAIN);
     }
 
     if let Some(parent_or_post_author_ap_id) = parent_or_post_author_ap_id {
-        use std::convert::TryInto;
-
-        obj.as_mut()
-            .set_to_xsd_any_uri(parent_or_post_author_ap_id)?
-            .set_many_cc_xsd_any_uris(vec![
-                activitystreams::public(),
-                community_ap_id.try_into()?,
-            ])?;
+        obj.set_to(parent_or_post_author_ap_id)
+            .set_many_ccs(vec![activitystreams::public(), community_ap_id]);
     } else {
-        obj.as_mut()
-            .set_to_xsd_any_uri(community_ap_id)?
-            .set_cc_xsd_any_uri(activitystreams::public())?;
+        obj.set_to(community_ap_id)
+            .set_cc(activitystreams::public());
     }
 
     Ok(obj)
@@ -1067,7 +1030,7 @@ pub fn spawn_enqueue_send_local_post_to_community(
     crate::spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
-        let (community_ap_id, community_inbox): (String, String) = {
+        let (community_ap_id, community_inbox): (url::Url, url::Url) = {
             let row = db
                 .query_one(
                     "SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox) FROM community WHERE id=$1",
@@ -1079,12 +1042,12 @@ pub fn spawn_enqueue_send_local_post_to_community(
                 // no need to send posts for local communities
                 return Ok(());
             } else {
-                let ap_id = row.get(1);
-                let ap_inbox = row.get(2);
+                let ap_id: Option<&str> = row.get(1);
+                let ap_inbox: Option<&str> = row.get(2);
 
                 (if let Some(ap_id) = ap_id {
                     if let Some(ap_inbox) = ap_inbox {
-                        Some((ap_id, ap_inbox))
+                        Some((ap_id.parse()?, ap_inbox.parse()?))
                     } else {
                         None
                     }
@@ -1100,11 +1063,10 @@ pub fn spawn_enqueue_send_local_post_to_community(
             }
         };
 
-        let create =
-            local_post_to_create_ap(&(&post).into(), &community_ap_id, &ctx.host_url_apub)?;
+        let create = local_post_to_create_ap(&(&post).into(), community_ap_id, &ctx.host_url_apub)?;
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: (&community_inbox).into(),
+            inbox: Cow::Owned(community_inbox),
             sign_as: Some(crate::ActorLocalRef::Person(post.author.unwrap())),
             object: serde_json::to_string(&create)?,
         })
@@ -1117,18 +1079,18 @@ pub fn spawn_enqueue_send_local_post_to_community(
 pub fn local_post_delete_to_ap(
     post_id: PostLocalID,
     author: UserLocalID,
-    host_url_apub: &str,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Delete, crate::Error> {
-    let mut delete = activitystreams::activity::Delete::new();
     let post_ap_id = get_local_post_apub_id(post_id, host_url_apub);
-    delete
-        .object_props
-        .set_context_xsd_any_uri(activitystreams::context())?
-        .set_id(format!("{}/delete", post_ap_id))?;
-    delete
-        .delete_props
-        .set_actor_xsd_any_uri(get_local_person_apub_id(author, host_url_apub))?;
-    delete.delete_props.set_object_xsd_any_uri(post_ap_id)?;
+    let mut delete = activitystreams::activity::Delete::new(
+        get_local_person_apub_id(author, host_url_apub),
+        post_ap_id.clone(),
+    );
+    delete.set_context(activitystreams::context()).set_id({
+        let mut res = post_ap_id;
+        res.path_segments_mut().push("delete");
+        res.into()
+    });
 
     Ok(delete)
 }
@@ -1136,77 +1098,68 @@ pub fn local_post_delete_to_ap(
 pub fn local_comment_delete_to_ap(
     comment_id: CommentLocalID,
     author: UserLocalID,
-    host_url_apub: &str,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Delete, crate::Error> {
-    let mut delete = activitystreams::activity::Delete::new();
     let comment_ap_id = get_local_comment_apub_id(comment_id, host_url_apub);
-    delete
-        .object_props
-        .set_context_xsd_any_uri(activitystreams::context())?
-        .set_id(format!("{}/delete", comment_ap_id))?;
-    delete
-        .delete_props
-        .set_actor_xsd_any_uri(get_local_person_apub_id(author, host_url_apub))?;
-    delete.delete_props.set_object_xsd_any_uri(comment_ap_id)?;
+
+    let mut delete = activitystreams::activity::Delete::new(
+        get_local_person_apub_id(author, host_url_apub),
+        comment_ap_id.clone(),
+    );
+
+    delete.set_context(activitystreams::context()).set_id({
+        let mut res = comment_ap_id;
+        res.path_segments_mut().push("delete");
+        res.into()
+    });
 
     Ok(delete)
 }
 
 pub fn local_comment_to_create_ap(
     comment: &crate::CommentInfo,
-    post_ap_id: &str,
-    parent_ap_id: Option<&str>,
-    post_or_parent_author_ap_id: Option<&str>,
-    community_ap_id: &str,
-    host_url_apub: &str,
+    post_ap_id: &url::Url,
+    parent_ap_id: Option<url::Url>,
+    post_or_parent_author_ap_id: Option<url::Url>,
+    community_ap_id: url::Url,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
     let comment_ap = local_comment_to_ap(
         &comment,
-        &post_ap_id,
+        post_ap_id,
         parent_ap_id,
         post_or_parent_author_ap_id,
-        &community_ap_id,
+        community_ap_id,
         &host_url_apub,
     )?;
 
     let author = comment.author.unwrap();
 
-    let mut create = activitystreams::activity::Create::new();
-    create
-        .object_props
-        .set_context_xsd_any_uri(activitystreams::context())?
-        .set_id(format!(
-            "{}/create",
-            get_local_comment_apub_id(comment.id, host_url_apub)
-        ))?;
-    create.create_props.set_object_base_box(comment_ap)?;
-    create
-        .create_props
-        .set_actor_xsd_any_uri(get_local_person_apub_id(author, &host_url_apub))?;
+    let mut create = activitystreams::activity::Create::new(
+        get_local_person_apub_id(author, host_url_apub),
+        comment_ap.into_any_base()?,
+    );
+    create.set_context(activitystreams::context()).set_id({
+        let mut res = get_local_comment_apub_id(comment.id, host_url_apub);
+        res.path_segments_mut().push("create");
+        res.into()
+    });
 
     Ok(create)
 }
 
 pub fn local_post_like_to_ap(
     post_local_id: PostLocalID,
-    post_ap_id: &str,
+    post_ap_id: BaseURL,
     user: UserLocalID,
-    host_url_apub: &str,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
-    let mut like = activitystreams::activity::Like::new();
-    like.like_props.set_object_xsd_any_uri(post_ap_id)?;
-    like.like_props
-        .set_actor_xsd_any_uri(crate::apub_util::get_local_person_apub_id(
-            user,
-            &host_url_apub,
-        ))?;
-    like.object_props
-        .set_context_xsd_any_uri(activitystreams::context())?;
-    like.object_props.set_id(get_local_post_like_apub_id(
-        post_local_id,
-        user,
-        &host_url_apub,
-    ))?;
+    let mut like = activitystreams::activity::Like::new(
+        crate::apub_util::get_local_person_apub_id(user, &host_url_apub),
+        post_ap_id,
+    );
+    like.set_context(activitystreams::context())
+        .set_id(get_local_post_like_apub_id(post_local_id, user, &host_url_apub).into());
 
     Ok(like)
 }
@@ -1215,43 +1168,36 @@ pub fn local_post_like_undo_to_ap(
     undo_id: uuid::Uuid,
     post_local_id: PostLocalID,
     user: UserLocalID,
-    host_url_apub: &str,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let like_ap_id = get_local_post_like_apub_id(post_local_id, user, &host_url_apub);
 
-    let mut undo = activitystreams::activity::Undo::new();
-    undo.undo_props
-        .set_object_xsd_any_uri(like_ap_id.as_ref())?;
-    undo.undo_props
-        .set_actor_xsd_any_uri(get_local_person_apub_id(user, &host_url_apub))?;
-    undo.object_props
-        .set_context_xsd_any_uri(activitystreams::context())?;
-    undo.object_props
-        .set_id(format!("{}/post_like_undos/{}", host_url_apub, undo_id,))?;
+    let mut undo = activitystreams::activity::Undo::new(
+        get_local_person_apub_id(user, &host_url_apub),
+        like_ap_id,
+    );
+    undo.set_context(activitystreams::context()).set_id({
+        let mut res = host_url_apub.clone();
+        res.path_segments_mut()
+            .extend(&["post_like_undos", &undo_id.to_string()]);
+        res.into()
+    });
 
     Ok(undo)
 }
 
 pub fn local_comment_like_to_ap(
     comment_local_id: CommentLocalID,
-    comment_ap_id: &str,
+    comment_ap_id: BaseURL,
     user: UserLocalID,
-    host_url_apub: &str,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
-    let mut like = activitystreams::activity::Like::new();
-    like.like_props.set_object_xsd_any_uri(comment_ap_id)?;
-    like.like_props
-        .set_actor_xsd_any_uri(crate::apub_util::get_local_person_apub_id(
-            user,
-            &host_url_apub,
-        ))?;
-    like.object_props
-        .set_context_xsd_any_uri(activitystreams::context())?;
-    like.object_props.set_id(get_local_comment_like_apub_id(
-        comment_local_id,
-        user,
-        &host_url_apub,
-    ))?;
+    let mut like = activitystreams::activity::Like::new(
+        crate::apub_util::get_local_person_apub_id(user, &host_url_apub),
+        comment_ap_id,
+    );
+    like.set_context(activitystreams::context())
+        .set_id(get_local_comment_like_apub_id(comment_local_id, user, &host_url_apub).into());
 
     Ok(like)
 }
@@ -1260,38 +1206,39 @@ pub fn local_comment_like_undo_to_ap(
     undo_id: uuid::Uuid,
     comment_local_id: CommentLocalID,
     user: UserLocalID,
-    host_url_apub: &str,
+    host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let like_ap_id = get_local_comment_like_apub_id(comment_local_id, user, &host_url_apub);
 
-    let mut undo = activitystreams::activity::Undo::new();
-    undo.undo_props
-        .set_object_xsd_any_uri(like_ap_id.as_ref())?;
-    undo.undo_props
-        .set_actor_xsd_any_uri(get_local_person_apub_id(user, &host_url_apub))?;
-    undo.object_props
-        .set_context_xsd_any_uri(activitystreams::context())?;
-    undo.object_props
-        .set_id(format!("{}/comment_like_undos/{}", host_url_apub, undo_id,))?;
+    let mut undo = activitystreams::activity::Undo::new(
+        get_local_person_apub_id(user, &host_url_apub),
+        like_ap_id,
+    );
+    undo.set_context(activitystreams::context()).set_id({
+        let mut res = host_url_apub.clone();
+        res.path_segments_mut()
+            .extend(&["comment_like_undos", &undo_id.to_string()]);
+        res.into()
+    });
 
     Ok(undo)
 }
 
 pub fn spawn_enqueue_send_comment_to_community(
     comment: crate::CommentInfo,
-    community_ap_id: &str,
-    community_ap_inbox: String,
-    post_ap_id: String,
-    parent_ap_id: Option<String>,
-    post_or_parent_author_ap_id: Option<&str>,
+    community_ap_id: url::Url,
+    community_ap_inbox: url::Url,
+    post_ap_id: url::Url,
+    parent_ap_id: Option<url::Url>,
+    post_or_parent_author_ap_id: Option<url::Url>,
     ctx: Arc<crate::RouteContext>,
 ) {
     let create = local_comment_to_create_ap(
         &comment,
         &post_ap_id,
-        parent_ap_id.as_deref(),
+        parent_ap_id,
         post_or_parent_author_ap_id,
-        &community_ap_id,
+        community_ap_id,
         &ctx.host_url_apub,
     );
 
@@ -1301,7 +1248,7 @@ pub fn spawn_enqueue_send_comment_to_community(
         let create = create?;
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: community_ap_inbox.into(),
+            inbox: Cow::Owned(community_ap_inbox),
             sign_as: Some(crate::ActorLocalRef::Person(author)),
             object: serde_json::to_string(&create)?,
         })
@@ -1338,11 +1285,11 @@ async fn enqueue_send_to_community_followers(
 }
 
 pub fn maybe_get_local_community_id_from_uri(
-    uri: &str,
-    host_url_apub: &str,
+    uri: &url::Url,
+    host_url_apub: &BaseURL,
 ) -> Option<CommunityLocalID> {
-    if uri.starts_with(&host_url_apub) {
-        let path = &uri[host_url_apub.len()..];
+    if uri.as_str().starts_with(&host_url_apub.as_str()) {
+        let path = &uri.as_str()[host_url_apub.as_str().len()..];
         if path.starts_with("/communities/") {
             if let Ok(local_community_id) = path[13..].parse() {
                 Some(local_community_id)
@@ -1357,52 +1304,23 @@ pub fn maybe_get_local_community_id_from_uri(
     }
 }
 
-pub async fn handle_recieved_object_for_local_community(
-    obj: Verified<activitystreams::object::ObjectBox>,
+pub async fn handle_recieved_object_for_local_community<'a>(
+    obj: Verified<KnownObject>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let (to, in_reply_to, obj_id, obj) = match obj.kind() {
-        Some("Page") => {
-            let obj = obj
-                .into_concrete_object::<activitystreams::object::Page>()
-                .unwrap();
-            (
-                obj.object_props.to.clone(),
-                None,
-                obj.object_props.id.clone(),
-                obj.try_box_object().unwrap(),
-            )
-        }
-        Some("Note") => {
-            let obj = obj
-                .into_concrete_object::<activitystreams::object::Note>()
-                .unwrap();
-            (
-                obj.object_props.to.clone(),
-                obj.object_props.in_reply_to.clone(),
-                obj.object_props.id.clone(),
-                obj.try_box_object().unwrap(),
-            )
-        }
-        _ => (None, None, None, obj),
+    let (to, in_reply_to, obj_id) = match obj.deref() {
+        KnownObject::Page(obj) => (obj.to(), None, obj.id_unchecked()),
+        KnownObject::Note(obj) => (obj.to(), obj.in_reply_to(), obj.id_unchecked()),
+        _ => (None, None, None),
     };
 
     let local_community_id = match to {
         None => None,
-        Some(activitystreams::object::properties::ObjectPropertiesToEnum::Term(term)) => match term
-        {
-            activitystreams::object::properties::ObjectPropertiesToTermEnum::XsdAnyUri(uri) => {
-                maybe_get_local_community_id_from_uri(uri.as_str(), &ctx.host_url_apub)
-            }
-            _ => None,
-        },
-        Some(activitystreams::object::properties::ObjectPropertiesToEnum::Array(terms)) => terms
+        Some(maybe) => maybe
             .iter()
-            .filter_map(|term| match term {
-                activitystreams::object::properties::ObjectPropertiesToTermEnum::XsdAnyUri(uri) => {
-                    maybe_get_local_community_id_from_uri(uri.as_str(), &ctx.host_url_apub)
-                }
-                _ => None,
+            .filter_map(|any| {
+                any.as_xsd_any_uri()
+                    .and_then(|uri| maybe_get_local_community_id_from_uri(uri, &ctx.host_url_apub))
             })
             .next(),
     };
@@ -1413,25 +1331,23 @@ pub async fn handle_recieved_object_for_local_community(
         // not to a community, but might still match as a reply
         if let Some(in_reply_to) = in_reply_to {
             if let Some(obj_id) = obj_id {
-                if let Ok(obj) = obj.into_concrete_object::<activitystreams::object::Note>() {
+                if let KnownObject::Note(obj) = obj.deref() {
                     // TODO deduplicate this?
 
-                    let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
-                    let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
-                    let created = obj.as_ref().get_published().map(|x| x.as_datetime());
-                    let author = obj.as_ref().get_attributed_to_xsd_any_uri();
+                    let content = obj.content().and_then(|x| x.as_single_xsd_string());
+                    let media_type = obj.media_type();
+                    let created = obj.published();
+                    let author = obj.attributed_to().and_then(|x| x.as_single_id());
 
                     if let Some(author) = author {
-                        require_containment(obj_id.as_url(), author.as_url())?;
+                        require_containment(obj_id, author)?;
                     }
 
-                    let author = author.map(|x| x.as_str());
-
                     handle_recieved_reply(
-                        obj_id.as_ref(),
+                        obj_id.try_into()?,
                         content.unwrap_or(""),
                         media_type,
-                        created,
+                        created.as_ref(),
                         author,
                         &in_reply_to,
                         ctx,
@@ -1445,42 +1361,53 @@ pub async fn handle_recieved_object_for_local_community(
     Ok(())
 }
 
-pub async fn handle_recieved_object_for_community(
+pub async fn handle_recieved_object_for_community<'a>(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
-    obj: Verified<activitystreams::object::ObjectBox>,
+    obj: Verified<KnownObject>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     println!("recieved object: {:?}", obj);
 
-    match obj.kind() {
-        Some("Page") => {
-            let obj: Verified<activitystreams::object::Page> = obj.into_concrete_object().unwrap();
+    match obj.into_inner() {
+        KnownObject::Page(obj) => {
             let title = obj
-                .as_ref()
-                .get_summary_xsd_string()
-                .map(|x| x.as_str())
+                .summary()
+                .iter()
+                .map(|x| x.iter())
+                .flatten()
+                .filter_map(|maybe| maybe.as_xsd_string())
+                .next()
                 .unwrap_or("");
-            let href = obj.as_ref().get_url_xsd_any_uri().map(|x| x.as_str());
-            let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
-            let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
-            let created = obj.as_ref().get_published().map(|x| x.as_datetime());
-            // TODO support objects here?
-            let author = obj.as_ref().get_attributed_to_xsd_any_uri();
-            if let Some(object_id) = &obj.as_ref().id {
+            let href = obj
+                .url()
+                .iter()
+                .map(|x| x.iter())
+                .flatten()
+                .filter_map(|maybe| {
+                    maybe
+                        .as_xsd_any_uri()
+                        .map(|x| x.as_str())
+                        .or_else(|| maybe.as_xsd_string())
+                })
+                .next();
+            let content = obj.content().and_then(|x| x.as_single_xsd_string());
+            let media_type = obj.media_type();
+            let created = obj.published();
+            let author = obj.attributed_to().and_then(|x| x.as_single_id());
+
+            if let Some(object_id) = obj.id_unchecked() {
                 if let Some(author) = author {
-                    require_containment(object_id.as_url(), author.as_url())?;
+                    require_containment(&object_id, author)?;
                 }
 
-                let author = author.map(|x| x.as_str());
-
                 handle_recieved_post(
-                    object_id.as_str(),
+                    object_id.clone(),
                     title,
                     href,
                     content,
                     media_type,
-                    created,
+                    created.as_ref(),
                     author,
                     community_local_id,
                     community_is_local,
@@ -1489,25 +1416,21 @@ pub async fn handle_recieved_object_for_community(
                 .await?;
             }
         }
-        Some("Note") => {
-            let obj: Verified<activitystreams::object::Note> = obj.into_concrete_object().unwrap();
-            let content = obj.as_ref().get_content_xsd_string().map(|x| x.as_str());
-            let media_type = obj.as_ref().get_media_type().map(|x| x.as_ref());
-            let created = obj.as_ref().get_published().map(|x| x.as_datetime());
-            let author = obj
-                .as_ref()
-                .get_attributed_to_xsd_any_uri()
-                .map(|x| x.as_str());
+        KnownObject::Note(obj) => {
+            let content = obj.content().and_then(|x| x.as_single_xsd_string());
+            let media_type = obj.media_type();
+            let created = obj.published();
+            let author = obj.attributed_to().and_then(|x| x.as_single_id());
 
-            if let Some(object_id) = &obj.as_ref().id {
-                if let Some(in_reply_to) = &obj.as_ref().in_reply_to {
+            if let Some(object_id) = obj.id_unchecked() {
+                if let Some(in_reply_to) = obj.in_reply_to() {
                     // it's a reply
 
                     handle_recieved_reply(
-                        object_id.as_ref(),
+                        object_id,
                         content.unwrap_or(""),
                         media_type,
-                        created,
+                        created.as_ref(),
                         author,
                         in_reply_to,
                         ctx,
@@ -1516,45 +1439,42 @@ pub async fn handle_recieved_object_for_community(
                 } else {
                     // not a reply, must be a top-level post
                     let title = obj
-                        .as_ref()
-                        .get_summary_xsd_string()
-                        .map(|x| x.as_str())
+                        .summary()
+                        .and_then(|x| x.as_single_xsd_string())
                         .unwrap_or("");
 
                     // Interpret attachments (usually images) as links
-                    let href = (match &obj.as_ref().attachment {
-                        Some(activitystreams::object::properties::ObjectPropertiesAttachmentEnum::Array(vec)) => vec.iter().next(),
-                        Some(activitystreams::object::properties::ObjectPropertiesAttachmentEnum::Term(term)) => Some(term),
-                        None => None,
-                    })
-                        .and_then(|term| {
-                            match term {
-                                activitystreams::object::properties::ObjectPropertiesAttachmentTermEnum::BaseBox(base) => Some(base),
+                    let href = obj
+                        .attachment()
+                        .and_then(|x| x.iter().next())
+                        .and_then(
+                            |base: &activitystreams::base::AnyBase| match base.kind_str() {
+                                Some("Document") => Some(
+                                    activitystreams::object::Document::from_any_base(base.clone())
+                                        .map(|obj| obj.unwrap().take_url()),
+                                ),
+                                Some("Image") => Some(
+                                    activitystreams::object::Image::from_any_base(base.clone())
+                                        .map(|obj| obj.unwrap().take_url()),
+                                ),
                                 _ => None,
-                            }
-                        })
-                        .map(|base| -> Result<_, crate::Error> {
-                            Ok(match base.kind() {
-                                Some("Document") => Some(base.clone().into_concrete::<activitystreams::object::Document>()?.object_props),
-                                Some("Image") => Some(base.clone().into_concrete::<activitystreams::object::Image>()?.object_props),
-                                _ => None,
-                            })
-                        })
+                            },
+                        )
                         .transpose()?
                         .flatten();
                     let href = href
                         .as_ref()
-                        .and_then(|href| href.get_url_xsd_any_uri())
+                        .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
                         .map(|href| href.as_str());
 
-                    if let Some(object_id) = &obj.as_ref().id {
+                    if let Some(object_id) = obj.id_unchecked() {
                         handle_recieved_post(
-                            object_id.as_str(),
+                            object_id.clone(),
                             title,
                             href,
                             content,
                             media_type,
-                            created,
+                            created.as_ref(),
                             author,
                             community_local_id,
                             community_is_local,
@@ -1572,13 +1492,13 @@ pub async fn handle_recieved_object_for_community(
 }
 
 async fn handle_recieved_post(
-    object_id: &str,
+    object_id: url::Url,
     title: &str,
     href: Option<&str>,
     content: Option<&str>,
     media_type: Option<&mime::Mime>,
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
-    author: Option<&str>,
+    author: Option<&url::Url>,
     community_local_id: CommunityLocalID,
     community_is_local: bool,
     ctx: Arc<crate::RouteContext>,
@@ -1600,7 +1520,7 @@ async fn handle_recieved_post(
 
     let row = db.query_opt(
         "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
-        &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id],
+        &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str()],
     ).await?;
 
     if community_is_local {
@@ -1614,12 +1534,12 @@ async fn handle_recieved_post(
 }
 
 async fn handle_recieved_reply(
-    object_id: &str,
+    object_id: &url::Url,
     content: &str,
     media_type: Option<&mime::Mime>,
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
-    author: Option<&str>,
-    in_reply_to: &activitystreams::object::properties::ObjectPropertiesInReplyToEnum,
+    author: Option<&url::Url>,
+    in_reply_to: &activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
@@ -1631,22 +1551,10 @@ async fn handle_recieved_reply(
         None => None,
     };
 
-    let in_reply_to = match in_reply_to {
-        activitystreams::object::properties::ObjectPropertiesInReplyToEnum::Term(term) => {
-            either::Either::Left(std::iter::once(term))
-        }
-        activitystreams::object::properties::ObjectPropertiesInReplyToEnum::Array(terms) => {
-            either::Either::Right(terms.iter())
-        }
-    };
-
-    let last_reply_to = in_reply_to.last(); // TODO maybe not this? Not sure how to interpret inReplyTo
+    let last_reply_to = in_reply_to.iter().last(); // TODO maybe not this? Not sure how to interpret inReplyTo
 
     if let Some(last_reply_to) = last_reply_to {
-        if let activitystreams::object::properties::ObjectPropertiesInReplyToTermEnum::XsdAnyUri(
-            term_ap_id,
-        ) = last_reply_to
-        {
+        if let Some(term_ap_id) = last_reply_to.as_xsd_any_uri() {
             #[derive(Debug)]
             enum ReplyTarget {
                 Post {
@@ -1658,9 +1566,8 @@ async fn handle_recieved_reply(
                 },
             }
 
-            let term_ap_id = term_ap_id.as_str();
-            let target = if term_ap_id.starts_with(&ctx.host_url_apub) {
-                let remaining = &term_ap_id[ctx.host_url_apub.len()..];
+            let target = if term_ap_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
+                let remaining = &term_ap_id.as_str()[ctx.host_url_apub.as_str().len()..];
                 if remaining.starts_with("/posts/") {
                     if let Ok(local_post_id) = remaining[7..].parse() {
                         Some(ReplyTarget::Post { id: local_post_id })
@@ -1688,7 +1595,7 @@ async fn handle_recieved_reply(
                 }
             } else {
                 let row = db
-                    .query_opt("(SELECT id, post FROM reply WHERE ap_id=$1) UNION (SELECT NULL, id FROM post WHERE ap_id=$1) LIMIT 1", &[&term_ap_id])
+                    .query_opt("(SELECT id, post FROM reply WHERE ap_id=$1) UNION (SELECT NULL, id FROM post WHERE ap_id=$1) LIMIT 1", &[&term_ap_id.as_str()])
                     .await?;
                 row.map(|row| match row.get::<_, Option<_>>(0).map(CommentLocalID) {
                     Some(reply_id) => ReplyTarget::Comment {
@@ -1716,7 +1623,7 @@ async fn handle_recieved_reply(
 
                 let row = db.query_opt(
                     "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
-                    &[&post, &parent, &author, &content_text, &content_html, &created, &object_id],
+                    &[&post, &parent, &author, &content_text, &content_html, &created, &object_id.as_str()],
                     ).await?;
 
                 if let Some(row) = row {
@@ -1751,25 +1658,18 @@ pub async fn handle_like(
     let db = ctx.db_pool.get().await?;
 
     let activity_id = activity
-        .object_props
-        .get_id()
+        .id_unchecked()
         .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
-    if let Some(actor_id) = activity.like_props.get_actor_xsd_any_uri() {
-        require_containment(activity_id.as_url(), actor_id.as_url())?;
+    if let Some(actor_id) = activity.actor_unchecked().as_single_id() {
+        require_containment(activity_id, actor_id)?;
 
-        let actor_local_id = get_or_fetch_user_local_id(
-            actor_id.as_str(),
-            &db,
-            &ctx.host_url_apub,
-            &ctx.http_client,
-        )
-        .await?;
+        let actor_local_id =
+            get_or_fetch_user_local_id(actor_id, &db, &ctx.host_url_apub, &ctx.http_client).await?;
 
-        if let Some(object_id) = activity.like_props.get_object_xsd_any_uri() {
-            let object_id = object_id.as_str();
-            let thing_local_ref = if object_id.starts_with(&ctx.host_url_apub) {
-                let remaining = &object_id[ctx.host_url_apub.len()..];
+        if let Some(object_id) = activity.object().as_single_id() {
+            let thing_local_ref = if object_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
+                let remaining = &object_id.as_str()[ctx.host_url_apub.as_str().len()..];
                 if remaining.starts_with("/posts/") {
                     if let Ok(local_post_id) = remaining[7..].parse() {
                         Some(ThingLocalRef::Post(local_post_id))
@@ -1788,7 +1688,7 @@ pub async fn handle_like(
             } else {
                 let row = db.query_opt(
                     "(SELECT TRUE, id FROM post WHERE ap_id=$1) UNION ALL (SELECT FALSE, id FROM reply WHERE ap_id=$1) LIMIT 1",
-                    &[&object_id],
+                    &[&object_id.as_str()],
                 ).await?;
 
                 if let Some(row) = row {
@@ -1855,8 +1755,17 @@ pub async fn handle_delete(
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
 
-    if let Some(object_id) = activity.delete_props.get_object_xsd_any_uri() {
-        // TODO verify that this actor actually did this and is allowed to
+    let activity_id = activity
+        .id_unchecked()
+        .ok_or(crate::Error::InternalStrStatic("Missing ID for activity"))?;
+    let actor_id = activity
+        .actor_unchecked()
+        .as_single_id()
+        .ok_or(crate::Error::InternalStrStatic("Missing ID for actor"))?;
+
+    if let Some(object_id) = activity.object().as_single_id() {
+        require_containment(activity_id, actor_id)?;
+        require_containment(object_id, actor_id)?;
 
         let row = db.query_opt(
             "WITH deleted_post AS (UPDATE post SET href=NULL, title='[deleted]', content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id = post.community AND community.local)), deleted_reply AS (UPDATE reply SET content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id=(SELECT community FROM post WHERE id=reply.post) AND community.local)) (SELECT * FROM deleted_post) UNION ALL (SELECT * FROM deleted_reply) LIMIT 1",
@@ -1888,25 +1797,24 @@ pub async fn handle_undo(
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let activity_id = activity
-        .object_props
-        .get_id()
+        .id_unchecked()
         .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
     let actor_id =
         activity
-            .undo_props
-            .get_actor_xsd_any_uri()
+            .actor_unchecked()
+            .as_single_id()
             .ok_or(crate::Error::InternalStrStatic(
                 "Missing actor for activity",
             ))?;
 
     let object_id = activity
-        .undo_props
-        .get_object_xsd_any_uri()
+        .object()
+        .as_single_id()
         .ok_or(crate::Error::InternalStrStatic("Missing object for Undo"))?;
 
-    require_containment(activity_id.as_url(), actor_id.as_url())?;
-    require_containment(object_id.as_url(), actor_id.as_url())?;
+    require_containment(activity_id, actor_id)?;
+    require_containment(object_id, actor_id)?;
 
     let object_id = object_id.as_str();
 
@@ -1935,11 +1843,11 @@ pub async fn check_signature_for_actor(
     request_method: &hyper::Method,
     request_path_and_query: &str,
     headers: &hyper::header::HeaderMap,
-    actor_ap_id: &str,
+    actor_ap_id: &url::Url,
     db: &tokio_postgres::Client,
     http_client: &crate::HttpClient,
 ) -> Result<bool, crate::Error> {
-    let found_key = db.query_opt("(SELECT public_key, public_key_sigalg FROM person WHERE ap_id=$1) UNION ALL (SELECT public_key, public_key_sigalg FROM community WHERE ap_id=$1) LIMIT 1", &[&actor_ap_id]).await?
+    let found_key = db.query_opt("(SELECT public_key, public_key_sigalg FROM person WHERE ap_id=$1) UNION ALL (SELECT public_key, public_key_sigalg FROM community WHERE ap_id=$1) LIMIT 1", &[&actor_ap_id.as_str()]).await?
         .and_then(|row| {
             row.get::<_, Option<&[u8]>>(0).map(|key| {
                 openssl::pkey::PKey::public_key_from_pem(key)
@@ -1989,43 +1897,36 @@ pub async fn check_signature_for_actor(
     }
 }
 
-pub async fn verify_incoming_activity(
+pub async fn verify_incoming_object(
     mut req: hyper::Request<hyper::Body>,
     db: &tokio_postgres::Client,
     http_client: &crate::HttpClient,
     apub_proxy_rewrites: bool,
-) -> Result<Verified<activitystreams::activity::ActivityBox>, crate::Error> {
+) -> Result<Verified<KnownObject>, crate::Error> {
     let req_body = hyper::body::to_bytes(req.body_mut()).await?;
 
     match req.headers().get("signature") {
         None => {
-            let raw_obj_props: activitystreams::object::properties::ObjectProperties =
-                serde_json::from_slice(&req_body)?;
-
-            let ap_id = raw_obj_props.get_id().ok_or_else(|| {
+            let obj: JustMaybeAPID = serde_json::from_slice(&req_body)?;
+            let ap_id = obj.id.ok_or_else(|| {
                 crate::Error::InternalStrStatic("Missing id in received activity")
             })?;
 
-            let res_body = fetch_ap_object(ap_id.as_str(), http_client).await?;
+            let res_body = fetch_ap_object(&ap_id, http_client).await?;
 
-            Ok(Verified(serde_json::from_value(res_body)?))
+            Ok(res_body)
         }
         Some(signature) => {
-            let raw_activity_props: activitystreams::activity::properties::ActorOptOriginAndTargetProperties = serde_json::from_slice(&req_body)?;
+            let obj: JustActor = serde_json::from_slice(&req_body)?;
 
-            let actor_ap_id = match raw_activity_props.actor {
-                activitystreams::activity::properties::ActorOptOriginAndTargetPropertiesActorEnum::Term(ref term) => {
-                    match term {
-                        activitystreams::activity::properties::ActorOptOriginAndTargetPropertiesActorTermEnum::XsdAnyUri(uri) => Cow::Borrowed(uri.as_str()),
-                        activitystreams::activity::properties::ActorOptOriginAndTargetPropertiesActorTermEnum::BaseBox(raw_actor) => {
-                            // TODO not this?
-                            Cow::Owned(serde_json::to_value(raw_actor)?.get("id").and_then(serde_json::Value::as_str)
-                                .ok_or_else(|| crate::Error::InternalStrStatic("No id found for actor"))?
-                                .to_owned())
-                        },
-                    }
-                },
-                _ => return Err(crate::Error::InternalStrStatic("Found multiple actors for activity, can't verify signature"))
+            let actor_ap_id = if let Some(actor) = obj.actor.as_one() {
+                actor.id().ok_or(crate::Error::InternalStrStatic(
+                    "No id found for actor, can't verify signature",
+                ))?
+            } else {
+                return Err(crate::Error::InternalStrStatic(
+                    "Found multiple actors for activity, can't verify signature",
+                ));
             };
 
             let path_and_query = req
