@@ -389,6 +389,18 @@ async fn route_unstable_communities_posts_list(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community_id,) = params;
 
+    fn default_sort() -> super::SortType {
+        super::SortType::Hot
+    };
+
+    #[derive(Deserialize)]
+    struct Query {
+        #[serde(default = "default_sort")]
+        sort: super::SortType,
+    }
+
+    let query: Query = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
     use futures::stream::TryStreamExt;
 
     let lang = crate::get_lang_for_req(&req);
@@ -431,11 +443,12 @@ async fn route_unstable_communities_posts_list(
     let limit: i64 = 30; // TODO make configurable
 
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id, &limit];
+    let sql: &str = &format!(
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.deleted=FALSE ORDER BY {} LIMIT $2",
+        query.sort.post_sort_sql(),
+    );
 
-    let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $2",
-        values.iter().map(|s| *s as _)
-    ).await?;
+    let stream = db.query_raw(sql, values.iter().map(|s| *s as _)).await?;
 
     let posts: Vec<serde_json::Value> = stream
         .map_err(crate::Error::from)

@@ -18,6 +18,22 @@ lazy_static::lazy_static! {
     };
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SortType {
+    Hot,
+    New,
+}
+
+impl SortType {
+    pub fn post_sort_sql(&self) -> &'static str {
+        match self {
+            SortType::Hot => "hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC",
+            SortType::New => "post.created DESC",
+        }
+    }
+}
+
 #[derive(Serialize)]
 struct Empty {}
 
