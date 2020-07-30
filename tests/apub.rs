@@ -153,3 +153,43 @@ fn community_fetch() {
     assert_eq!(resp["name"].as_str(), Some(community.name.as_ref()));
     assert_eq!(resp["local"].as_bool(), Some(false));
 }
+
+#[test]
+fn community_follow() {
+    let server1 = TestServer::start(1);
+    let server2 = TestServer::start(2);
+
+    let client = reqwest::blocking::Client::builder().build().unwrap();
+
+    let token1 = create_account(&client, &server1);
+
+    let community = create_community(&client, &server1, &token1);
+
+    let community_remote_id = lookup_community(
+        &client,
+        &server2,
+        &format!("{}/apub/communities/{}", server1.host_url, community.id),
+    );
+
+    let token2 = create_account(&client, &server2);
+
+    let resp = client
+        .post(
+            format!(
+                "{}/api/unstable/communities/{}/follow",
+                server2.host_url, community_remote_id,
+            )
+            .deref(),
+        )
+        .json(&serde_json::json!({
+            "try_wait_for_accept": true
+        }))
+        .bearer_auth(token2)
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    let resp: serde_json::Value = resp.json().unwrap();
+    assert!(resp["accepted"].as_bool().unwrap());
+}

@@ -26,4 +26,4 @@ tasks:
       cd lotide
       DATABASE_URL_1=postgres://lotidetests@localhost/lotidetests1 \
         DATABASE_URL_2=postgres://lotidetests@localhost/lotidetests2 \
-        cargo test
+        cargo test -- --test-threads=1
