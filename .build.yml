@@ -1,0 +1,29 @@
+image: alpine/3.12
+packages:
+  - cargo
+  - openssl-dev
+  - postgresql
+sources: 
+  - https://git.sr.ht/~vpzom/lotide
+tasks:
+  - install-migrant: |
+      wget https://github.com/jaemk/migrant/releases/download/v0.13.0/migrant-v0.13.0-x86_64-unknown-linux-musl.tar.gz
+      cd /usr/bin
+      sudo tar xf ~/migrant-v0.13.0-x86_64-unknown-linux-musl.tar.gz
+  - setup-db: |
+      sudo -u postgres initdb -D /var/lib/postgresql/data
+      sudo rc-service postgresql start
+      sudo -u postgres createuser lotidetests
+      sudo -u postgres createdb lotidetests1
+      sudo -u postgres createdb lotidetests2
+
+      cd ~/lotide
+      env PGUSER=lotidetests PGDATABASE=lotidetests1 migrant setup
+      env PGUSER=lotidetests PGDATABASE=lotidetests1 migrant apply -a
+      env PGUSER=lotidetests PGDATABASE=lotidetests2 migrant setup
+      env PGUSER=lotidetests PGDATABASE=lotidetests2 migrant apply -a
+  - test: |
+      cd lotide
+      DATABASE_URL_1=postgres://lotidetests@localhost/lotidetests1 \
+        DATABASE_URL_2=postgres://lotidetests@localhost/lotidetests2 \
+        cargo test
