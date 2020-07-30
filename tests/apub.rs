@@ -119,28 +119,30 @@ fn lookup_community(client: &reqwest::blocking::Client, server: &TestServer, ap_
     resp["id"].as_i64().unwrap()
 }
 
+lazy_static::lazy_static! {
+    static ref SERVER1: TestServer = TestServer::start(1);
+    static ref SERVER2: TestServer = TestServer::start(2);
+}
+
 #[test]
 fn community_fetch() {
-    let server1 = TestServer::start(1);
-    let server2 = TestServer::start(2);
-
     let client = reqwest::blocking::Client::builder().build().unwrap();
 
-    let token = create_account(&client, &server1);
+    let token = create_account(&client, &SERVER1);
 
-    let community = create_community(&client, &server1, &token);
+    let community = create_community(&client, &SERVER1, &token);
 
     let community_remote_id = lookup_community(
         &client,
-        &server2,
-        &format!("{}/apub/communities/{}", server1.host_url, community.id),
+        &SERVER2,
+        &format!("{}/apub/communities/{}", SERVER1.host_url, community.id),
     );
 
     let resp = client
         .get(
             format!(
                 "{}/api/unstable/communities/{}",
-                server2.host_url, community_remote_id
+                SERVER2.host_url, community_remote_id
             )
             .deref(),
         )
@@ -156,28 +158,25 @@ fn community_fetch() {
 
 #[test]
 fn community_follow() {
-    let server1 = TestServer::start(1);
-    let server2 = TestServer::start(2);
-
     let client = reqwest::blocking::Client::builder().build().unwrap();
 
-    let token1 = create_account(&client, &server1);
+    let token1 = create_account(&client, &SERVER1);
 
-    let community = create_community(&client, &server1, &token1);
+    let community = create_community(&client, &SERVER1, &token1);
 
     let community_remote_id = lookup_community(
         &client,
-        &server2,
-        &format!("{}/apub/communities/{}", server1.host_url, community.id),
+        &SERVER2,
+        &format!("{}/apub/communities/{}", SERVER1.host_url, community.id),
     );
 
-    let token2 = create_account(&client, &server2);
+    let token2 = create_account(&client, &SERVER2);
 
     let resp = client
         .post(
             format!(
                 "{}/api/unstable/communities/{}/follow",
-                server2.host_url, community_remote_id,
+                SERVER2.host_url, community_remote_id,
             )
             .deref(),
         )
