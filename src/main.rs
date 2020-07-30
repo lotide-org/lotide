@@ -449,7 +449,7 @@ pub fn get_lang_for_req(req: &hyper::Request<hyper::Body>) -> Translator {
         None => vec![&default],
     };
 
-    let mut bundle = fluent::concurrent::FluentBundle::new(languages.iter().map(|x| *x));
+    let mut bundle = fluent::concurrent::FluentBundle::new(languages.iter().copied());
     for lang in languages {
         if let Err(errors) = bundle.add_resource(&LANG_MAP[lang]) {
             for err in errors {
@@ -565,7 +565,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
             )
             .map_err(crate::Error::from),
             async {
-                let res: Result<Option<(BaseURL, Option<BaseURL>, bool, Option<UserLocalID>)>, crate::Error> = match comment.parent {
+                match comment.parent {
                     Some(parent) => {
                         let row = db.query_one(
                             "SELECT reply.local, reply.ap_id, person.id, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE reply.id=$1",
@@ -581,8 +581,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                         }
                     },
                     None => Ok(None),
-                };
-                res
+                }
             }
         ).await?;
 

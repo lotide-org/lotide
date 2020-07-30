@@ -478,8 +478,6 @@ async fn handler_users_outbox_page_get(
                 last_created = Some(created);
                 res
             } else {
-                use std::convert::TryInto;
-
                 let id = CommentLocalID(row.get(1));
                 let post_id = PostLocalID(row.get(8));
                 let parent_id = row.get::<_, Option<_>>(11).map(CommentLocalID);
@@ -531,8 +529,7 @@ async fn handler_users_outbox_page_get(
                         std::str::FromStr::from_str(row.get(17))?
                     },
                     &ctx.host_url_apub,
-                )
-                .and_then(|x| Ok(x.try_into()?));
+                );
 
                 last_created = Some(created);
                 res

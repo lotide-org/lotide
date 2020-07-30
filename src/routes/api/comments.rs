@@ -111,7 +111,7 @@ async fn route_unstable_comments_get(
                     },
 
                     author,
-                    created: created.to_rfc3339().into(),
+                    created: created.to_rfc3339(),
                     deleted: row.get(10),
                     has_replies: !replies.is_empty(),
                     replies: Some(replies),

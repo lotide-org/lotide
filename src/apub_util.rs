@@ -2,7 +2,7 @@ use crate::{BaseURL, CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRe
 use activitystreams::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::convert::{TryFrom, TryInto};
+use std::convert::TryFrom;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -713,7 +713,7 @@ pub fn local_community_post_announce_ap(
         .set_to({
             let mut res = community_ap_id;
             res.path_segments_mut().push("followers");
-            BaseURL::from(res)
+            res
         })
         .set_cc(activitystreams::public());
 
@@ -1344,7 +1344,7 @@ pub async fn handle_recieved_object_for_local_community<'a>(
                     }
 
                     handle_recieved_reply(
-                        obj_id.try_into()?,
+                        obj_id,
                         content.unwrap_or(""),
                         media_type,
                         created.as_ref(),
@@ -1635,7 +1635,7 @@ async fn handle_recieved_reply(
                         content_text: content_text.map(|x| Cow::Owned(x.to_owned())),
                         content_markdown: None,
                         content_html: content_html.map(|x| Cow::Owned(x.to_owned())),
-                        created: created.map(|x| *x).unwrap_or_else(|| {
+                        created: created.copied().unwrap_or_else(|| {
                             chrono::offset::Utc::now()
                                 .with_timezone(&chrono::offset::FixedOffset::west(0))
                         }),

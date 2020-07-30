@@ -616,7 +616,7 @@ async fn get_comments_replies<'a>(
                     },
 
                     author,
-                    created: created.to_rfc3339().into(),
+                    created: created.to_rfc3339(),
                     deleted: row.get(9),
                     replies: None,
                     has_replies: false,

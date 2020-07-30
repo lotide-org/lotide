@@ -69,7 +69,7 @@ async fn get_post_comments<'a>(
                     },
 
                     author,
-                    created: created.to_rfc3339().into(),
+                    created: created.to_rfc3339(),
                     deleted: row.get(8),
                     replies: None,
                     has_replies: false,
@@ -153,7 +153,7 @@ async fn route_unstable_posts_create(
     }
 
     if let Some(href) = &body.href {
-        if let Err(_) = url::Url::parse(href) {
+        if url::Url::parse(href).is_err() {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
                 lang.tr("post_href_invalid", None).into_owned(),
