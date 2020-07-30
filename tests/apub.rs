@@ -192,3 +192,79 @@ fn community_follow() {
     let resp: serde_json::Value = resp.json().unwrap();
     assert!(resp["accepted"].as_bool().unwrap());
 }
+
+#[test]
+fn community_description_update() {
+    let client = reqwest::blocking::Client::builder().build().unwrap();
+
+    let token1 = create_account(&client, &SERVER1);
+
+    let community = create_community(&client, &SERVER1, &token1);
+
+    let community_remote_id = lookup_community(
+        &client,
+        &SERVER2,
+        &format!("{}/apub/communities/{}", SERVER1.host_url, community.id),
+    );
+
+    let token2 = create_account(&client, &SERVER2);
+
+    {
+        let resp = client
+            .post(
+                format!(
+                    "{}/api/unstable/communities/{}/follow",
+                    SERVER2.host_url, community_remote_id,
+                )
+                .deref(),
+            )
+            .json(&serde_json::json!({
+                "try_wait_for_accept": true
+            }))
+            .bearer_auth(token2)
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+
+        let resp: serde_json::Value = resp.json().unwrap();
+        assert!(resp["accepted"].as_bool().unwrap());
+    }
+
+    let new_description = random_string();
+
+    client
+        .patch(
+            format!(
+                "{}/api/unstable/communities/{}",
+                SERVER1.host_url, community.id
+            )
+            .deref(),
+        )
+        .json(&serde_json::json!({ "description": new_description }))
+        .bearer_auth(token1)
+        .send()
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    {
+        let resp = client
+            .get(
+                format!(
+                    "{}/api/unstable/communities/{}",
+                    SERVER2.host_url, community_remote_id,
+                )
+                .deref(),
+            )
+            .send()
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+
+        let resp: serde_json::Value = resp.json().unwrap();
+        assert_eq!(resp["description"].as_str(), Some(new_description.as_ref()));
+    }
+}
