@@ -1369,7 +1369,6 @@ pub async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     obj: Verified<activitystreams::object::Object<Kind>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    println!("hrpfc {:?}", obj);
     let title = obj
         .summary()
         .iter()
