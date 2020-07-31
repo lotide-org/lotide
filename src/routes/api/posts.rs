@@ -175,9 +175,25 @@ async fn route_unstable_posts_create(
         },
     };
 
+    let community_row = db
+        .query_opt(
+            "SELECT local FROM community WHERE id=$1",
+            &[&body.community],
+        )
+        .await?
+        .ok_or_else(|| {
+            crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                lang.tr("no_such_community", None).into_owned(),
+            ))
+        })?;
+
+    let community_local: bool = community_row.get(0);
+    let already_approved = community_local;
+
     let res_row = db.query_one(
-        "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7) RETURNING id, created, (SELECT local FROM community WHERE id=post.community)",
-        &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html],
+        "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8) RETURNING id, created",
+        &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved],
     ).await?;
 
     let id = PostLocalID(res_row.get(0));
@@ -196,19 +212,15 @@ async fn route_unstable_posts_create(
     };
 
     crate::spawn_task(async move {
-        let community_local: Option<bool> = res_row.get(2);
-
-        if let Some(community_local) = community_local {
-            if community_local {
-                crate::on_community_add_post(
-                    post.community,
-                    post.id,
-                    crate::apub_util::get_local_post_apub_id(post.id, &ctx.host_url_apub).into(),
-                    ctx,
-                );
-            } else {
-                crate::apub_util::spawn_enqueue_send_local_post_to_community(post, ctx);
-            }
+        if community_local {
+            crate::on_community_add_post(
+                post.community,
+                post.id,
+                crate::apub_util::get_local_post_apub_id(post.id, &ctx.host_url_apub).into(),
+                ctx,
+            );
+        } else {
+            crate::apub_util::spawn_enqueue_send_local_post_to_community(post, ctx);
         }
 
         Ok(())
@@ -244,6 +256,7 @@ async fn route_unstable_posts_get(
     struct RespPostInfo<'a> {
         #[serde(flatten)]
         post: &'a RespPostListPost<'a>,
+        approved: bool,
         score: i64,
         comments: Vec<RespPostCommentInfo<'a>>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -254,7 +267,7 @@ async fn route_unstable_posts_get(
 
     let (row, comments, your_vote) = futures::future::try_join3(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1) FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -334,6 +347,7 @@ async fn route_unstable_posts_get(
             let output = RespPostInfo {
                 post: &post,
                 comments,
+                approved: row.get(14),
                 score: row.get(13),
                 your_vote,
             };

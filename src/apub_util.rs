@@ -1328,7 +1328,7 @@ pub async fn handle_recieved_object_for_local_community<'a>(
     };
 
     if let Some(local_community_id) = local_community_id {
-        handle_recieved_object_for_community(local_community_id, true, obj, ctx).await?;
+        handle_recieved_object_for_community(local_community_id, true, None, obj, ctx).await?;
     } else {
         // not to a community, but might still match as a reply
         if let Some(in_reply_to) = in_reply_to {
@@ -1366,6 +1366,7 @@ pub async fn handle_recieved_object_for_local_community<'a>(
 pub async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
+    is_announce: Option<&url::Url>,
     obj: Verified<activitystreams::object::Object<Kind>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
@@ -1409,6 +1410,7 @@ pub async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
             author,
             community_local_id,
             community_is_local,
+            is_announce,
             ctx,
         )
         .await?;
@@ -1420,6 +1422,7 @@ pub async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
 pub async fn handle_recieved_object_for_community<'a>(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
+    is_announce: Option<&url::Url>,
     obj: Verified<KnownObject>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
@@ -1430,6 +1433,7 @@ pub async fn handle_recieved_object_for_community<'a>(
             handle_received_page_for_community(
                 community_local_id,
                 community_is_local,
+                is_announce,
                 Verified(obj),
                 ctx,
             )
@@ -1439,6 +1443,7 @@ pub async fn handle_recieved_object_for_community<'a>(
             handle_received_page_for_community(
                 community_local_id,
                 community_is_local,
+                is_announce,
                 Verified(obj),
                 ctx,
             )
@@ -1506,6 +1511,7 @@ pub async fn handle_recieved_object_for_community<'a>(
                             author,
                             community_local_id,
                             community_is_local,
+                            is_announce,
                             ctx,
                         )
                         .await?;
@@ -1529,6 +1535,7 @@ async fn handle_recieved_post(
     author: Option<&url::Url>,
     community_local_id: CommunityLocalID,
     community_is_local: bool,
+    is_announce: Option<&url::Url>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
@@ -1546,9 +1553,11 @@ async fn handle_recieved_post(
         (Some(content), None)
     };
 
+    let approved = is_announce.is_some() || community_is_local;
+
     let row = db.query_opt(
-        "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
-        &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str()],
+        "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10 RETURNING id",
+        &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str())],
     ).await?;
 
     if community_is_local {

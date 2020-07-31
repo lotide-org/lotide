@@ -298,13 +298,25 @@ async fn inbox_common(
                 let object_id = activity.object().as_single_id();
 
                 if let Some(object_id) = object_id {
-                    if !object_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
+                    if object_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
+                        let remaining = &object_id.as_str()[ctx.host_url_apub.as_str().len()..];
+                        if remaining.starts_with("/posts/") {
+                            let remaining = &remaining[7..];
+                            if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
+                                db.execute(
+                                    "UPDATE post SET approved=TRUE, approved_ap_id=$1 WHERE id=$2 AND community=$3",
+                                    &[&activity_id.as_str(), &local_post_id, &community_local_id],
+                                ).await?;
+                            }
+                        }
+                    } else {
                         // don't need announces for local objects
                         let obj =
                             crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?;
                         crate::apub_util::handle_recieved_object_for_community(
                             community_local_id,
                             community_is_local,
+                            Some(&activity_id),
                             obj,
                             ctx,
                         )

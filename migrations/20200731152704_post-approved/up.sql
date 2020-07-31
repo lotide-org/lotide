@@ -1,0 +1,6 @@
+BEGIN;
+	ALTER TABLE post ADD COLUMN approved BOOLEAN NOT NULL DEFAULT (FALSE);
+	ALTER TABLE post ADD COLUMN approved_ap_id TEXT;
+
+	UPDATE post SET approved=TRUE;
+COMMIT;

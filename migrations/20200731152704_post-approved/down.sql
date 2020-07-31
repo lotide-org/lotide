@@ -1,0 +1,4 @@
+BEGIN;
+	ALTER TABLE post DROP COLUMN approved;
+	ALTER TABLE post DROP COLUMN approved_ap_id;
+COMMIT;
