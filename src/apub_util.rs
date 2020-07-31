@@ -67,6 +67,7 @@ pub enum KnownObject {
             PublicKeyExtension<'static>,
         >,
     ),
+    Article(activitystreams::object::Article),
     Page(activitystreams::object::Page),
     Note(activitystreams::object::Note),
 }
@@ -1310,6 +1311,7 @@ pub async fn handle_recieved_object_for_local_community<'a>(
 ) -> Result<(), crate::Error> {
     let (to, in_reply_to, obj_id) = match obj.deref() {
         KnownObject::Page(obj) => (obj.to(), None, obj.id_unchecked()),
+        KnownObject::Article(obj) => (obj.to(), None, obj.id_unchecked()),
         KnownObject::Note(obj) => (obj.to(), obj.in_reply_to(), obj.id_unchecked()),
         _ => (None, None, None),
     };
@@ -1361,6 +1363,61 @@ pub async fn handle_recieved_object_for_local_community<'a>(
     Ok(())
 }
 
+pub async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
+    community_local_id: CommunityLocalID,
+    community_is_local: bool,
+    obj: Verified<activitystreams::object::Object<Kind>>,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
+    println!("hrpfc {:?}", obj);
+    let title = obj
+        .summary()
+        .iter()
+        .map(|x| x.iter())
+        .flatten()
+        .filter_map(|maybe| maybe.as_xsd_string())
+        .next()
+        .unwrap_or("");
+    let href = obj
+        .url()
+        .iter()
+        .map(|x| x.iter())
+        .flatten()
+        .filter_map(|maybe| {
+            maybe
+                .as_xsd_any_uri()
+                .map(|x| x.as_str())
+                .or_else(|| maybe.as_xsd_string())
+        })
+        .next();
+    let content = obj.content().and_then(|x| x.as_single_xsd_string());
+    let media_type = obj.media_type();
+    let created = obj.published();
+    let author = obj.attributed_to().and_then(|x| x.as_single_id());
+
+    if let Some(object_id) = obj.id_unchecked() {
+        if let Some(author) = author {
+            require_containment(&object_id, author)?;
+        }
+
+        handle_recieved_post(
+            object_id.clone(),
+            title,
+            href,
+            content,
+            media_type,
+            created.as_ref(),
+            author,
+            community_local_id,
+            community_is_local,
+            ctx,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
 pub async fn handle_recieved_object_for_community<'a>(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
@@ -1371,50 +1428,22 @@ pub async fn handle_recieved_object_for_community<'a>(
 
     match obj.into_inner() {
         KnownObject::Page(obj) => {
-            let title = obj
-                .summary()
-                .iter()
-                .map(|x| x.iter())
-                .flatten()
-                .filter_map(|maybe| maybe.as_xsd_string())
-                .next()
-                .unwrap_or("");
-            let href = obj
-                .url()
-                .iter()
-                .map(|x| x.iter())
-                .flatten()
-                .filter_map(|maybe| {
-                    maybe
-                        .as_xsd_any_uri()
-                        .map(|x| x.as_str())
-                        .or_else(|| maybe.as_xsd_string())
-                })
-                .next();
-            let content = obj.content().and_then(|x| x.as_single_xsd_string());
-            let media_type = obj.media_type();
-            let created = obj.published();
-            let author = obj.attributed_to().and_then(|x| x.as_single_id());
-
-            if let Some(object_id) = obj.id_unchecked() {
-                if let Some(author) = author {
-                    require_containment(&object_id, author)?;
-                }
-
-                handle_recieved_post(
-                    object_id.clone(),
-                    title,
-                    href,
-                    content,
-                    media_type,
-                    created.as_ref(),
-                    author,
-                    community_local_id,
-                    community_is_local,
-                    ctx,
-                )
-                .await?;
-            }
+            handle_received_page_for_community(
+                community_local_id,
+                community_is_local,
+                Verified(obj),
+                ctx,
+            )
+            .await?
+        }
+        KnownObject::Article(obj) => {
+            handle_received_page_for_community(
+                community_local_id,
+                community_is_local,
+                Verified(obj),
+                ctx,
+            )
+            .await?
         }
         KnownObject::Note(obj) => {
             let content = obj.content().and_then(|x| x.as_single_xsd_string());
