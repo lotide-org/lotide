@@ -721,6 +721,43 @@ pub fn local_community_post_announce_ap(
     Ok(announce)
 }
 
+pub fn local_community_post_announce_undo_ap(
+    community_id: CommunityLocalID,
+    post_local_id: PostLocalID,
+    post_ap_id: url::Url,
+    uuid: &uuid::Uuid,
+    host_url_apub: &BaseURL,
+) -> Result<activitystreams::activity::Undo, crate::Error> {
+    let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
+
+    let announce =
+        local_community_post_announce_ap(community_id, post_local_id, post_ap_id, host_url_apub)?;
+
+    let mut undo =
+        activitystreams::activity::Undo::new(community_ap_id.clone(), announce.into_any_base()?);
+
+    undo.set_context(activitystreams::context())
+        .set_id({
+            let mut res = community_ap_id.clone();
+            res.path_segments_mut().extend(&[
+                "posts",
+                &post_local_id.to_string(),
+                "announce",
+                "undos",
+                &uuid.to_string(),
+            ]);
+            res.into()
+        })
+        .set_to({
+            let mut res = community_ap_id;
+            res.path_segments_mut().push("followers");
+            res
+        })
+        .set_cc(activitystreams::public());
+
+    Ok(undo)
+}
+
 pub fn local_community_comment_announce_ap(
     community_id: CommunityLocalID,
     comment_local_id: CommentLocalID,
@@ -748,8 +785,6 @@ pub fn spawn_announce_community_post(
     post_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
-    // since post is borrowed, we can't move it
-    // so we convert it to AP form before spawning
     match local_community_post_announce_ap(community, post_local_id, post_ap_id, &ctx.host_url_apub)
     {
         Err(err) => {
@@ -761,6 +796,25 @@ pub fn spawn_announce_community_post(
             ));
         }
     }
+}
+
+pub fn spawn_enqueue_send_community_post_announce_undo(
+    community: CommunityLocalID,
+    post: PostLocalID,
+    post_ap_id: url::Url,
+    ctx: Arc<crate::RouteContext>,
+) {
+    crate::spawn_task(async move {
+        let undo = local_community_post_announce_undo_ap(
+            community,
+            post,
+            post_ap_id,
+            &uuid::Uuid::new_v4(),
+            &ctx.host_url_apub,
+        )?;
+
+        enqueue_send_to_community_followers(community, undo, ctx).await
+    });
 }
 
 pub fn spawn_announce_community_comment(
@@ -1863,6 +1917,11 @@ pub async fn handle_undo(
         .await?;
     db.execute("DELETE FROM community_follow WHERE ap_id=$1", &[&object_id])
         .await?;
+    db.execute(
+        "UPDATE post SET approved=FALSE, approved_ap_id=NULL WHERE approved_ap_id=$1",
+        &[&object_id],
+    )
+    .await?;
 
     Ok(())
 }

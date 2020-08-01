@@ -504,6 +504,109 @@ async fn route_unstable_communities_posts_list(
         .body(body.into())?)
 }
 
+async fn route_unstable_communities_posts_patch(
+    params: (CommunityLocalID, PostLocalID),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, post_id) = params;
+
+    let lang = crate::get_lang_for_req(&req);
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    #[derive(Deserialize)]
+    struct CommunityPostEditBody {
+        approved: Option<bool>,
+    }
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: CommunityPostEditBody = serde_json::from_slice(&body)?;
+
+    ({
+        let row = db
+            .query_opt(
+                "SELECT created_by FROM community WHERE id=$1",
+                &[&community_id],
+            )
+            .await?;
+        match row {
+            None => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::NOT_FOUND,
+                lang.tr("no_such_community", None).into_owned(),
+            ))),
+            Some(row) => {
+                let created_by = row.get::<_, Option<_>>(0).map(UserLocalID);
+                if created_by == Some(user) {
+                    Ok(())
+                } else {
+                    Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        lang.tr("community_edit_denied", None).into_owned(),
+                    )))
+                }
+            }
+        }
+    })?;
+
+    let old_row = db
+        .query_opt(
+            "SELECT community, approved, local, ap_id FROM post WHERE id=$1",
+            &[&post_id],
+        )
+        .await?
+        .ok_or_else(|| {
+            crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::NOT_FOUND,
+                lang.tr("no_such_post", None).into_owned(),
+            ))
+        })?;
+
+    if community_id != CommunityLocalID(old_row.get(0)) {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            lang.tr("post_not_in_community", None).into_owned(),
+        )));
+    }
+
+    let old_approved: bool = old_row.get(1);
+
+    let post_ap_id = if old_row.get(2) {
+        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into()
+    } else {
+        std::str::FromStr::from_str(old_row.get(3))?
+    };
+
+    if let Some(approved) = body.approved {
+        db.execute(
+            "UPDATE post SET approved=$1 WHERE id=$2",
+            &[&approved, &post_id],
+        )
+        .await?;
+
+        if approved != old_approved {
+            if approved {
+                crate::apub_util::spawn_announce_community_post(
+                    community_id,
+                    post_id,
+                    post_ap_id,
+                    ctx,
+                );
+            } else {
+                crate::apub_util::spawn_enqueue_send_community_post_announce_undo(
+                    community_id,
+                    post_id,
+                    post_ap_id,
+                    ctx,
+                );
+            }
+        }
+    }
+
+    Ok(crate::empty_response())
+}
+
 pub fn route_communities() -> crate::RouteNode<()> {
     crate::RouteNode::new()
         .with_handler_async("GET", route_unstable_communities_list)
@@ -525,7 +628,13 @@ pub fn route_communities() -> crate::RouteNode<()> {
                 .with_child(
                     "posts",
                     crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_communities_posts_list),
+                        .with_handler_async("GET", route_unstable_communities_posts_list)
+                        .with_child_parse::<PostLocalID, _>(
+                            crate::RouteNode::new().with_handler_async(
+                                "PATCH",
+                                route_unstable_communities_posts_patch,
+                            ),
+                        ),
                 ),
         )
 }
