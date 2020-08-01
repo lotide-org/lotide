@@ -167,6 +167,14 @@ pub fn route_api() -> crate::RouteNode<()> {
                 "instance",
                 crate::RouteNode::new().with_handler_async("GET", route_unstable_instance_get),
             )
+            .with_child(
+                "misc",
+                crate::RouteNode::new().with_child(
+                    "render_markdown",
+                    crate::RouteNode::new()
+                        .with_handler_async("POST", route_unstable_misc_render_markdown),
+                ),
+            )
             .with_child("posts", posts::route_posts())
             .with_child("comments", comments::route_comments())
             .with_child(
@@ -638,6 +646,30 @@ async fn get_comments_replies<'a>(
     }
 
     Ok(result)
+}
+
+async fn route_unstable_misc_render_markdown(
+    _: (),
+    _ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+
+    #[derive(Deserialize)]
+    struct RenderMarkdownBody<'a> {
+        content_markdown: Cow<'a, str>,
+    }
+
+    let body: RenderMarkdownBody = serde_json::from_slice(&body)?;
+
+    let html =
+        tokio::task::spawn_blocking(move || crate::render_markdown(&body.content_markdown)).await?;
+
+    let output = serde_json::to_vec(&serde_json::json!({ "content_html": html }))?;
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(output.into())?)
 }
 
 async fn route_unstable_users_create(
