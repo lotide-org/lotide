@@ -2,6 +2,7 @@ use crate::{BaseURL, CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRe
 use activitystreams::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -1175,7 +1176,7 @@ pub fn local_comment_to_create_ap(
     comment: &crate::CommentInfo,
     post_ap_id: &url::Url,
     parent_ap_id: Option<url::Url>,
-    post_or_parent_author_ap_id: Option<url::Url>,
+    parent_or_post_author_ap_id: Option<url::Url>,
     community_ap_id: url::Url,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
@@ -1183,8 +1184,8 @@ pub fn local_comment_to_create_ap(
         &comment,
         post_ap_id,
         parent_ap_id,
-        post_or_parent_author_ap_id,
-        community_ap_id,
+        parent_or_post_author_ap_id.clone(),
+        community_ap_id.clone(),
         &host_url_apub,
     )?;
 
@@ -1199,6 +1200,16 @@ pub fn local_comment_to_create_ap(
         res.path_segments_mut().push("create");
         res.into()
     });
+
+    if let Some(parent_or_post_author_ap_id) = parent_or_post_author_ap_id {
+        create
+            .set_to(parent_or_post_author_ap_id)
+            .set_many_ccs(vec![activitystreams::public(), community_ap_id]);
+    } else {
+        create
+            .set_to(community_ap_id)
+            .set_cc(activitystreams::public());
+    }
 
     Ok(create)
 }
@@ -1279,15 +1290,19 @@ pub fn local_comment_like_undo_to_ap(
     Ok(undo)
 }
 
-pub fn spawn_enqueue_send_comment_to_community(
+pub fn spawn_enqueue_send_comment(
+    inboxes: HashSet<url::Url>,
     comment: crate::CommentInfo,
     community_ap_id: url::Url,
-    community_ap_inbox: url::Url,
     post_ap_id: url::Url,
     parent_ap_id: Option<url::Url>,
     post_or_parent_author_ap_id: Option<url::Url>,
     ctx: Arc<crate::RouteContext>,
 ) {
+    if inboxes.is_empty() {
+        return;
+    }
+
     let create = local_comment_to_create_ap(
         &comment,
         &post_ap_id,
@@ -1302,12 +1317,15 @@ pub fn spawn_enqueue_send_comment_to_community(
     crate::spawn_task(async move {
         let create = create?;
 
-        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: Cow::Owned(community_ap_inbox),
-            sign_as: Some(crate::ActorLocalRef::Person(author)),
-            object: serde_json::to_string(&create)?,
-        })
-        .await?;
+        // TODO maybe insert these at the same time
+        for inbox in inboxes {
+            ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                inbox: Cow::Owned(inbox),
+                sign_as: Some(crate::ActorLocalRef::Person(author)),
+                object: serde_json::to_string(&create)?,
+            })
+            .await?;
+        }
 
         Ok(())
     });
