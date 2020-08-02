@@ -150,7 +150,7 @@ pub fn get_local_person_apub_id(person: UserLocalID, host_url_apub: &BaseURL) ->
 
 pub fn get_local_person_outbox_apub_id(person: UserLocalID, host_url_apub: &BaseURL) -> BaseURL {
     let mut res = get_local_person_apub_id(person, host_url_apub);
-    res.path_segments_mut().push(&person.to_string());
+    res.path_segments_mut().push("outbox");
     res
 }
 
