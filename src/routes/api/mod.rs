@@ -77,12 +77,19 @@ struct RespMinimalPostInfo<'a> {
     title: &'a str,
 }
 
+#[derive(Deserialize, Serialize)]
+struct JustContentText<'a> {
+    content_text: Cow<'a, str>,
+}
+
 #[derive(Serialize)]
 struct RespUserInfo<'a> {
     #[serde(flatten)]
     base: RespMinimalAuthorInfo<'a>,
 
     description: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    your_note: Option<Option<JustContentText<'a>>>,
 }
 
 #[derive(Serialize)]
@@ -207,6 +214,11 @@ pub fn route_api() -> crate::RouteNode<()> {
                                 "things",
                                 crate::RouteNode::new()
                                     .with_handler_async("GET", route_unstable_users_things_list),
+                            )
+                            .with_child(
+                                "your_note",
+                                crate::RouteNode::new()
+                                    .with_handler_async("PUT", route_unstable_users_your_note_put),
                             ),
                     ),
             ),
@@ -935,8 +947,31 @@ async fn route_unstable_users_get(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (user_id,) = params;
 
+    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
+
+    let your_note_row;
+
+    let your_note = if query.include_your {
+        Some({
+            let user = crate::require_login(&req, &db).await?;
+
+            your_note_row = db
+                .query_opt(
+                    "SELECT content_text FROM person_note WHERE author=$1 AND target=$2",
+                    &[&user, &user_id],
+                )
+                .await?;
+
+            your_note_row.as_ref().map(|row| JustContentText {
+                content_text: Cow::Borrowed(row.get(0)),
+            })
+        })
+    } else {
+        None
+    };
 
     let row = db
         .query_opt(
@@ -966,6 +1001,7 @@ async fn route_unstable_users_get(
     let info = RespUserInfo {
         base: info,
         description: row.get(3),
+        your_note,
     };
 
     let body = serde_json::to_vec(&info)?;
@@ -973,6 +1009,27 @@ async fn route_unstable_users_get(
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
         .body(body.into())?)
+}
+
+async fn route_unstable_users_your_note_put(
+    params: (UserLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (user_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+    let user = crate::require_login(&req, &db).await?;
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: JustContentText = serde_json::from_slice(&body)?;
+
+    db.execute(
+        "INSERT INTO person_note (author, target, content_text) VALUES ($1, $2, $3) ON CONFLICT (author, target) DO UPDATE SET content_text=$3",
+        &[&user, &user_id, &body.content_text],
+    ).await?;
+
+    Ok(crate::empty_response())
 }
 
 async fn route_unstable_users_things_list(
