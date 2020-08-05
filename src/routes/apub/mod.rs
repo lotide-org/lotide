@@ -257,8 +257,9 @@ async fn inbox_common(
                     .as_single_id()
                     .ok_or(crate::Error::InternalStrStatic("Missing object for Accept"))?;
 
-                if object_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
-                    let remaining = &object_id.as_str()[ctx.host_url_apub.as_str().len()..];
+                if let Some(remaining) =
+                    crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
+                {
                     if remaining.starts_with("/communities/") {
                         let remaining = &remaining[13..];
                         let next_expected = format!("{}/followers/", community_local_id);
@@ -298,8 +299,9 @@ async fn inbox_common(
                 let object_id = activity.object().as_single_id();
 
                 if let Some(object_id) = object_id {
-                    if object_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
-                        let remaining = &object_id.as_str()[ctx.host_url_apub.as_str().len()..];
+                    if let Some(remaining) =
+                        crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
+                    {
                         if remaining.starts_with("/posts/") {
                             let remaining = &remaining[7..];
                             if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {

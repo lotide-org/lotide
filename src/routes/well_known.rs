@@ -72,34 +72,34 @@ async fn handler_webfinger_get(
         Name(&'a str),
     }
 
-    let found_ref = if query.resource.starts_with(&ctx.host_url_apub.as_str()) {
-        let rest = &query.resource[ctx.host_url_apub.as_str().len()..];
-        if rest.starts_with("/users/") {
-            if let Ok(id) = rest[7..].parse() {
-                Some(LocalRef::UserID(id))
+    let found_ref =
+        if let Some(rest) = crate::apub_util::try_strip_host(&query.resource, &ctx.host_url_apub) {
+            if rest.starts_with("/users/") {
+                if let Ok(id) = rest[7..].parse() {
+                    Some(LocalRef::UserID(id))
+                } else {
+                    None
+                }
+            } else if rest.starts_with("/communities/") {
+                if let Ok(id) = rest[13..].parse() {
+                    Some(LocalRef::CommunityID(id))
+                } else {
+                    None
+                }
             } else {
                 None
             }
-        } else if rest.starts_with("/communities/") {
-            if let Ok(id) = rest[13..].parse() {
-                Some(LocalRef::CommunityID(id))
-            } else {
-                None
-            }
+        } else if query.resource.starts_with("acct:")
+            && query
+                .resource
+                .ends_with(&format!("@{}", ctx.local_hostname))
+        {
+            let name = &query.resource[5..(query.resource.len() - (ctx.local_hostname.len() + 1))];
+
+            Some(LocalRef::Name(name))
         } else {
             None
-        }
-    } else if query.resource.starts_with("acct:")
-        && query
-            .resource
-            .ends_with(&format!("@{}", ctx.local_hostname))
-    {
-        let name = &query.resource[5..(query.resource.len() - (ctx.local_hostname.len() + 1))];
-
-        Some(LocalRef::Name(name))
-    } else {
-        None
-    };
+        };
 
     let db = ctx.db_pool.get().await?;
 

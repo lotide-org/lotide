@@ -99,6 +99,19 @@ pub struct PublicKeyExtension<'a> {
     pub public_key: Option<PublicKey<'a>>,
 }
 
+pub fn try_strip_host<'a>(url: &'a impl AsRef<str>, host_url: &url::Url) -> Option<&'a str> {
+    let host_url = host_url.as_str();
+    let host_url = host_url.strip_suffix('/').unwrap_or(host_url);
+
+    let url = url.as_ref();
+
+    if url.starts_with(host_url) {
+        Some(&url[host_url.len()..])
+    } else {
+        None
+    }
+}
+
 pub fn get_local_shared_inbox(host_url_apub: &BaseURL) -> BaseURL {
     let mut res = host_url_apub.clone();
     res.path_segments_mut().push("inbox");
@@ -445,9 +458,9 @@ pub async fn get_or_fetch_user_local_id(
     host_url_apub: &BaseURL,
     http_client: &crate::HttpClient,
 ) -> Result<UserLocalID, crate::Error> {
-    if ap_id.as_str().starts_with(host_url_apub.as_str()) {
-        if ap_id.as_str()[host_url_apub.as_str().len()..].starts_with("/users/") {
-            Ok(ap_id.as_str()[(host_url_apub.as_str().len() + 7)..].parse()?)
+    if let Some(remaining) = try_strip_host(ap_id, host_url_apub) {
+        if remaining.starts_with("/users/") {
+            Ok(remaining[7..].parse()?)
         } else {
             Err(crate::Error::InternalStr(format!(
                 "Unrecognized local AP ID: {:?}",
@@ -1361,8 +1374,7 @@ pub fn maybe_get_local_community_id_from_uri(
     uri: &url::Url,
     host_url_apub: &BaseURL,
 ) -> Option<CommunityLocalID> {
-    if uri.as_str().starts_with(&host_url_apub.as_str()) {
-        let path = &uri.as_str()[host_url_apub.as_str().len()..];
+    if let Some(path) = try_strip_host(uri, host_url_apub) {
         if path.starts_with("/communities/") {
             if let Ok(local_community_id) = path[13..].parse() {
                 Some(local_community_id)
@@ -1675,8 +1687,7 @@ async fn handle_recieved_reply(
                 },
             }
 
-            let target = if term_ap_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
-                let remaining = &term_ap_id.as_str()[ctx.host_url_apub.as_str().len()..];
+            let target = if let Some(remaining) = try_strip_host(&term_ap_id, &ctx.host_url_apub) {
                 if remaining.starts_with("/posts/") {
                     if let Ok(local_post_id) = remaining[7..].parse() {
                         Some(ReplyTarget::Post { id: local_post_id })
@@ -1777,8 +1788,9 @@ pub async fn handle_like(
             get_or_fetch_user_local_id(actor_id, &db, &ctx.host_url_apub, &ctx.http_client).await?;
 
         if let Some(object_id) = activity.object().as_single_id() {
-            let thing_local_ref = if object_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
-                let remaining = &object_id.as_str()[ctx.host_url_apub.as_str().len()..];
+            let thing_local_ref = if let Some(remaining) =
+                try_strip_host(&object_id, &ctx.host_url_apub)
+            {
                 if remaining.starts_with("/posts/") {
                     if let Ok(local_post_id) = remaining[7..].parse() {
                         Some(ThingLocalRef::Post(local_post_id))
