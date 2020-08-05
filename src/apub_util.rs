@@ -101,7 +101,7 @@ pub struct PublicKeyExtension<'a> {
 
 pub fn try_strip_host<'a>(url: &'a impl AsRef<str>, host_url: &url::Url) -> Option<&'a str> {
     let host_url = host_url.as_str();
-    let host_url = host_url.strip_suffix('/').unwrap_or(host_url);
+    let host_url = host_url.trim_end_matches('/');
 
     let url = url.as_ref();
 
