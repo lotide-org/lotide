@@ -297,6 +297,9 @@ async fn inbox_common(
 
                 let object_id = activity.object().as_single_id();
 
+                println!("object_id = {:?}", object_id);
+                println!("host_url_apub = {}", ctx.host_url_apub.as_str());
+
                 if let Some(object_id) = object_id {
                     if object_id.as_str().starts_with(&ctx.host_url_apub.as_str()) {
                         let remaining = &object_id.as_str()[ctx.host_url_apub.as_str().len()..];
@@ -323,6 +326,8 @@ async fn inbox_common(
                         .await?;
                     }
                 }
+            } else {
+                println!("received object for unknown community");
             }
         }
         KnownObject::Create(activity) => inbox_common_create(Verified(activity), ctx).await?,
