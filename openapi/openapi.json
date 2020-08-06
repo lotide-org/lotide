@@ -1,0 +1,919 @@
+{
+	"openapi": "3.0.1",
+	"info": {
+		"title": "lotide API",
+		"version": "0.5.0-pre"
+	},
+	"components": {
+		"schemas": {
+			"MinimalCommentInfo": {
+				"type": "object",
+				"required": ["id"],
+				"properties": {
+					"id": {"type": "integer"},
+					"content_text": {"type": "string"},
+					"content_html": {"type": "string"}
+				}
+			},
+			"MinimalCommunityInfo": {
+				"type": "object",
+				"required": ["id", "username", "local", "host", "remote_url"],
+				"properties": {
+					"id": {"type": "integer"},
+					"name": {"type": "string"},
+					"local": {"type": "boolean"},
+					"host": {"type": "string"},
+					"remote_url": {"type": "string", "nullable": true}
+				}
+			},
+			"MinimalPostInfo": {
+				"type": "object",
+				"required": ["id", "title"],
+				"properties": {
+					"id": {"type": "integer"},
+					"title": {"type": "string"}
+				}
+			},
+			"NullableMinimalPostInfo": {
+				"type": "object",
+				"nullable": true,
+				"required": ["id", "title"],
+				"properties": {
+					"id": {"type": "integer"},
+					"title": {"type": "string"}
+				}
+			},
+			"MinimalUserInfo": {
+				"type": "object",
+				"required": ["id", "username", "local", "host", "remote_url"],
+				"properties": {
+					"id": {"type": "integer"},
+					"username": {"type": "string"},
+					"local": {"type": "boolean"},
+					"host": {"type": "string"},
+					"remote_url": {"type": "string", "nullable": true}
+				}
+			},
+			"NullableMinimalUserInfo": {
+				"type": "object",
+				"nullable": true,
+				"required": ["id", "username", "local", "host", "remote_url"],
+				"properties": {
+					"id": {"type": "integer"},
+					"username": {"type": "string"},
+					"local": {"type": "boolean"},
+					"host": {"type": "string"},
+					"remote_url": {"type": "string", "nullable": true}
+				}
+			},
+			"PostListPost": {
+				"type": "object",
+				"required": ["id", "title", "created", "community"],
+				"properties": {
+					"id": {"type": "integer"},
+					"title": {"type": "string"},
+					"href": {"type": "string"},
+					"content_text": {
+						"type": "string",
+						"description": "Content in text form. Should be displayed if content_html is not present."
+					},
+					"content_html": {
+						"type": "string",
+						"description": "Content in HTML form. May be untrusted, should be sanitized by clients before display."
+					},
+					"author": {
+						"$ref": "#/components/schemas/MinimalUserInfo"
+					},
+					"created": {"type": "string", "format": "date-time"},
+					"community": {
+						"type": "object",
+						"required": ["id", "name", "local", "host", "remote_url"],
+						"properties": {
+							"id": {"type": "integer"},
+							"name": {"type": "string"},
+							"local": {"type": "boolean"},
+							"host": {"type": "string"},
+							"remote_url": {"type": "string", "nullable": true}
+						}
+					}
+				}
+			},
+			"PostCommentInfo": {
+				"type": "object",
+				"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "has_replies"],
+				"properties": {
+					"id": {"type": "integer"},
+					"content_text": {"type": "string", "nullable": true},
+					"content_html": {"type": "string", "nullable": true},
+					"author": {
+						"$ref": "#/components/schemas/NullableMinimalUserInfo"
+					},
+					"created": {"type": "string", "format": "date-time"},
+					"deleted": {"type": "boolean"},
+					"replies": {
+						"type": "array",
+						"nullable": true,
+						"items": {"$ref": "#/components/schemas/PostCommentInfo"}
+					},
+					"has_replies": {"type": "boolean"},
+					"your_vote": {"$ref": "#/components/schemas/YourVote"}
+				}
+			},
+			"YourVote": {
+				"type": "object",
+				"nullable": true,
+				"description": "Will be null if you haven't voted, or an empty object if you have."
+			}
+		},
+		"securitySchemes": {
+			"bearer": {
+				"type": "http",
+				"description": "Token passed in Authorization header as Bearer",
+				"scheme": "bearer"
+			}
+		}
+	},
+	"paths": {
+		"/api/unstable/actors:lookup/{remoteID}": {
+			"get": {
+				"summary": "Look up a remote community by WebFinger or ActivityPub ID",
+				"parameters": [
+					{
+						"name": "remoteID",
+						"in": "path",
+						"required": true,
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"required": ["id"],
+										"properties": {
+											"id": {"type": "integer"}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/comments/{commentID}": {
+			"get": {
+				"summary": "Fetch a comment",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "include_your",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "has_replies", "parent", "post"],
+									"properties": {
+										"id": {"type": "integer"},
+										"content_text": {"type": "string", "nullable": true},
+										"content_html": {"type": "string", "nullable": true},
+										"author": {
+											"$ref": "#/components/schemas/NullableMinimalUserInfo"
+										},
+										"created": {"type": "string", "format": "date-time"},
+										"deleted": {"type": "boolean"},
+										"replies": {
+											"type": "array",
+											"nullable": true,
+											"items": {"$ref": "#/components/schemas/PostCommentInfo"}
+										},
+										"has_replies": {"type": "boolean"},
+										"your_vote": {"$ref": "#/components/schemas/YourVote"},
+										"parent": {
+											"type": "object",
+											"nullable": true,
+											"required": ["id"],
+											"properties": {
+												"id": {"type": "integer"}
+											}
+										},
+										"post": {"$ref": "#/components/schemas/NullableMinimalPostInfo"}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			},
+			"delete": {
+				"summary": "Delete a comment",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "query",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully deleted."
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/comments/{commentID}/like": {
+			"post": {
+				"summary": "Like a comment",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully liked."
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/comments/{commentID}/likes": {
+			"get": {
+				"summary": "List likers of a comment",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": true,
+						"schema": {"type": "string"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"required": ["user"],
+												"properties": {
+													"user": {"$ref": "#/components/schemas/MinimalUserInfo"}
+												}
+											}
+										},
+										"next_page": {
+											"type": "string",
+											"nullable": true
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/comments/{commentID}/unlike": {
+			"post": {
+				"summary": "Retract a like of a comment",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully unliked."
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/comments/{commentID}/replies": {
+			"post": {
+				"summary": "Reply to a comment",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"content_text": {"type": "string"},
+									"content_markdown": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully created reply.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["id", "post"],
+									"properties": {
+										"id": {"type": "integer"},
+										"post": {
+											"type": "object",
+											"required": ["id"],
+											"properties": {
+												"id": {"type": "integer"}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/communities": {
+			"get": {
+				"summary": "List communities",
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {
+										"$ref": "#/components/schemas/MinimalCommunityInfo"
+									}
+								}
+							}
+						}
+					}
+				}
+			},
+			"post": {
+				"summary": "Create a community",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["name"],
+								"properties": {
+									"name": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully created.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["community"],
+									"properties": {
+										"community": {
+											"type": "object",
+											"required": ["id"],
+											"properties": {
+												"id": {"type": "integer"}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/communities/{communityID}": {
+			"get": {
+				"summary": "Fetch community info",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "include_your",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"allOf": [{"$ref": "#/components/schemas/MinimalCommunityInfo"}],
+									"type": "object",
+									"required": ["description"],
+									"properties": {
+										"description": {"type": "string"},
+										"you_are_moderator": {"type": "boolean"},
+										"your_follow": {
+											"type": "object",
+											"nullable": true,
+											"required": ["accepted"],
+											"properties": {
+												"accepted": {
+													"type": "boolean",
+													"description": "Whether your follow request has been accepted by the community."
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			},
+			"patch": {
+				"summary": "Edit community details",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"description": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"204": {"description": "Successfully modified."}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/instance": {
+			"get": {
+				"summary": "Fetch information about the instance",
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["software"],
+									"properties": {
+										"software": {
+											"type": "object",
+											"required": ["name", "version"],
+											"properties": {
+												"name": {"type": "string", "example": "lotide"},
+												"version": {"type": "string", "example": "0.5.0-pre"}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/logins": {
+			"post": {
+				"summary": "Log in to the service",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["username", "password"],
+								"properties": {
+									"username": {
+										"type": "string"
+									},
+									"password": {
+										"type": "string"
+									}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully logged in.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["token"],
+									"properties": {
+										"token": {"type": "string"}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/logins/~current": {
+			"get": {
+				"summary": "Fetch current login state",
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["user"],
+									"properties": {
+										"user": {
+											"type": "object",
+											"required": ["id", "has_unread_notifications"],
+											"properties": {
+												"id": {"type": "integer"},
+												"has_unread_notifications": {"type": "boolean"}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/misc/render_markdown": {
+			"post": {
+				"summary": "Preview Markdown rendering",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["content_markdown"],
+								"properties": {
+									"content_markdown": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["content_html"],
+									"properties": {
+										"content_html": {"type": "string"}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/users": {
+			"post": {
+				"summary": "Register a new account",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["username", "password"],
+								"properties": {
+									"username": {"type": "string"},
+									"password": {"type": "string"},
+									"login": {
+										"type": "boolean",
+										"description": "If true, will also create a login token for the new user"
+									}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["user"],
+									"properties": {
+										"user": {
+											"type": "object",
+											"required": ["id"],
+											"properties": {
+												"id": {"type": "integer"}
+											}
+										},
+										"token": {
+											"type": "string"
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/users/{userID}": {
+			"get": {
+				"summary": "Fetch information about a user",
+				"parameters": [
+					{
+						"name": "userID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "include_your",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"},
+						"description": "If true, will fetch your_note"
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["id", "local", "username", "host", "remote_url", "description"],
+									"properties": {
+										"id": {"type": "integer"},
+										"local": {"type": "boolean"},
+										"username": {"type": "string"},
+										"host": {"type": "string"},
+										"remote_url": {"type": "string", "nullable": true},
+										"description": {"type": "string"},
+										"your_note": {
+											"type": "string",
+											"nullable": true,
+											"description": "Private note about this user written by you"
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/users/{userID}/things": {
+			"get": {
+				"summary": "List content posted by a user",
+				"parameters": [
+					{
+						"name": "userID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {
+										"oneOf": [
+											{
+												"type": "object",
+												"required": ["type", "id", "content_text", "content_html", "created", "post"],
+												"properties": {
+													"type": {"type": "string", "enum": ["comment"]},
+													"id": {"type": "integer"},
+													"content_text": {"type": "string", "nullable": true},
+													"content_html": {"type": "string", "nullable": true},
+													"created": {"type": "string", "format": "date-time"},
+													"post": {"$ref": "#/components/schemas/MinimalPostInfo"}
+												}
+											},
+											{
+												"type": "object",
+												"required": ["type", "id", "href", "title", "created", "community"],
+												"properties": {
+													"type": {"type": "string", "enum": ["post"]},
+													"id": {"type": "integer"},
+													"href": {"type": "string", "nullable": true},
+													"title": {"type": "string"},
+													"created": {"type": "string", "format": "date-time"},
+													"community": {"$ref": "#/components/schemas/MinimalCommunityInfo"}
+												}
+											}
+										]
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/users/{userID}/your_note": {
+			"put": {
+				"summary": "Edit your personal note for a user",
+				"parameters": [
+					{
+						"name": "userID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["content_text"],
+								"properties": {
+									"content_text": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"204": {
+						"description": "Successfully set."
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/users/me": {
+			"patch": {
+				"summary": "Edit your account settings",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"description": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"204": {
+						"description": "Successfully modified."
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/users/me/following:posts": {
+			"get": {
+				"summary": "Fetch posts from all the communities you follow",
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {
+										"$ref": "#/components/schemas/PostListPost"
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/users/me/notifications": {
+			"get": {
+				"summary": "Fetch your notifications. Will also clear `has_unread_notifications`.",
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"required": ["unseen", "type"],
+										"properties": {
+											"unseen": {
+												"type": "boolean",
+												"description": "Whether this notification was generated since the last time notifications were checked."
+											},
+											"type": {
+												"type": "string",
+												"enum": ["post_reply", "comment_reply"]
+											},
+											"reply": {
+												"$ref": "#/components/schemas/MinimalCommentInfo"
+											},
+											"post": {
+												"$ref": "#/components/schemas/MinimalPostInfo"
+											},
+											"comment": {"type": "integer"}
+										}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		}
+	}
+}
