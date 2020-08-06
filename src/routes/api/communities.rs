@@ -120,9 +120,18 @@ async fn route_unstable_communities_create(
             )
             .await?;
 
+        let community_id = CommunityLocalID(row.get(0));
+
+        trans
+            .execute(
+                "INSERT INTO community_moderator (community, person) VALUES ($1, $2)",
+                &[&community_id, &user],
+            )
+            .await?;
+
         trans.commit().await?;
 
-        CommunityLocalID(row.get(0))
+        community_id
     };
 
     Ok(hyper::Response::builder()
@@ -148,7 +157,7 @@ async fn route_unstable_communities_get(
         (if query.include_your {
             let user = crate::require_login(&req, &db).await?;
             db.query_opt(
-                "SELECT name, local, ap_id, description, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), (created_by IS NOT NULL AND created_by = $2) FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, description, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$2) FROM community WHERE id=$1",
                 &[&community_id.raw(), &user.raw()],
             ).await?
         } else {
@@ -229,26 +238,16 @@ async fn route_unstable_communities_patch(
     ({
         let row = db
             .query_opt(
-                "SELECT created_by FROM community WHERE id=$1",
-                &[&community_id],
+                "SELECT 1 FROM community_moderator WHERE community=$1 AND person=$2",
+                &[&community_id, &user],
             )
             .await?;
         match row {
             None => Err(crate::Error::UserError(crate::simple_response(
-                hyper::StatusCode::NOT_FOUND,
-                lang.tr("no_such_community", None).into_owned(),
+                hyper::StatusCode::FORBIDDEN,
+                lang.tr("community_edit_denied", None).into_owned(),
             ))),
-            Some(row) => {
-                let created_by = row.get::<_, Option<_>>(0).map(UserLocalID);
-                if created_by == Some(user) {
-                    Ok(())
-                } else {
-                    Err(crate::Error::UserError(crate::simple_response(
-                        hyper::StatusCode::FORBIDDEN,
-                        lang.tr("community_edit_denied", None).into_owned(),
-                    )))
-                }
-            }
+            Some(_) => Ok(()),
         }
     })?;
 
@@ -527,26 +526,16 @@ async fn route_unstable_communities_posts_patch(
     ({
         let row = db
             .query_opt(
-                "SELECT created_by FROM community WHERE id=$1",
-                &[&community_id],
+                "SELECT 1 FROM community_moderator WHERE community=$1 AND person=$2",
+                &[&community_id, &user],
             )
             .await?;
         match row {
             None => Err(crate::Error::UserError(crate::simple_response(
-                hyper::StatusCode::NOT_FOUND,
-                lang.tr("no_such_community", None).into_owned(),
+                hyper::StatusCode::FORBIDDEN,
+                lang.tr("community_edit_denied", None).into_owned(),
             ))),
-            Some(row) => {
-                let created_by = row.get::<_, Option<_>>(0).map(UserLocalID);
-                if created_by == Some(user) {
-                    Ok(())
-                } else {
-                    Err(crate::Error::UserError(crate::simple_response(
-                        hyper::StatusCode::FORBIDDEN,
-                        lang.tr("community_edit_denied", None).into_owned(),
-                    )))
-                }
-            }
+            Some(_) => Ok(()),
         }
     })?;
 
