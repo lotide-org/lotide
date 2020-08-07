@@ -6,6 +6,10 @@
 	},
 	"components": {
 		"schemas": {
+			"SortType": {
+				"type": "string",
+				"enum": ["hot", "new"]
+			},
 			"MinimalCommentInfo": {
 				"type": "object",
 				"required": ["id"],
@@ -311,25 +315,6 @@
 				}
 			}
 		},
-		"/api/unstable/comments/{commentID}/unlike": {
-			"post": {
-				"summary": "Retract a like of a comment",
-				"parameters": [
-					{
-						"name": "commentID",
-						"in": "path",
-						"required": true,
-						"schema": {"type": "integer"}
-					}
-				],
-				"responses": {
-					"204": {
-						"description": "Successfully unliked."
-					}
-				},
-				"security": [{"bearer": []}]
-			}
-		},
 		"/api/unstable/comments/{commentID}/replies": {
 			"post": {
 				"summary": "Reply to a comment",
@@ -378,6 +363,25 @@
 						}
 					}
 				}
+			}
+		},
+		"/api/unstable/comments/{commentID}/unlike": {
+			"post": {
+				"summary": "Retract a like of a comment",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully unliked."
+					}
+				},
+				"security": [{"bearer": []}]
 			}
 		},
 		"/api/unstable/communities": {
@@ -517,6 +521,140 @@
 				"security": [{"bearer": []}]
 			}
 		},
+		"/api/unstable/communities/{communityID}/follow": {
+			"post": {
+				"summary": "Follow a community",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"try_wait_for_accept": {
+										"type": "boolean",
+										"description": "If true, will wait before responding to give the remote server time to accept the follow"
+									}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully sent follow request.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["accepted"],
+									"properties": {
+										"accepted": {"type": "boolean"}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/communities/{communityID}/posts": {
+			"get": {
+				"summary": "List posts published to a community",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "sort",
+						"in": "query",
+						"required": false,
+						"schema": {"$ref": "#/components/schemas/SortType"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {"$ref": "#/components/schemas/PostListPost"}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/communities/{communityID}/posts/{postID}": {
+			"patch": {
+				"summary": "Modify a post's publishing state",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "postID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"approved": {"type": "boolean"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"204": {
+						"description": "Successfully modified."
+					}
+				}
+			}
+		},
+		"/api/unstable/communities/{communityID}/unfollow": {
+			"post": {
+				"summary": "Unfollow a community",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"202": {
+						"description": "Successfully unfollowed."
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
 		"/api/unstable/instance": {
 			"get": {
 				"summary": "Fetch information about the instance",
@@ -647,6 +785,251 @@
 						}
 					}
 				}
+			}
+		},
+		"/api/unstable/posts": {
+			"get": {
+				"summary": "List posts",
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {"$ref": "#/components/schemas/PostListPost"}
+								}
+							}
+						}
+					}
+				}
+			},
+			"post": {
+				"summary": "Create a new post",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["community", "title"],
+								"properties": {
+									"community": {"type": "integer"},
+									"href": {"type": "string"},
+									"content_markdown": {"type": "string"},
+									"content_text": {"type": "string"},
+									"title": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully created.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["id"],
+									"properties": {
+										"id": {"type": "integer"}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/posts/{postID}": {
+			"get": {
+				"summary": "Fetch a post",
+				"parameters": [
+					{
+						"name": "postID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "include_your",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"allOf": [{"$ref": "#/components/schemas/PostListPost"}],
+									"type": "object",
+									"required": ["approved", "score", "comments"],
+									"properties": {
+										"approved": {"type": "boolean"},
+										"score": {"type": "integer"},
+										"comments": {
+											"type": "array",
+											"items": {"$ref": "#/components/schemas/PostCommentInfo"}
+										},
+										"your_vote": {"$ref": "#/components/schemas/YourVote"}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			},
+			"delete": {
+				"summary": "Delete a post",
+				"parameters": [
+					{
+						"name": "postID",
+						"in": "query",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully deleted."
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/posts/{postID}/like": {
+			"post": {
+				"summary": "Like a post",
+				"parameters": [
+					{
+						"name": "postID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully liked."
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/posts/{postID}/likes": {
+			"get": {
+				"summary": "List likers of a post",
+				"parameters": [
+					{
+						"name": "postID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": true,
+						"schema": {"type": "string"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"required": ["user"],
+												"properties": {
+													"user": {"$ref": "#/components/schemas/MinimalUserInfo"}
+												}
+											}
+										},
+										"next_page": {
+											"type": "string",
+											"nullable": true
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/posts/{postID}/replies": {
+			"post": {
+				"summary": "Reply to a post",
+				"parameters": [
+					{
+						"name": "postID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"content_text": {"type": "string"},
+									"content_markdown": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully created reply.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["id", "post"],
+									"properties": {
+										"id": {"type": "integer"}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/posts/{postID}/unlike": {
+			"post": {
+				"summary": "Retract a like of a post",
+				"parameters": [
+					{
+						"name": "postID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully unliked."
+					}
+				},
+				"security": [{"bearer": []}]
 			}
 		},
 		"/api/unstable/users": {
