@@ -819,6 +819,17 @@ pub fn route_posts() -> crate::RouteNode<()> {
                     "replies",
                     crate::RouteNode::new()
                         .with_handler_async("POST", route_unstable_posts_replies_create),
+                )
+                .with_child(
+                    "votes",
+                    crate::RouteNode::new()
+                        .with_handler_async("GET", route_unstable_posts_likes_list),
+                )
+                .with_child(
+                    "your_vote",
+                    crate::RouteNode::new()
+                        .with_handler_async("PUT", route_unstable_posts_like)
+                        .with_handler_async("DELETE", route_unstable_posts_unlike),
                 ),
         )
 }

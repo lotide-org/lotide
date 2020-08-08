@@ -140,7 +140,7 @@
 	"paths": {
 		"/api/unstable/actors:lookup/{remoteID}": {
 			"get": {
-				"summary": "Look up a remote community by WebFinger or ActivityPub ID",
+				"summary": "Look up a remote actor by WebFinger or ActivityPub ID",
 				"parameters": [
 					{
 						"name": "remoteID",
@@ -162,7 +162,8 @@
 										"type": "object",
 										"required": ["id"],
 										"properties": {
-											"id": {"type": "integer"}
+											"id": {"type": "integer"},
+											"type": {"type": "string", "enum": ["community", "user"]}
 										}
 									}
 								}
@@ -248,73 +249,6 @@
 				"security": [{"bearer": []}]
 			}
 		},
-		"/api/unstable/comments/{commentID}/like": {
-			"post": {
-				"summary": "Like a comment",
-				"parameters": [
-					{
-						"name": "commentID",
-						"in": "path",
-						"required": true,
-						"schema": {"type": "integer"}
-					}
-				],
-				"responses": {
-					"204": {
-						"description": "Successfully liked."
-					}
-				},
-				"security": [{"bearer": []}]
-			}
-		},
-		"/api/unstable/comments/{commentID}/likes": {
-			"get": {
-				"summary": "List likers of a comment",
-				"parameters": [
-					{
-						"name": "commentID",
-						"in": "path",
-						"required": true,
-						"schema": {"type": "integer"}
-					},
-					{
-						"name": "page",
-						"in": "query",
-						"required": true,
-						"schema": {"type": "string"}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "",
-						"content": {
-							"application/json": {
-								"schema": {
-									"type": "object",
-									"required": ["items", "next_page"],
-									"properties": {
-										"items": {
-											"type": "array",
-											"items": {
-												"type": "object",
-												"required": ["user"],
-												"properties": {
-													"user": {"$ref": "#/components/schemas/MinimalUserInfo"}
-												}
-											}
-										},
-										"next_page": {
-											"type": "string",
-											"nullable": true
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		},
 		"/api/unstable/comments/{commentID}/replies": {
 			"post": {
 				"summary": "Reply to a comment",
@@ -365,8 +299,73 @@
 				}
 			}
 		},
-		"/api/unstable/comments/{commentID}/unlike": {
-			"post": {
+		"/api/unstable/comments/{commentID}/votes": {
+			"get": {
+				"summary": "List likers of a comment",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": true,
+						"schema": {"type": "string"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"required": ["user"],
+												"properties": {
+													"user": {"$ref": "#/components/schemas/MinimalUserInfo"}
+												}
+											}
+										},
+										"next_page": {
+											"type": "string",
+											"nullable": true
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/comments/{commentID}/your_vote": {
+			"put": {
+				"summary": "Like a comment",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully liked."
+					}
+				},
+				"security": [{"bearer": []}]
+			},
+			"delete": {
 				"summary": "Retract a like of a comment",
 				"parameters": [
 					{
@@ -903,9 +902,9 @@
 				"security": [{"bearer": []}]
 			}
 		},
-		"/api/unstable/posts/{postID}/like": {
+		"/api/unstable/posts/{postID}/replies": {
 			"post": {
-				"summary": "Like a post",
+				"summary": "Reply to a post",
 				"parameters": [
 					{
 						"name": "postID",
@@ -914,15 +913,39 @@
 						"schema": {"type": "integer"}
 					}
 				],
-				"responses": {
-					"204": {
-						"description": "Successfully liked."
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"content_text": {"type": "string"},
+									"content_markdown": {"type": "string"}
+								}
+							}
+						}
 					}
 				},
-				"security": [{"bearer": []}]
+				"responses": {
+					"200": {
+						"description": "Successfully created reply.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["id", "post"],
+									"properties": {
+										"id": {"type": "integer"}
+									}
+								}
+							}
+						}
+					}
+				}
 			}
 		},
-		"/api/unstable/posts/{postID}/likes": {
+		"/api/unstable/posts/{postID}/votes": {
 			"get": {
 				"summary": "List likers of a post",
 				"parameters": [
@@ -970,9 +993,9 @@
 				}
 			}
 		},
-		"/api/unstable/posts/{postID}/replies": {
-			"post": {
-				"summary": "Reply to a post",
+		"/api/unstable/posts/{postID}/your_vote": {
+			"put": {
+				"summary": "Like a post",
 				"parameters": [
 					{
 						"name": "postID",
@@ -981,40 +1004,14 @@
 						"schema": {"type": "integer"}
 					}
 				],
-				"requestBody": {
-					"required": true,
-					"content": {
-						"application/json": {
-							"schema": {
-								"type": "object",
-								"properties": {
-									"content_text": {"type": "string"},
-									"content_markdown": {"type": "string"}
-								}
-							}
-						}
+				"responses": {
+					"204": {
+						"description": "Successfully liked."
 					}
 				},
-				"responses": {
-					"200": {
-						"description": "Successfully created reply.",
-						"content": {
-							"application/json": {
-								"schema": {
-									"type": "object",
-									"required": ["id", "post"],
-									"properties": {
-										"id": {"type": "integer"}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		},
-		"/api/unstable/posts/{postID}/unlike": {
-			"post": {
+				"security": [{"bearer": []}]
+			},
+			"delete": {
 				"summary": "Retract a like of a post",
 				"parameters": [
 					{
@@ -1214,7 +1211,7 @@
 				"security": [{"bearer": []}]
 			}
 		},
-		"/api/unstable/users/me": {
+		"/api/unstable/users/~me": {
 			"patch": {
 				"summary": "Edit your account settings",
 				"requestBody": {
@@ -1238,7 +1235,7 @@
 				"security": [{"bearer": []}]
 			}
 		},
-		"/api/unstable/users/me/following:posts": {
+		"/api/unstable/users/~me/following:posts": {
 			"get": {
 				"summary": "Fetch posts from all the communities you follow",
 				"responses": {
@@ -1259,7 +1256,7 @@
 				"security": [{"bearer": []}]
 			}
 		},
-		"/api/unstable/users/me/notifications": {
+		"/api/unstable/users/~me/notifications": {
 			"get": {
 				"summary": "Fetch your notifications. Will also clear `has_unread_notifications`.",
 				"responses": {
