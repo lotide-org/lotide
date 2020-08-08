@@ -1075,7 +1075,7 @@ pub fn local_comment_to_ap(
     parent_or_post_author_ap_id: Option<url::Url>,
     community_ap_id: url::Url,
     host_url_apub: &BaseURL,
-) -> Result<activitystreams::object::Note, crate::Error> {
+) -> Result<activitystreams::object::ApObject<activitystreams::object::Note>, crate::Error> {
     let mut obj = activitystreams::object::Note::new();
 
     obj.set_context(activitystreams::context())
@@ -1087,9 +1087,19 @@ pub fn local_comment_to_ap(
         .set_published(comment.created)
         .set_in_reply_to(parent_ap_id.unwrap_or_else(|| post_ap_id.clone()));
 
+    let mut obj = activitystreams::object::ApObject::new(obj);
+
     if let Some(html) = &comment.content_html {
         obj.set_content(html.as_ref().to_owned())
             .set_media_type(mime::TEXT_HTML);
+
+        if let Some(md) = &comment.content_markdown {
+            let mut src = activitystreams::object::Object::<()>::new();
+            src.set_content(md.as_ref())
+                .set_media_type("text/markdown".parse().unwrap())
+                .delete_kind();
+            obj.set_source(src.into_any_base()?);
+        }
     } else if let Some(text) = &comment.content_text {
         obj.set_content(text.as_ref().to_owned())
             .set_media_type(mime::TEXT_PLAIN);
