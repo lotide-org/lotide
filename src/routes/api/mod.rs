@@ -465,7 +465,7 @@ async fn apply_comments_replies<'a, T>(
         let mut replies =
             get_comments_replies_box(&ids, include_your_for, depth - 1, db, local_hostname).await?;
 
-        for (_, comment) in comments {
+        for (_, comment) in comments.iter_mut() {
             let current = replies.remove(&comment.base.id).unwrap_or_else(Vec::new);
             comment.has_replies = !current.is_empty();
             comment.replies = Some(current);
@@ -486,10 +486,18 @@ async fn apply_comments_replies<'a, T>(
             .try_collect()
             .await?;
 
-        for (_, comment) in comments {
+        for (_, comment) in comments.iter_mut() {
             comment.has_replies = with_replies.contains(&comment.base.id);
         }
     }
+
+    comments.retain(|(_, comment)| {
+        if comment.deleted && !comment.has_replies {
+            false
+        } else {
+            true
+        }
+    });
 
     Ok(())
 }
