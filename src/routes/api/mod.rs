@@ -213,12 +213,11 @@ fn parse_lookup(src: &str) -> Result<Lookup, crate::Error> {
 async fn route_unstable_actors_lookup(
     params: (String,),
     ctx: Arc<crate::RouteContext>,
-    req: hyper::Request<hyper::Body>,
+    _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (query,) = params;
     println!("lookup {}", query);
 
-    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let lookup = parse_lookup(&query)?;
@@ -277,16 +276,18 @@ async fn route_unstable_actors_lookup(
 
     let actor = crate::apub_util::fetch_actor(&uri, &db, &ctx.http_client).await?;
 
-    if let crate::apub_util::ActorLocalInfo::Community { id, .. } = actor {
-        Ok(hyper::Response::builder()
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(serde_json::to_vec(&serde_json::json!([{ "id": id }]))?.into())?)
-    } else {
-        Ok(crate::simple_response(
-            hyper::StatusCode::BAD_REQUEST,
-            lang.tr("not_group", None).into_owned(),
-        ))
-    }
+    let info = match actor {
+        crate::apub_util::ActorLocalInfo::Community { id, .. } => {
+            serde_json::json!({"id": id, "type": "community"})
+        }
+        crate::apub_util::ActorLocalInfo::User { id, .. } => {
+            serde_json::json!({"id": id, "type": "user"})
+        }
+    };
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::to_vec(&[info])?.into())?)
 }
 
 async fn route_unstable_logins_create(

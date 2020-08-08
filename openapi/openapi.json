@@ -140,7 +140,7 @@
 	"paths": {
 		"/api/unstable/actors:lookup/{remoteID}": {
 			"get": {
-				"summary": "Look up a remote community by WebFinger or ActivityPub ID",
+				"summary": "Look up a remote actor by WebFinger or ActivityPub ID",
 				"parameters": [
 					{
 						"name": "remoteID",
@@ -162,7 +162,8 @@
 										"type": "object",
 										"required": ["id"],
 										"properties": {
-											"id": {"type": "integer"}
+											"id": {"type": "integer"},
+											"type": {"type": "string", "enum": ["community", "user"]}
 										}
 									}
 								}

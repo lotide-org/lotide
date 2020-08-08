@@ -9,7 +9,6 @@ no_such_community = Neniu tia komunumo
 no_such_local_user_by_name = Neniu uzanto trovita per tiu nomo
 no_such_post = Neniu tia poŝto
 no_such_user = Neniu tia uzanto
-not_group = Ne estas grupo
 password_incorrect = Pasvorto malĝustas
 post_content_conflict = content_markdown kaj content_text konfliktas
 post_href_invalid = URL nevalidas.
