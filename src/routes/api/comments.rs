@@ -50,7 +50,7 @@ async fn route_unstable_comments_get(
                     &[&comment_id, &user],
                 ).await?;
 
-                Some(row.map(|_| super::Empty {}))
+                Some(row.map(|_| crate::Empty {}))
             } else {
                 None
             })

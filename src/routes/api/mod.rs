@@ -35,9 +35,6 @@ impl SortType {
 }
 
 #[derive(Serialize)]
-struct Empty {}
-
-#[derive(Serialize)]
 struct JustID<T: serde::Serialize> {
     pub id: T,
 }
@@ -122,7 +119,7 @@ struct RespPostCommentInfo<'a> {
     replies: Option<Vec<RespPostCommentInfo<'a>>>,
     has_replies: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    your_vote: Option<Option<Empty>>,
+    your_vote: Option<Option<crate::Empty>>,
 }
 
 #[derive(Serialize)]
@@ -642,7 +639,11 @@ async fn get_comments_replies<'a>(
                     has_replies: false,
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(10) { Some(Empty {}) } else { None }),
+                        Some(_) => Some(if row.get(10) {
+                            Some(crate::Empty {})
+                        } else {
+                            None
+                        }),
                     },
                 },
             ))

@@ -981,14 +981,24 @@ pub fn post_to_ap(
         K,
         O: activitystreams::object::ObjectExt<K> + activitystreams::base::BaseExt<K>,
     >(
-        props: &mut O,
+        props: &mut activitystreams::object::ApObject<O>,
         post: &crate::PostInfo,
-    ) {
+    ) -> Result<(), crate::Error> {
         if let Some(html) = post.content_html {
             props.set_content(html).set_media_type(mime::TEXT_HTML);
+
+            if let Some(md) = post.content_markdown {
+                let mut src = activitystreams::object::Object::<()>::new();
+                src.set_content(md)
+                    .set_media_type("text/markdown".parse().unwrap())
+                    .delete_kind();
+                props.set_source(src.into_any_base()?);
+            }
         } else if let Some(text) = post.content_text {
             props.set_content(text).set_media_type(mime::TEXT_PLAIN);
         }
+
+        Ok(())
     };
 
     match post.href {
@@ -1008,7 +1018,9 @@ pub fn post_to_ap(
                 .set_to(community_ap_id)
                 .set_cc(activitystreams::public());
 
-            apply_content(&mut post_ap, post);
+            let mut post_ap = activitystreams::object::ApObject::new(post_ap);
+
+            apply_content(&mut post_ap, post)?;
 
             Ok(post_ap.into_any_base()?)
         }
@@ -1027,7 +1039,9 @@ pub fn post_to_ap(
                 .set_to(community_ap_id)
                 .set_cc(activitystreams::public());
 
-            apply_content(&mut post_ap, post);
+            let mut post_ap = activitystreams::object::ApObject::new(post_ap);
+
+            apply_content(&mut post_ap, post)?;
 
             Ok(post_ap.into_any_base()?)
         }

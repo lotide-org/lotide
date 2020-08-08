@@ -76,7 +76,7 @@ async fn get_post_comments<'a>(
                     your_vote: match include_your_for {
                         None => None,
                         Some(_) => Some(if row.get(9) {
-                            Some(super::Empty {})
+                            Some(crate::Empty {})
                         } else {
                             None
                         }),
@@ -260,7 +260,7 @@ async fn route_unstable_posts_get(
         score: i64,
         comments: Vec<RespPostCommentInfo<'a>>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        your_vote: Option<Option<super::Empty>>,
+        your_vote: Option<Option<crate::Empty>>,
     }
 
     let (post_id,) = params;
@@ -276,7 +276,7 @@ async fn route_unstable_posts_get(
             if let Some(user) = include_your_for {
                 let row = db.query_opt("SELECT 1 FROM post_like WHERE post=$1 AND person=$2", &[&post_id, &user]).await?;
                 if row.is_some() {
-                    Ok(Some(Some(super::Empty {})))
+                    Ok(Some(Some(crate::Empty {})))
                 } else {
                     Ok(Some(None))
                 }

@@ -86,6 +86,9 @@ impl Into<activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>
     }
 }
 
+#[derive(Serialize, Default)]
+pub struct Empty {}
+
 pub type DbPool = deadpool_postgres::Pool;
 pub type HttpClient = hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>;
 
