@@ -235,7 +235,7 @@
 				"parameters": [
 					{
 						"name": "commentID",
-						"in": "query",
+						"in": "path",
 						"required": true,
 						"schema": {"type": "integer"}
 					}
@@ -890,7 +890,7 @@
 				"parameters": [
 					{
 						"name": "postID",
-						"in": "query",
+						"in": "path",
 						"required": true,
 						"schema": {"type": "integer"}
 					}
