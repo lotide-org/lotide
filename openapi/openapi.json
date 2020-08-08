@@ -1211,7 +1211,7 @@
 				"security": [{"bearer": []}]
 			}
 		},
-		"/api/unstable/users/me": {
+		"/api/unstable/users/~me": {
 			"patch": {
 				"summary": "Edit your account settings",
 				"requestBody": {
@@ -1235,7 +1235,7 @@
 				"security": [{"bearer": []}]
 			}
 		},
-		"/api/unstable/users/me/following:posts": {
+		"/api/unstable/users/~me/following:posts": {
 			"get": {
 				"summary": "Fetch posts from all the communities you follow",
 				"responses": {
@@ -1256,7 +1256,7 @@
 				"security": [{"bearer": []}]
 			}
 		},
-		"/api/unstable/users/me/notifications": {
+		"/api/unstable/users/~me/notifications": {
 			"get": {
 				"summary": "Fetch your notifications. Will also clear `has_unread_notifications`.",
 				"responses": {
