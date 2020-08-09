@@ -435,10 +435,18 @@ async fn route_unstable_nodeinfo_20_get(
 
 async fn route_unstable_instance_get(
     _: (),
-    _ctx: Arc<crate::RouteContext>,
+    ctx: Arc<crate::RouteContext>,
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    let row = db
+        .query_one("SELECT description FROM site WHERE local = TRUE", &[])
+        .await?;
+    let description: &str = row.get(0);
+
     let body = serde_json::json!({
+        "description": description,
         "software": {
             "name": "lotide",
             "version": env!("CARGO_PKG_VERSION"),
