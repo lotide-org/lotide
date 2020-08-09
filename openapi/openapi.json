@@ -6,6 +6,12 @@
 	},
 	"components": {
 		"schemas": {
+			"PathUserID": {
+				"oneOf": [
+					{"type": "string", "enum": ["~me"]},
+					{"type": "integer"}
+				]
+			},
 			"SortType": {
 				"type": "string",
 				"enum": ["hot", "new"]
@@ -1086,7 +1092,7 @@
 						"name": "userID",
 						"in": "path",
 						"required": true,
-						"schema": {"type": "integer"}
+						"schema": {"$ref": "#/components/schemas/PathUserID"}
 					},
 					{
 						"name": "include_your",
@@ -1133,7 +1139,7 @@
 						"name": "userID",
 						"in": "path",
 						"required": true,
-						"schema": {"type": "integer"}
+						"schema": {"$ref": "#/components/schemas/PathUserID"}
 					}
 				],
 				"responses": {
@@ -1186,7 +1192,7 @@
 						"name": "userID",
 						"in": "path",
 						"required": true,
-						"schema": {"type": "integer"}
+						"schema": {"$ref": "#/components/schemas/PathUserID"}
 					}
 				],
 				"requestBody": {
