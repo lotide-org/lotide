@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE person DROP COLUMN avatar;
+COMMIT;

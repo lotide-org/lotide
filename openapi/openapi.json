@@ -61,7 +61,14 @@
 					"username": {"type": "string"},
 					"local": {"type": "boolean"},
 					"host": {"type": "string"},
-					"remote_url": {"type": "string", "nullable": true}
+					"remote_url": {"type": "string", "nullable": true},
+					"avatar": {
+						"type": "object",
+						"required": ["url"],
+						"properties": {
+							"url": {"type": "string"}
+						}
+					}
 				}
 			},
 			"NullableMinimalUserInfo": {
@@ -73,7 +80,14 @@
 					"username": {"type": "string"},
 					"local": {"type": "boolean"},
 					"host": {"type": "string"},
-					"remote_url": {"type": "string", "nullable": true}
+					"remote_url": {"type": "string", "nullable": true},
+					"avatar": {
+						"type": "object",
+						"required": ["url"],
+						"properties": {
+							"url": {"type": "string"}
+						}
+					}
 				}
 			},
 			"PostListPost": {
@@ -1108,14 +1122,10 @@
 						"content": {
 							"application/json": {
 								"schema": {
+									"allOf": [{"$ref": "#/components/schemas/MinimalUserInfo"}],
 									"type": "object",
-									"required": ["id", "local", "username", "host", "remote_url", "description"],
+									"required": ["description"],
 									"properties": {
-										"id": {"type": "integer"},
-										"local": {"type": "boolean"},
-										"username": {"type": "string"},
-										"host": {"type": "string"},
-										"remote_url": {"type": "string", "nullable": true},
 										"description": {"type": "string"},
 										"your_note": {
 											"type": "string",

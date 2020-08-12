@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE person ADD COLUMN avatar TEXT;
+COMMIT;

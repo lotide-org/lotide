@@ -394,9 +394,28 @@ pub async fn fetch_actor(
                 .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
                 .unwrap_or("");
 
+            let avatar = person.icon().and_then(|icon| {
+                icon.iter()
+                    .filter_map(|icon| {
+                        if icon.kind_str() == Some("Image") {
+                            match activitystreams::object::Image::from_any_base(icon.clone()) {
+                                Err(_) | Ok(None) => None,
+                                Ok(Some(icon)) => Some(icon),
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .next()
+            });
+            let avatar = avatar
+                .as_ref()
+                .and_then(|icon| icon.url().and_then(|url| url.as_single_id()))
+                .map(|x| x.as_str());
+
             let id = UserLocalID(db.query_one(
-                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6, $7) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7 RETURNING id",
-                &[&username, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description],
+                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description, avatar) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7, avatar=$8 RETURNING id",
+                &[&username, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description, &avatar],
             ).await?.get(0));
 
             Ok(ActorLocalInfo::User {

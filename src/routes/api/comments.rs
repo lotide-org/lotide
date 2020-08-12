@@ -1,6 +1,6 @@
 use super::{
-    MaybeIncludeYour, RespMinimalAuthorInfo, RespMinimalCommentInfo, RespMinimalPostInfo,
-    RespPostCommentInfo,
+    MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    RespMinimalPostInfo, RespPostCommentInfo,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ async fn route_unstable_comments_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
             &[&comment_id],
         )
         .map_err(crate::Error::from),
@@ -68,6 +68,7 @@ async fn route_unstable_comments_get(
                 Some(author_username) => {
                     let author_local = row.get(7);
                     let author_ap_id = row.get(8);
+                    let author_avatar: Option<&str> = row.get(12);
                     Some(RespMinimalAuthorInfo {
                         id: UserLocalID(row.get(0)),
                         username: Cow::Borrowed(author_username),
@@ -78,6 +79,7 @@ async fn route_unstable_comments_get(
                             &ctx.local_hostname,
                         ),
                         remote_url: author_ap_id.map(From::from),
+                        avatar: author_avatar.map(|url| RespAvatarInfo { url: url.into() }),
                     })
                 }
                 None => None,
@@ -352,7 +354,7 @@ async fn route_unstable_comments_likes_list(
         None => "",
     };
 
-    let sql: &str = &format!("SELECT person.id, person.username, person.local, person.ap_id, reply_like.created_local FROM reply_like, person WHERE person.id = reply_like.person AND reply_like.reply = $1{} ORDER BY reply_like.created_local DESC, reply_like.person DESC LIMIT $2", page_conditions);
+    let sql: &str = &format!("SELECT person.id, person.username, person.local, person.ap_id, reply_like.created_local, person.avatar FROM reply_like, person WHERE person.id = reply_like.person AND reply_like.reply = $1{} ORDER BY reply_like.created_local DESC, reply_like.person DESC LIMIT $2", page_conditions);
 
     let mut rows = db.query(sql, &values).await?;
 
@@ -376,6 +378,7 @@ async fn route_unstable_comments_likes_list(
             let username: &str = row.get(1);
             let local: bool = row.get(2);
             let ap_id: Option<&str> = row.get(3);
+            let avatar: Option<&str> = row.get(5);
 
             super::JustUser {
                 user: RespMinimalAuthorInfo {
@@ -384,6 +387,7 @@ async fn route_unstable_comments_likes_list(
                     local,
                     host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
                     remote_url: ap_id.map(From::from),
+                    avatar: avatar.map(|url| RespAvatarInfo { url: url.into() }),
                 },
             }
         })

@@ -1,6 +1,6 @@
 use super::{
-    MaybeIncludeYour, RespMinimalAuthorInfo, RespMinimalCommentInfo, RespMinimalCommunityInfo,
-    RespPostCommentInfo, RespPostListPost,
+    MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ async fn get_post_comments<'a>(
 ) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar";
     let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -45,6 +45,7 @@ async fn get_post_comments<'a>(
                 let author_id = UserLocalID(row.get(1));
                 let author_local: bool = row.get(6);
                 let author_ap_id: Option<&str> = row.get(7);
+                let author_avatar: Option<&str> = row.get(9);
 
                 RespMinimalAuthorInfo {
                     id: author_id,
@@ -56,6 +57,9 @@ async fn get_post_comments<'a>(
                         &local_hostname,
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
+                    avatar: author_avatar.map(|url| RespAvatarInfo {
+                        url: url.to_owned().into(),
+                    }),
                 }
             });
 
@@ -75,7 +79,7 @@ async fn get_post_comments<'a>(
                     has_replies: false,
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(9) {
+                        Some(_) => Some(if row.get(10) {
                             Some(crate::Empty {})
                         } else {
                             None
@@ -102,7 +106,7 @@ async fn route_unstable_posts_list(
     let limit: i64 = 30;
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
         ([limit]).iter().map(|x| x as _),
     ).await?;
 
@@ -267,7 +271,7 @@ async fn route_unstable_posts_get(
 
     let (row, comments, your_vote) = futures::future::try_join3(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -306,6 +310,7 @@ async fn route_unstable_posts_get(
                 Some(author_username) => {
                     let author_local = row.get(11);
                     let author_ap_id = row.get(12);
+                    let author_avatar: Option<&str> = row.get(15);
                     Some(RespMinimalAuthorInfo {
                         id: UserLocalID(row.get(0)),
                         username: Cow::Borrowed(author_username),
@@ -316,6 +321,7 @@ async fn route_unstable_posts_get(
                             &ctx.local_hostname,
                         ),
                         remote_url: author_ap_id.map(From::from),
+                        avatar: author_avatar.map(|url| RespAvatarInfo { url: url.into() }),
                     })
                 }
                 None => None,
@@ -576,7 +582,7 @@ async fn route_unstable_posts_likes_list(
         None => "",
     };
 
-    let sql: &str = &format!("SELECT person.id, person.username, person.local, person.ap_id, post_like.created_local FROM post_like, person WHERE person.id = post_like.person AND post_like.post = $1{} ORDER BY post_like.created_local DESC, post_like.person DESC LIMIT $2", page_conditions);
+    let sql: &str = &format!("SELECT person.id, person.username, person.local, person.ap_id, post_like.created_local, person.avatar FROM post_like, person WHERE person.id = post_like.person AND post_like.post = $1{} ORDER BY post_like.created_local DESC, post_like.person DESC LIMIT $2", page_conditions);
 
     let mut rows = db.query(sql, &values).await?;
 
@@ -600,6 +606,7 @@ async fn route_unstable_posts_likes_list(
             let username: &str = row.get(1);
             let local: bool = row.get(2);
             let ap_id: Option<&str> = row.get(3);
+            let avatar: Option<&str> = row.get(5);
 
             super::JustUser {
                 user: RespMinimalAuthorInfo {
@@ -608,6 +615,7 @@ async fn route_unstable_posts_likes_list(
                     local,
                     host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
                     remote_url: ap_id.map(From::from),
+                    avatar: avatar.map(|url| RespAvatarInfo { url: url.into() }),
                 },
             }
         })

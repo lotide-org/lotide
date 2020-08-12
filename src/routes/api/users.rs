@@ -1,6 +1,6 @@
 use super::{
-    handle_common_posts_list, MaybeIncludeYour, RespMinimalAuthorInfo, RespMinimalCommentInfo,
-    RespMinimalCommunityInfo, RespMinimalPostInfo, RespThingInfo,
+    handle_common_posts_list, MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo,
+    RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo, RespThingInfo,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
@@ -201,7 +201,7 @@ async fn route_unstable_users_following_posts_list(
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&user, &limit];
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.approved AND post.deleted=FALSE AND community.id IN (SELECT community FROM community_follow WHERE follower=$1 AND accepted) ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.approved AND post.deleted=FALSE AND community.id IN (SELECT community FROM community_follow WHERE follower=$1 AND accepted) ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $2",
         values.iter().map(|s| *s as _)
     ).await?;
 
@@ -382,7 +382,7 @@ async fn route_unstable_users_get(
 
     let row = db
         .query_opt(
-            "SELECT username, local, ap_id, description FROM person WHERE id=$1",
+            "SELECT username, local, ap_id, description, avatar FROM person WHERE id=$1",
             &[&user_id],
         )
         .await?;
@@ -396,6 +396,7 @@ async fn route_unstable_users_get(
 
     let local = row.get(1);
     let ap_id = row.get(2);
+    let avatar: Option<&str> = row.get(4);
 
     let info = RespMinimalAuthorInfo {
         id: user_id,
@@ -403,6 +404,7 @@ async fn route_unstable_users_get(
         username: Cow::Borrowed(row.get(0)),
         host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
         remote_url: ap_id.map(From::from),
+        avatar: avatar.map(|url| RespAvatarInfo { url: url.into() }),
     };
 
     let info = RespUserInfo {

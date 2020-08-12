@@ -1,5 +1,6 @@
 use crate::routes::api::{
-    MaybeIncludeYour, RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost,
+    MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommunityInfo,
+    RespPostListPost,
 };
 use crate::{CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
@@ -443,7 +444,7 @@ async fn route_unstable_communities_posts_list(
 
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id, &limit];
     let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {} LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {} LIMIT $2",
         query.sort.post_sort_sql(),
     );
 
@@ -464,6 +465,7 @@ async fn route_unstable_communities_posts_list(
                 let author_name: &str = row.get(7);
                 let author_local: bool = row.get(8);
                 let author_ap_id: Option<&str> = row.get(9);
+                let author_avatar: Option<&str> = row.get(10);
                 RespMinimalAuthorInfo {
                     id,
                     username: author_name.into(),
@@ -477,6 +479,7 @@ async fn route_unstable_communities_posts_list(
                         }
                     },
                     remote_url: author_ap_id.map(From::from),
+                    avatar: author_avatar.map(|url| RespAvatarInfo { url: url.into() }),
                 }
             });
 

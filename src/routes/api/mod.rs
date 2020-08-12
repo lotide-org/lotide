@@ -47,12 +47,19 @@ struct MaybeIncludeYour {
 }
 
 #[derive(Serialize)]
+struct RespAvatarInfo<'a> {
+    url: Cow<'a, str>,
+}
+
+#[derive(Serialize)]
 struct RespMinimalAuthorInfo<'a> {
     id: UserLocalID,
     username: Cow<'a, str>,
     local: bool,
     host: Cow<'a, str>,
     remote_url: Option<Cow<'a, str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar: Option<RespAvatarInfo<'a>>,
 }
 
 #[derive(Serialize)]
@@ -545,7 +552,7 @@ async fn get_comments_replies<'a>(
 ) -> Result<HashMap<CommentLocalID, Vec<RespPostCommentInfo<'a>>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar";
     let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -575,6 +582,7 @@ async fn get_comments_replies<'a>(
                 let author_id = UserLocalID(row.get(1));
                 let author_local: bool = row.get(7);
                 let author_ap_id: Option<&str> = row.get(8);
+                let author_avatar: Option<&str> = row.get(10);
 
                 RespMinimalAuthorInfo {
                     id: author_id,
@@ -586,6 +594,9 @@ async fn get_comments_replies<'a>(
                         &local_hostname,
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
+                    avatar: author_avatar.map(|url| RespAvatarInfo {
+                        url: url.to_owned().into(),
+                    }),
                 }
             });
 
@@ -605,7 +616,7 @@ async fn get_comments_replies<'a>(
                     has_replies: false,
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(10) {
+                        Some(_) => Some(if row.get(11) {
                             Some(crate::Empty {})
                         } else {
                             None
@@ -677,6 +688,7 @@ async fn handle_common_posts_list(
                 let author_name: &str = row.get(11);
                 let author_local: bool = row.get(12);
                 let author_ap_id: Option<&str> = row.get(13);
+                let author_avatar: Option<&str> = row.get(14);
                 RespMinimalAuthorInfo {
                     id,
                     username: author_name.into(),
@@ -687,6 +699,9 @@ async fn handle_common_posts_list(
                         &local_hostname,
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
+                    avatar: author_avatar.map(|url| RespAvatarInfo {
+                        url: url.to_owned().into(),
+                    }),
                 }
             });
 
