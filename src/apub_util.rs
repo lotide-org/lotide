@@ -437,7 +437,8 @@ pub async fn fetch_actor(
                 .unwrap_or("");
             let description = group
                 .summary()
-                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next());
+                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
+                .unwrap_or("");
             let inbox = group.inbox_unchecked().as_str();
             let shared_inbox = group
                 .endpoints_unchecked()
