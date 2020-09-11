@@ -700,6 +700,27 @@
 						}
 					}
 				}
+			},
+			"patch": {
+				"summary": "Modify instance settings",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"description": {"type": "string"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"204": {
+						"description": "Successfully modified."
+					}
+				}
 			}
 		},
 		"/api/unstable/logins": {
@@ -756,9 +777,11 @@
 									"properties": {
 										"user": {
 											"type": "object",
-											"required": ["id", "has_unread_notifications"],
+											"required": ["id", "name", "is_site_admin", "has_unread_notifications"],
 											"properties": {
 												"id": {"type": "integer"},
+												"name": {"type": "string"},
+												"is_site_admin": {"type": "boolean"},
 												"has_unread_notifications": {"type": "boolean"}
 											}
 										}

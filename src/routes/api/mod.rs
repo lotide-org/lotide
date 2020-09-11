@@ -162,7 +162,9 @@ pub fn route_api() -> crate::RouteNode<()> {
             .with_child("communities", communities::route_communities())
             .with_child(
                 "instance",
-                crate::RouteNode::new().with_handler_async("GET", route_unstable_instance_get),
+                crate::RouteNode::new()
+                    .with_handler_async("GET", route_unstable_instance_get)
+                    .with_handler_async("PATCH", route_unstable_instance_patch),
             )
             .with_child(
                 "misc",
@@ -367,13 +369,15 @@ async fn route_unstable_logins_current_get(
 
     let user = crate::require_login(&req, &db).await?;
 
-    let has_notifications: bool = {
-        let row = db.query_one("SELECT EXISTS(SELECT 1 FROM notification WHERE to_user = $1 AND created_at > (SELECT last_checked_notifications FROM person WHERE id=$1))", &[&user]).await?;
-        row.get(0)
-    };
+    let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications) FROM person WHERE id=$1", &[&user]).await?;
+    let username: &str = row.get(0);
+    let is_site_admin: bool = row.get(1);
+    let has_notifications: bool = row.get(2);
 
     let body = serde_json::to_vec(
-        &serde_json::json!({"user": {"id": user, "has_unread_notifications": has_notifications}}),
+        &serde_json::json!({
+            "user": {"id": user, "name": username, "is_site_admin": is_site_admin, "has_unread_notifications": has_notifications}
+        }),
     )?
     .into();
 
@@ -463,6 +467,49 @@ async fn route_unstable_instance_get(
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
         .body(serde_json::to_vec(&body)?.into())?)
+}
+
+async fn route_unstable_instance_patch(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    #[derive(Deserialize)]
+    struct InstanceEditBody<'a> {
+        description: Option<Cow<'a, str>>,
+    }
+
+    let lang = crate::get_lang_for_req(&req);
+
+    let (req_parts, body) = req.into_parts();
+
+    let body = hyper::body::to_bytes(body).await?;
+    let body: InstanceEditBody = serde_json::from_slice(&body)?;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req_parts, &db).await?;
+
+    let is_site_admin: bool = {
+        let row = db
+            .query_one("SELECT is_site_admin FROM person WHERE id=$1", &[&user])
+            .await?;
+        row.get(0)
+    };
+
+    if is_site_admin {
+        if let Some(description) = body.description {
+            db.execute("UPDATE site SET description=$1", &[&description])
+                .await?;
+        }
+
+        Ok(crate::empty_response())
+    } else {
+        Ok(crate::simple_response(
+            hyper::StatusCode::FORBIDDEN,
+            lang.tr("not_admin", None).into_owned(),
+        ))
+    }
 }
 
 async fn apply_comments_replies<'a, T>(

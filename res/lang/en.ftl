@@ -9,6 +9,7 @@ no_such_community = No such community
 no_such_local_user_by_name = No local user found by that name
 no_such_post = No such post
 no_such_user = No such user
+not_admin = You are not a site admin
 password_incorrect = Incorrect password
 post_content_conflict = content_markdown and content_text are mutually exclusive
 post_href_invalid = Specified URL is not valid

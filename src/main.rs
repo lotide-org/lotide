@@ -395,6 +395,22 @@ pub async fn res_to_error(
     }
 }
 
+pub trait ReqParts {
+    fn headers(&self) -> &hyper::HeaderMap<hyper::header::HeaderValue>;
+}
+
+impl<T> ReqParts for hyper::Request<T> {
+    fn headers(&self) -> &hyper::HeaderMap<hyper::header::HeaderValue> {
+        self.headers()
+    }
+}
+
+impl ReqParts for http::request::Parts {
+    fn headers(&self) -> &hyper::HeaderMap<hyper::header::HeaderValue> {
+        &self.headers
+    }
+}
+
 lazy_static::lazy_static! {
     static ref LANG_MAP: HashMap<unic_langid::LanguageIdentifier, fluent::FluentResource> = {
         let mut result = HashMap::new();
@@ -433,7 +449,7 @@ impl Translator {
     }
 }
 
-pub fn get_lang_for_req(req: &hyper::Request<hyper::Body>) -> Translator {
+pub fn get_lang_for_req(req: &impl ReqParts) -> Translator {
     let default = unic_langid::langid!("en");
     let languages = match req
         .headers()
@@ -471,7 +487,7 @@ pub fn get_lang_for_req(req: &hyper::Request<hyper::Body>) -> Translator {
 }
 
 pub async fn authenticate(
-    req: &hyper::Request<hyper::Body>,
+    req: &impl ReqParts,
     db: &tokio_postgres::Client,
 ) -> Result<Option<UserLocalID>, Error> {
     use headers::Header;
@@ -504,7 +520,7 @@ pub async fn authenticate(
 }
 
 pub async fn require_login(
-    req: &hyper::Request<hyper::Body>,
+    req: &impl ReqParts,
     db: &tokio_postgres::Client,
 ) -> Result<UserLocalID, Error> {
     authenticate(req, db).await?.ok_or_else(|| {
