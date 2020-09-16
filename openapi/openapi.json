@@ -2,7 +2,7 @@
 	"openapi": "3.0.1",
 	"info": {
 		"title": "lotide API",
-		"version": "0.5.0-pre"
+		"version": "0.6.0-pre"
 	},
 	"components": {
 		"schemas": {
@@ -581,6 +581,59 @@
 								}
 							}
 						}
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/communities/{communityID}/moderators": {
+			"get": {
+				"summary": "List moderators of a community",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "array",
+									"items": {
+										"$ref": "#/components/schemas/MinimalUserInfo"
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		"/api/unstable/communities/{communityID}/moderators/{userID}": {
+			"put": {
+				"summary": "Add a moderator to a community",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "userID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully added."
 					}
 				},
 				"security": [{"bearer": []}]

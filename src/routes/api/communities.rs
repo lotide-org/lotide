@@ -340,6 +340,124 @@ async fn route_unstable_communities_follow(
         .body(serde_json::to_vec(&output)?.into())?)
 }
 
+async fn route_unstable_communities_moderators_list(
+    params: (CommunityLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id,) = params;
+
+    let lang = crate::get_lang_for_req(&req);
+
+    let db = ctx.db_pool.get().await?;
+
+    ({
+        let row = db
+            .query_opt("SELECT 1 FROM community WHERE id=$1", &[&community_id])
+            .await?;
+
+        match row {
+            None => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::NOT_FOUND,
+                lang.tr("no_such_community", None).into_owned(),
+            ))),
+            Some(_) => Ok(()),
+        }
+    })?;
+
+    let rows = db.query(
+        "SELECT id, username, local, ap_id, avatar FROM person WHERE id IN (SELECT person FROM community_moderator WHERE community=$1)",
+        &[&community_id],
+    ).await?;
+
+    let output: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            let local = row.get(2);
+            let ap_id = row.get(3);
+
+            RespMinimalAuthorInfo {
+                id: UserLocalID(row.get(0)),
+                username: Cow::Borrowed(row.get(1)),
+                local,
+                host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
+                remote_url: ap_id.map(|x| x.into()),
+                avatar: row
+                    .get::<_, Option<&str>>(4)
+                    .map(|url| RespAvatarInfo { url: url.into() }),
+            }
+        })
+        .collect();
+
+    let output = serde_json::to_vec(&output)?;
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(output.into())?)
+}
+
+async fn route_unstable_communities_moderators_add(
+    params: (CommunityLocalID, UserLocalID),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, user_id) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let lang = crate::get_lang_for_req(&req);
+    let login_user = crate::require_login(&req, &db).await?;
+
+    ({
+        let row = db
+            .query_opt(
+                "SELECT 1 FROM community_moderator WHERE community=$1 AND person=$2",
+                &[&community_id, &login_user],
+            )
+            .await?;
+        match row {
+            None => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::FORBIDDEN,
+                lang.tr("must_be_moderator", None).into_owned(),
+            ))),
+            Some(_) => Ok(()),
+        }
+    })?;
+
+    ({
+        let row = db
+            .query_opt("SELECT local FROM person WHERE id=$1", &[&user_id])
+            .await?;
+
+        match row {
+            None => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::FORBIDDEN,
+                lang.tr("no_such_user", None).into_owned(),
+            ))),
+            Some(row) => {
+                let local: bool = row.get(0);
+
+                if local {
+                    Ok(())
+                } else {
+                    Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        lang.tr("moderators_only_local", None).into_owned(),
+                    )))
+                }
+            }
+        }
+    })?;
+
+    db.execute(
+        "INSERT INTO community_moderator (community, person) VALUES ($1, $2)",
+        &[&community_id, &user_id],
+    )
+    .await?;
+
+    Ok(crate::empty_response())
+}
+
 async fn route_unstable_communities_unfollow(
     params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
@@ -611,6 +729,17 @@ pub fn route_communities() -> crate::RouteNode<()> {
                     "follow",
                     crate::RouteNode::new()
                         .with_handler_async("POST", route_unstable_communities_follow),
+                )
+                .with_child(
+                    "moderators",
+                    crate::RouteNode::new()
+                        .with_handler_async("GET", route_unstable_communities_moderators_list)
+                        .with_child_parse::<UserLocalID, _>(
+                            crate::RouteNode::new().with_handler_async(
+                                "PUT",
+                                route_unstable_communities_moderators_add,
+                            ),
+                        ),
                 )
                 .with_child(
                     "unfollow",
