@@ -458,6 +458,43 @@ async fn route_unstable_communities_moderators_add(
     Ok(crate::empty_response())
 }
 
+async fn route_unstable_communities_moderators_remove(
+    params: (CommunityLocalID, UserLocalID),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, user_id) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let lang = crate::get_lang_for_req(&req);
+    let login_user = crate::require_login(&req, &db).await?;
+
+    ({
+        let row = db
+            .query_opt(
+                "SELECT 1 FROM community_moderator WHERE community=$1 AND person=$2",
+                &[&community_id, &login_user],
+            )
+            .await?;
+        match row {
+            None => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::FORBIDDEN,
+                lang.tr("must_be_moderator", None).into_owned(),
+            ))),
+            Some(_) => Ok(()),
+        }
+    })?;
+
+    db.execute(
+        "DELETE FROM community_moderator WHERE community=$1 AND person=$2",
+        &[&community_id, &user_id],
+    )
+    .await?;
+
+    Ok(crate::empty_response())
+}
+
 async fn route_unstable_communities_unfollow(
     params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
@@ -735,10 +772,15 @@ pub fn route_communities() -> crate::RouteNode<()> {
                     crate::RouteNode::new()
                         .with_handler_async("GET", route_unstable_communities_moderators_list)
                         .with_child_parse::<UserLocalID, _>(
-                            crate::RouteNode::new().with_handler_async(
-                                "PUT",
-                                route_unstable_communities_moderators_add,
-                            ),
+                            crate::RouteNode::new()
+                                .with_handler_async(
+                                    "PUT",
+                                    route_unstable_communities_moderators_add,
+                                )
+                                .with_handler_async(
+                                    "DELETE",
+                                    route_unstable_communities_moderators_remove,
+                                ),
                         ),
                 )
                 .with_child(

@@ -637,6 +637,29 @@
 					}
 				},
 				"security": [{"bearer": []}]
+			},
+			"delete": {
+				"summary": "Remove a moderator from a community",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "userID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {
+						"description": "Successfully removed."
+					}
+				},
+				"security": [{"bearer": []}]
 			}
 		},
 		"/api/unstable/communities/{communityID}/posts": {
