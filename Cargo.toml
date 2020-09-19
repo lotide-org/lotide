@@ -41,6 +41,7 @@ fluent-langneg = "0.13.0"
 unic-langid = { version = "0.9.0", features = ["macros"] }
 activitystreams = "0.7.0-alpha.3"
 activitystreams-ext = "0.1.0-alpha.2"
+fast_chemail = "0.9.6"
 
 [dev-dependencies]
 rand = "0.7.3"

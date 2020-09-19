@@ -1161,6 +1161,7 @@
 								"properties": {
 									"username": {"type": "string"},
 									"password": {"type": "string"},
+									"email_address": {"type": "string", "format": "email"},
 									"login": {
 										"type": "boolean",
 										"description": "If true, will also create a login token for the new user"

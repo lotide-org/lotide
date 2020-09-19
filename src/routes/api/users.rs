@@ -97,6 +97,8 @@ async fn route_unstable_users_create(
     struct UsersCreateBody<'a> {
         username: Cow<'a, str>,
         password: String,
+        email_address: Option<Cow<'a, str>>,
+
         #[serde(default)]
         login: bool,
     }
@@ -108,6 +110,15 @@ async fn route_unstable_users_create(
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
                 lang.tr("user_name_disallowed_chars", None).into_owned(),
+            )));
+        }
+    }
+
+    if let Some(email) = &body.email_address {
+        if !fast_chemail::is_valid_email(email) {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                lang.tr("user_email_invalid", None).into_owned(),
             )));
         }
     }
@@ -136,8 +147,8 @@ async fn route_unstable_users_create(
                 }
             })?;
         let row = trans.query_one(
-            "INSERT INTO person (username, local, created_local, passhash) VALUES ($1, TRUE, current_timestamp, $2) RETURNING id",
-            &[&body.username, &passhash],
+            "INSERT INTO person (username, local, created_local, passhash, email_address) VALUES ($1, TRUE, current_timestamp, $2, $3) RETURNING id",
+            &[&body.username, &passhash, &body.email_address],
         ).await?;
 
         trans.commit().await?;
