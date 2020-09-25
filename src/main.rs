@@ -94,6 +94,8 @@ pub type HttpClient = hyper::Client<hyper_tls::HttpsConnector<hyper::client::Htt
 
 pub struct BaseContext {
     pub db_pool: DbPool,
+    pub mailer: Option<lettre::AsyncSmtpTransport<lettre::Tokio02Connector>>,
+    pub mail_from: Option<lettre::Mailbox>,
     pub host_url_api: String,
     pub host_url_apub: BaseURL,
     pub http_client: HttpClient,
@@ -795,12 +797,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .try_into()
         .expect("HOST_URL_ACTIVITYPUB is not a valid base URL");
 
+    let smtp_url: Option<url::Url> = match std::env::var("SMTP_URL") {
+        Ok(value) => Some(value.parse().expect("Failed to parse SMTP_URL")),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(other) => Err(other).expect("Failed to parse SMTP_URL"),
+    };
+    let mailer = match smtp_url {
+        None => None,
+        Some(url) => {
+            let host = url.host_str().expect("Missing host in SMTP_URL");
+            let mut builder = match url.scheme() {
+                "smtp" => {
+                    lettre::AsyncSmtpTransport::<lettre::Tokio02Connector>::builder_dangerous(host)
+                }
+                "smtps" => lettre::AsyncSmtpTransport::<lettre::Tokio02Connector>::relay(host)
+                    .expect("Failed to initialize SMTP transport"),
+                _ => panic!("Unrecognized scheme for SMTP_URL"),
+            };
+
+            if url.username() != "" || url.password().is_some() {
+                builder =
+                    builder.credentials(lettre::transport::smtp::authentication::Credentials::new(
+                        url.username().to_owned(),
+                        url.password().unwrap_or("").to_owned(),
+                    ));
+            }
+
+            Some(builder.build())
+        }
+    };
+
+    let mail_from: Option<lettre::Mailbox> = match std::env::var("SMTP_FROM") {
+        Ok(value) => Some(value.parse().expect("Failed to parse SMTP_FROM")),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(other) => Err(other).expect("Failed to parse SMTP_FROM"),
+    };
+
+    if mailer.is_some() && mail_from.is_none() {
+        panic!("SMTP_URL was provided, but SMTP_FROM was not");
+    }
+
     let routes = Arc::new(routes::route_root());
     let base_context = Arc::new(BaseContext {
         local_hostname: get_url_host(&host_url_apub)
             .expect("Couldn't find host in HOST_URL_ACTIVITYPUB"),
 
         db_pool,
+        mailer,
+        mail_from,
         host_url_api,
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),

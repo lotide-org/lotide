@@ -42,6 +42,7 @@ unic-langid = { version = "0.9.0", features = ["macros"] }
 activitystreams = "0.7.0-alpha.3"
 activitystreams-ext = "0.1.0-alpha.2"
 fast_chemail = "0.9.6"
+lettre = { version = "0.10.0-alpha.2", features = ["tokio02", "tokio02-native-tls"] }
 
 [dev-dependencies]
 rand = "0.7.3"
