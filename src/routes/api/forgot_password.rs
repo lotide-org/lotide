@@ -143,6 +143,74 @@ async fn route_unstable_forgot_password_keys_get(
     }
 }
 
+async fn route_unstable_forgot_password_keys_reset(
+    params: (ForgotPasswordKey,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (key,) = params;
+
+    #[derive(Deserialize)]
+    struct PasswordResetBody {
+        new_password: String,
+    }
+
+    let lang = crate::get_lang_for_req(&req);
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: PasswordResetBody = serde_json::from_slice(&body)?;
+
+    let mut db = ctx.db_pool.get().await?;
+
+    let row = db.query_opt("SELECT created < (current_timestamp - INTERVAL '1 HOUR'), person FROM forgot_password_key WHERE key=$1", &[&key.as_int()]).await?;
+
+    let user_id = match row {
+        None => None,
+        Some(row) => {
+            if row.get(0) {
+                None
+            } else {
+                Some(UserLocalID(row.get(1)))
+            }
+        }
+    };
+
+    match user_id {
+        Some(user_id) => {
+            let passhash = tokio::task::spawn_blocking(move || {
+                bcrypt::hash(body.new_password, bcrypt::DEFAULT_COST)
+            })
+            .await??;
+
+            {
+                let trans = db.transaction().await?;
+                trans
+                    .execute(
+                        "UPDATE person SET passhash=$1 WHERE id=$2",
+                        &[&passhash, &user_id],
+                    )
+                    .await?;
+                trans
+                    .execute(
+                        "DELETE FROM forgot_password_key WHERE key=$1",
+                        &[&key.as_int()],
+                    )
+                    .await?;
+
+                trans.commit().await?;
+            }
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, "application/json")
+                .body("{}".into())?)
+        }
+        None => Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            lang.tr("no_such_forgot_password_key", None).into_owned(),
+        ))),
+    }
+}
+
 pub fn route_forgot_password() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child(
         "keys",
@@ -150,7 +218,12 @@ pub fn route_forgot_password() -> crate::RouteNode<()> {
             .with_handler_async("POST", route_unstable_forgot_password_keys_create)
             .with_child_parse::<ForgotPasswordKey, _>(
                 crate::RouteNode::new()
-                    .with_handler_async("GET", route_unstable_forgot_password_keys_get),
+                    .with_handler_async("GET", route_unstable_forgot_password_keys_get)
+                    .with_child(
+                        "reset",
+                        crate::RouteNode::new()
+                            .with_handler_async("POST", route_unstable_forgot_password_keys_reset),
+                    ),
             ),
     )
 }
