@@ -10,6 +10,7 @@ name_in_use = That name is already in use
 no_password = No password set for this user
 no_such_comment = No such comment
 no_such_community = No such community
+no_such_forgot_password_key = No such password reset key, or it has expired
 no_such_local_user_by_email = No local user found by that email address
 no_such_local_user_by_name = No local user found by that name
 no_such_post = No such post

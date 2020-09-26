@@ -19,9 +19,24 @@ impl ForgotPasswordKey {
     pub fn as_int(&self) -> i32 {
         self.value
     }
+}
 
-    pub fn to_str(&self) -> String {
+// implementing this trait is discouraged in favor of Display, but bs58 doesn't do streaming output
+impl std::string::ToString for ForgotPasswordKey {
+    fn to_string(&self) -> String {
         bs58::encode(&self.value.to_be_bytes()).into_string()
+    }
+}
+
+impl std::str::FromStr for ForgotPasswordKey {
+    type Err = bs58::decode::Error;
+
+    fn from_str(src: &str) -> Result<Self, Self::Err> {
+        let mut buf = [0; 4];
+        bs58::decode(src).into(&mut buf)?;
+        Ok(Self {
+            value: i32::from_be_bytes(buf),
+        })
     }
 }
 
@@ -73,7 +88,7 @@ async fn route_unstable_forgot_password_keys_create(
     let msg_body = lang
         .tr(
             "email_content_forgot_password",
-            Some(&fluent::fluent_args!["key" => key.to_str(), "username" => username]),
+            Some(&fluent::fluent_args!["key" => key.to_string(), "username" => username]),
         )
         .into_owned();
 
@@ -99,10 +114,43 @@ async fn route_unstable_forgot_password_keys_create(
         .body("{}".into())?)
 }
 
+async fn route_unstable_forgot_password_keys_get(
+    params: (ForgotPasswordKey,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (key,) = params;
+
+    let lang = crate::get_lang_for_req(&req);
+    let db = ctx.db_pool.get().await?;
+
+    let row = db.query_opt("SELECT created < (current_timestamp - INTERVAL '1 HOUR') FROM forgot_password_key WHERE key=$1", &[&key.as_int()]).await?;
+
+    let found = match row {
+        None => false,
+        Some(row) => !row.get::<_, bool>(0),
+    };
+
+    if found {
+        Ok(hyper::Response::builder()
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body("{}".into())?)
+    } else {
+        Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            lang.tr("no_such_forgot_password_key", None).into_owned(),
+        )))
+    }
+}
+
 pub fn route_forgot_password() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child(
         "keys",
         crate::RouteNode::new()
-            .with_handler_async("POST", route_unstable_forgot_password_keys_create),
+            .with_handler_async("POST", route_unstable_forgot_password_keys_create)
+            .with_child_parse::<ForgotPasswordKey, _>(
+                crate::RouteNode::new()
+                    .with_handler_async("GET", route_unstable_forgot_password_keys_get),
+            ),
     )
 }
