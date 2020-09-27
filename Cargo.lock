@@ -144,6 +144,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bs58"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "476e9cd489f9e121e02ffa6014a8ef220ecb15c05ed23fc34cca13925dc283fb"
+
+[[package]]
 name = "bumpalo"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -939,6 +945,7 @@ dependencies = [
  "activitystreams-ext",
  "async-trait",
  "bcrypt",
+ "bs58",
  "bytes",
  "chrono",
  "deadpool-postgres",

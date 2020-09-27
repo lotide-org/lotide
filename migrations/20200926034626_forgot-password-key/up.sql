@@ -1,0 +1,7 @@
+BEGIN;
+	CREATE TABLE forgot_password_key (
+		key INTEGER PRIMARY KEY,
+		person BIGINT NOT NULL REFERENCES person,
+		created TIMESTAMPTZ NOT NULL
+	);
+COMMIT;

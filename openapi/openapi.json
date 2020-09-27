@@ -750,6 +750,83 @@
 				"security": [{"bearer": []}]
 			}
 		},
+		"/api/unstable/forgot_password/keys": {
+			"post": {
+				"summary": "Request a password reset",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["email_address"],
+								"properties": {
+									"email_address": {"type": "string", "format": "email"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully requested."
+					}
+				}
+			}
+		},
+		"/api/unstable/forgot_password/keys/{key}": {
+			"get": {
+				"summary": "Check validity of a password reset key",
+				"parameters": [
+					{
+						"name": "key",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "string"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Key is valid."
+					},
+					"404": {
+						"description": "No such key, or is expired."
+					}
+				}
+			}
+		},
+		"/api/unstable/forgot_password/keys/{key}/reset": {
+			"post": {
+				"summary": "Reset a password using a password reset key",
+				"parameters": [
+					{
+						"name": "key",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "string"}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["new_password"],
+								"properties": {
+									"new_password": {"type": "string", "format": "password"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully reset."
+					}
+				}
+			}
+		},
 		"/api/unstable/instance": {
 			"get": {
 				"summary": "Fetch information about the instance",

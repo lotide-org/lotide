@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 mod comments;
 mod communities;
+mod forgot_password;
 mod posts;
 mod users;
 
@@ -176,7 +177,8 @@ pub fn route_api() -> crate::RouteNode<()> {
             )
             .with_child("posts", posts::route_posts())
             .with_child("comments", comments::route_comments())
-            .with_child("users", users::route_users()),
+            .with_child("users", users::route_users())
+            .with_child("forgot_password", forgot_password::route_forgot_password()),
     )
 }
 
