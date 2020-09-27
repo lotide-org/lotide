@@ -946,6 +946,7 @@ dependencies = [
  "async-trait",
  "bcrypt",
  "bs58",
+ "bumpalo",
  "bytes",
  "chrono",
  "deadpool-postgres",

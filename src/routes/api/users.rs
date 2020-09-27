@@ -173,26 +173,72 @@ async fn route_unstable_users_patch(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
-    let user = params.0.require_me(&req, &db).await?;
+    let user_id = params.0.require_me(&req, &db).await?;
 
     #[derive(Deserialize)]
     struct UsersEditBody<'a> {
         description: Option<Cow<'a, str>>,
+        email_address: Option<Cow<'a, str>>,
+        password: Option<String>,
     }
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let body: UsersEditBody = serde_json::from_slice(&body)?;
 
-    if let Some(description) = body.description {
-        db.execute(
-            "UPDATE person SET description=$1 WHERE id=$2",
-            &[&description, &user],
-        )
-        .await?;
+    let arena = bumpalo::Bump::new();
 
-        // TODO maybe send this somewhere?
+    let mut changes = Vec::<(&str, &(dyn tokio_postgres::types::ToSql + Sync))>::new();
+
+    if let Some(description) = body.description.as_ref() {
+        changes.push(("description", description));
+    }
+    if let Some(email_address) = body.email_address.as_ref() {
+        if !fast_chemail::is_valid_email(&email_address) {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                lang.tr("user_email_invalid", None).into_owned(),
+            )));
+        }
+
+        changes.push(("email_address", email_address));
+    }
+    if let Some(password) = body.password {
+        let passhash =
+            tokio::task::spawn_blocking(move || bcrypt::hash(password, bcrypt::DEFAULT_COST))
+                .await??;
+
+        changes.push(("passhash", arena.alloc(passhash)));
+    }
+
+    if !changes.is_empty() {
+        use std::fmt::Write;
+
+        let mut sql = "UPDATE person SET ".to_owned();
+        let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = changes
+            .iter()
+            .enumerate()
+            .map(|(idx, (key, value))| {
+                write!(
+                    sql,
+                    "{}{}=${}",
+                    if idx == 0 { "" } else { "," },
+                    key,
+                    idx + 1
+                )
+                .unwrap();
+
+                *value
+            })
+            .collect();
+        values.push(&user_id);
+        write!(sql, " WHERE id=${}", values.len()).unwrap();
+
+        let sql: &str = &sql;
+
+        db.execute(sql, &values).await?;
     }
 
     Ok(crate::empty_response())

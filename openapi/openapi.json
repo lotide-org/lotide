@@ -1424,7 +1424,9 @@
 							"schema": {
 								"type": "object",
 								"properties": {
-									"description": {"type": "string"}
+									"description": {"type": "string"},
+									"email_address": {"type": "string", "format": "email"},
+									"password": {"type": "string", "format": "password"}
 								}
 							}
 						}
