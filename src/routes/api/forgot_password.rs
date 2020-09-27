@@ -32,6 +32,8 @@ impl std::str::FromStr for ForgotPasswordKey {
     type Err = bs58::decode::Error;
 
     fn from_str(src: &str) -> Result<Self, Self::Err> {
+        let src = src.trim_matches(|c: char| !c.is_alphanumeric());
+
         let mut buf = [0; 4];
         bs58::decode(src).into(&mut buf)?;
         Ok(Self {
