@@ -153,7 +153,8 @@ pub fn route_api() -> crate::RouteNode<()> {
                     .with_child(
                         "~current",
                         crate::RouteNode::new()
-                            .with_handler_async("GET", route_unstable_logins_current_get),
+                            .with_handler_async("GET", route_unstable_logins_current_get)
+                            .with_handler_async("DELETE", route_unstable_logins_current_delete),
                     ),
             )
             .with_child(
@@ -386,6 +387,20 @@ async fn route_unstable_logins_current_get(
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
         .body(body)?)
+}
+
+async fn route_unstable_logins_current_delete(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    if let Some(token) = crate::get_auth_token(&req) {
+        let db = ctx.db_pool.get().await?;
+        db.execute("DELETE FROM login WHERE token=$1", &[&token])
+            .await?;
+    }
+
+    Ok(crate::empty_response())
 }
 
 async fn route_unstable_nodeinfo_20_get(

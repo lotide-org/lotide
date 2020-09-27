@@ -488,10 +488,7 @@ pub fn get_lang_for_req(req: &impl ReqParts) -> Translator {
     Translator { bundle }
 }
 
-pub async fn authenticate(
-    req: &impl ReqParts,
-    db: &tokio_postgres::Client,
-) -> Result<Option<UserLocalID>, Error> {
+pub fn get_auth_token(req: &impl ReqParts) -> Option<uuid::Uuid> {
     use headers::Header;
 
     let value = match req.headers().get(hyper::header::AUTHORIZATION) {
@@ -499,25 +496,32 @@ pub async fn authenticate(
             match headers::Authorization::<headers::authorization::Bearer>::decode(
                 &mut std::iter::once(value),
             ) {
-                Ok(value) => value.0.token().to_owned(),
-                Err(_) => return Ok(None),
+                Ok(value) => Some(value.0.token().to_owned()),
+                Err(_) => None,
             }
         }
-        None => return Ok(None),
+        None => None,
     };
 
-    let token = match value.parse::<uuid::Uuid>() {
-        Ok(value) => value,
-        Err(_) => return Ok(None),
-    };
+    value.and_then(|value| value.parse::<uuid::Uuid>().ok())
+}
 
-    let row = db
-        .query_opt("SELECT person FROM login WHERE token=$1", &[&token])
-        .await?;
-
-    match row {
-        Some(row) => Ok(Some(UserLocalID(row.get(0)))),
+pub async fn authenticate(
+    req: &impl ReqParts,
+    db: &tokio_postgres::Client,
+) -> Result<Option<UserLocalID>, Error> {
+    match get_auth_token(req) {
         None => Ok(None),
+        Some(token) => {
+            let row = db
+                .query_opt("SELECT person FROM login WHERE token=$1", &[&token])
+                .await?;
+
+            match row {
+                Some(row) => Ok(Some(UserLocalID(row.get(0)))),
+                None => Ok(None),
+            }
+        }
     }
 }
 

@@ -945,6 +945,16 @@
 					}
 				},
 				"security": [{"bearer": []}]
+			},
+			"delete": {
+				"summary": "Log out",
+				"description": "Invalidates the current login session.",
+				"responses": {
+					"204": {
+						"description": "Successfully ended."
+					}
+				},
+				"security": [{"bearer": []}]
 			}
 		},
 		"/api/unstable/misc/render_markdown": {
