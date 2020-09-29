@@ -368,19 +368,32 @@ pub async fn query_stream(
     db.query_raw(statement, params).await
 }
 
+pub fn common_response_builder() -> http::response::Builder {
+    hyper::Response::builder().header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+}
+
 pub fn empty_response() -> hyper::Response<hyper::Body> {
-    let mut res = hyper::Response::new((&[][..]).into());
-    *res.status_mut() = hyper::StatusCode::NO_CONTENT;
-    res
+    common_response_builder()
+        .status(hyper::StatusCode::NO_CONTENT)
+        .body(Default::default())
+        .unwrap()
 }
 
 pub fn simple_response(
     code: hyper::StatusCode,
     text: impl Into<hyper::Body>,
 ) -> hyper::Response<hyper::Body> {
-    let mut res = hyper::Response::new(text.into());
-    *res.status_mut() = code;
-    res
+    common_response_builder()
+        .status(code)
+        .body(text.into())
+        .unwrap()
+}
+
+pub fn json_response(body: &impl serde::Serialize) -> Result<hyper::Response<hyper::Body>, Error> {
+    let body = serde_json::to_vec(&body)?;
+    Ok(common_response_builder()
+        .header(hyper::header::CONTENT_TYPE, "application/json")
+        .body(body.into())?)
 }
 
 pub async fn res_to_error(
@@ -871,10 +884,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let routes = routes.clone();
                     let context = context.clone();
                     async move {
-                        let result = match routes.route(req, context) {
-                            Ok(fut) => fut.await,
-                            Err(err) => Err(Error::RoutingError(err)),
+                        let result = if req.method() == hyper::Method::OPTIONS
+                            && req.uri().path().starts_with("/api")
+                        {
+                            hyper::Response::builder()
+                                .status(hyper::StatusCode::NO_CONTENT)
+                                .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                                .header(
+                                    hyper::header::ACCESS_CONTROL_ALLOW_METHODS,
+                                    "GET, POST, PUT, PATCH, DELETE",
+                                )
+                                .header(
+                                    hyper::header::ACCESS_CONTROL_ALLOW_HEADERS,
+                                    "Content-Type, Authorization",
+                                )
+                                .body(Default::default())
+                                .map_err(Into::into)
+                        } else {
+                            match routes.route(req, context) {
+                                Ok(fut) => fut.await,
+                                Err(err) => Err(Error::RoutingError(err)),
+                            }
                         };
+
                         Ok::<_, hyper::Error>(match result {
                             Ok(val) => val,
                             Err(Error::UserError(res)) => res,

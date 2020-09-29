@@ -163,9 +163,7 @@ async fn route_unstable_users_create(
         serde_json::json!({"user": {"id": user_id}})
     };
 
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(&output)?.into())?)
+    crate::json_response(&output)
 }
 
 async fn route_unstable_users_patch(
@@ -264,11 +262,7 @@ async fn route_unstable_users_following_posts_list(
 
     let posts = handle_common_posts_list(stream, &ctx.local_hostname).await?;
 
-    let body = serde_json::to_vec(&posts)?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body.into())?)
+    crate::json_response(&posts)
 }
 
 async fn route_unstable_users_notifications_list(
@@ -391,11 +385,7 @@ async fn route_unstable_users_notifications_list(
         })
         .collect();
 
-    let body = serde_json::to_vec(&notifications)?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body.into())?)
+    crate::json_response(&notifications)
 }
 
 async fn route_unstable_users_get(
@@ -470,11 +460,7 @@ async fn route_unstable_users_get(
         your_note,
     };
 
-    let body = serde_json::to_vec(&info)?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body.into())?)
+    crate::json_response(&info)
 }
 
 async fn route_unstable_users_your_note_put(
@@ -563,11 +549,7 @@ async fn route_unstable_users_things_list(
         })
         .collect();
 
-    let body = serde_json::to_vec(&things)?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body.into())?)
+    crate::json_response(&things)
 }
 
 pub fn route_users() -> crate::RouteNode<()> {

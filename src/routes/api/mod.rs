@@ -280,9 +280,9 @@ async fn route_unstable_actors_lookup(
     let uri = match uri {
         Some(uri) => uri,
         None => {
-            return Ok(hyper::Response::builder()
+            return Ok(crate::common_response_builder()
                 .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(serde_json::to_vec(&serde_json::json!([]))?.into())?);
+                .body("[]".into())?);
         }
     };
 
@@ -297,9 +297,7 @@ async fn route_unstable_actors_lookup(
         }
     };
 
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(&[info])?.into())?)
+    crate::json_response(&[info])
 }
 
 async fn route_unstable_logins_create(
@@ -352,9 +350,7 @@ async fn route_unstable_logins_create(
     if correct {
         let token = insert_token(id, &db).await?;
 
-        Ok(hyper::Response::builder()
-            .header(hyper::header::CONTENT_TYPE, "application/json")
-            .body(serde_json::to_vec(&serde_json::json!({"token": token.to_string()}))?.into())?)
+        crate::json_response(&serde_json::json!({"token": token.to_string()}))
     } else {
         Ok(crate::simple_response(
             hyper::StatusCode::FORBIDDEN,
@@ -377,16 +373,9 @@ async fn route_unstable_logins_current_get(
     let is_site_admin: bool = row.get(1);
     let has_notifications: bool = row.get(2);
 
-    let body = serde_json::to_vec(
-        &serde_json::json!({
-            "user": {"id": user, "name": username, "is_site_admin": is_site_admin, "has_unread_notifications": has_notifications}
-        }),
-    )?
-    .into();
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body)?)
+    crate::json_response(&serde_json::json!({
+        "user": {"id": user, "name": username, "is_site_admin": is_site_admin, "has_unread_notifications": has_notifications}
+    }))
 }
 
 async fn route_unstable_logins_current_delete(
@@ -453,7 +442,7 @@ async fn route_unstable_nodeinfo_20_get(
 
     let body = serde_json::to_vec(&body)?.into();
 
-    Ok(hyper::Response::builder()
+    Ok(crate::common_response_builder()
         .header(
             hyper::header::CONTENT_TYPE,
             "application/json; profile=http://nodeinfo.diaspora.software/ns/schema/2.0#",
@@ -481,9 +470,7 @@ async fn route_unstable_instance_get(
         }
     });
 
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(&body)?.into())?)
+    crate::json_response(&body)
 }
 
 async fn route_unstable_instance_patch(
@@ -719,11 +706,7 @@ async fn route_unstable_misc_render_markdown(
     let html =
         tokio::task::spawn_blocking(move || crate::render_markdown(&body.content_markdown)).await?;
 
-    let output = serde_json::to_vec(&serde_json::json!({ "content_html": html }))?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(output.into())?)
+    crate::json_response(&serde_json::json!({ "content_html": html }))
 }
 
 async fn handle_common_posts_list(

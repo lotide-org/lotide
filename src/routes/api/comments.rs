@@ -125,11 +125,7 @@ async fn route_unstable_comments_get(
                 post,
             };
 
-            let output = serde_json::to_vec(&output)?;
-
-            Ok(hyper::Response::builder()
-                .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(output.into())?)
+            crate::json_response(&output)
         }
     }
 }
@@ -397,11 +393,8 @@ async fn route_unstable_comments_likes_list(
         "items": likes,
         "next_page": next_page,
     });
-    let body = serde_json::to_vec(&body)?.into();
 
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body)?)
+    crate::json_response(&body)
 }
 
 async fn route_unstable_comments_unlike(
@@ -579,12 +572,7 @@ async fn route_unstable_comments_replies_create(
 
     crate::on_post_add_comment(info, ctx);
 
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(
-            serde_json::to_vec(&serde_json::json!({ "id": reply_id, "post": {"id": post} }))?
-                .into(),
-        )?)
+    crate::json_response(&serde_json::json!({ "id": reply_id, "post": {"id": post} }))
 }
 
 pub fn route_comments() -> crate::RouteNode<()> {

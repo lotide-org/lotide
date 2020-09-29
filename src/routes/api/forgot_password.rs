@@ -111,7 +111,7 @@ async fn route_unstable_forgot_password_keys_create(
         Ok(())
     });
 
-    Ok(hyper::Response::builder()
+    Ok(crate::common_response_builder()
         .header(hyper::header::CONTENT_TYPE, "application/json")
         .body("{}".into())?)
 }
@@ -134,7 +134,7 @@ async fn route_unstable_forgot_password_keys_get(
     };
 
     if found {
-        Ok(hyper::Response::builder()
+        Ok(crate::common_response_builder()
             .header(hyper::header::CONTENT_TYPE, "application/json")
             .body("{}".into())?)
     } else {
@@ -202,7 +202,7 @@ async fn route_unstable_forgot_password_keys_reset(
                 trans.commit().await?;
             }
 
-            Ok(hyper::Response::builder()
+            Ok(crate::common_response_builder()
                 .header(hyper::header::CONTENT_TYPE, "application/json")
                 .body("{}".into())?)
         }

@@ -112,11 +112,7 @@ async fn route_unstable_posts_list(
 
     let posts = super::handle_common_posts_list(stream, &ctx.local_hostname).await?;
 
-    let body = serde_json::to_vec(&posts)?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body.into())?)
+    crate::json_response(&posts)
 }
 
 async fn route_unstable_posts_create(
@@ -230,11 +226,7 @@ async fn route_unstable_posts_create(
         Ok(())
     });
 
-    let output = serde_json::to_vec(&serde_json::json!({ "id": id }))?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(output.into())?)
+    crate::json_response(&serde_json::json!({ "id": id }))
 }
 
 async fn route_unstable_posts_get(
@@ -358,11 +350,7 @@ async fn route_unstable_posts_get(
                 your_vote,
             };
 
-            let output = serde_json::to_vec(&output)?;
-
-            Ok(hyper::Response::builder()
-                .header(hyper::header::CONTENT_TYPE, "application/json")
-                .body(output.into())?)
+            crate::json_response(&output)
         }
     }
 }
@@ -625,11 +613,7 @@ async fn route_unstable_posts_likes_list(
         "items": likes,
         "next_page": next_page,
     });
-    let body = serde_json::to_vec(&body)?.into();
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body)?)
+    crate::json_response(&body)
 }
 
 async fn route_unstable_posts_unlike(
@@ -797,9 +781,7 @@ async fn route_unstable_posts_replies_create(
 
     crate::on_post_add_comment(comment, ctx);
 
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(&serde_json::json!({ "id": reply_id }))?.into())?)
+    crate::json_response(&serde_json::json!({ "id": reply_id }))
 }
 
 pub fn route_posts() -> crate::RouteNode<()> {

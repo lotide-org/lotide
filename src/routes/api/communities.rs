@@ -56,9 +56,7 @@ async fn route_unstable_communities_list(
         })
         .collect();
 
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(&output)?.into())?)
+    crate::json_response(&output)
 }
 
 async fn route_unstable_communities_create(
@@ -135,11 +133,7 @@ async fn route_unstable_communities_create(
         community_id
     };
 
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(
-            serde_json::to_vec(&serde_json::json!({"community": {"id": community_id}}))?.into(),
-        )?)
+    crate::json_response(&serde_json::json!({"community": {"id": community_id}}))
 }
 
 async fn route_unstable_communities_get(
@@ -209,11 +203,7 @@ async fn route_unstable_communities_get(
         },
     };
 
-    let body = serde_json::to_vec(&info)?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body.into())?)
+    crate::json_response(&info)
 }
 
 async fn route_unstable_communities_patch(
@@ -335,9 +325,7 @@ async fn route_unstable_communities_follow(
             }
         };
 
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(serde_json::to_vec(&output)?.into())?)
+    crate::json_response(&output)
 }
 
 async fn route_unstable_communities_moderators_list(
@@ -389,11 +377,7 @@ async fn route_unstable_communities_moderators_list(
         })
         .collect();
 
-    let output = serde_json::to_vec(&output)?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(output.into())?)
+    crate::json_response(&output)
 }
 
 async fn route_unstable_communities_moderators_add(
@@ -654,11 +638,7 @@ async fn route_unstable_communities_posts_list(
         .try_collect()
         .await?;
 
-    let body = serde_json::to_vec(&posts)?;
-
-    Ok(hyper::Response::builder()
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(body.into())?)
+    crate::json_response(&posts)
 }
 
 async fn route_unstable_communities_posts_patch(
