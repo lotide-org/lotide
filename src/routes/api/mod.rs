@@ -557,13 +557,7 @@ async fn apply_comments_replies<'a, T>(
         }
     }
 
-    comments.retain(|(_, comment)| {
-        if comment.deleted && !comment.has_replies {
-            false
-        } else {
-            true
-        }
-    });
+    comments.retain(|(_, comment)| !comment.deleted || comment.has_replies);
 
     Ok(())
 }
