@@ -1,46 +1,10 @@
 use crate::UserLocalID;
 use lettre::Tokio02Transport;
-use rand::Rng;
 use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-struct ForgotPasswordKey {
-    value: i32,
-}
-
-impl ForgotPasswordKey {
-    pub fn generate() -> Self {
-        Self {
-            value: rand::thread_rng().gen(),
-        }
-    }
-
-    pub fn as_int(&self) -> i32 {
-        self.value
-    }
-}
-
-// implementing this trait is discouraged in favor of Display, but bs58 doesn't do streaming output
-impl std::string::ToString for ForgotPasswordKey {
-    fn to_string(&self) -> String {
-        bs58::encode(&self.value.to_be_bytes()).into_string()
-    }
-}
-
-impl std::str::FromStr for ForgotPasswordKey {
-    type Err = bs58::decode::Error;
-
-    fn from_str(src: &str) -> Result<Self, Self::Err> {
-        let src = src.trim_matches(|c: char| !c.is_alphanumeric());
-
-        let mut buf = [0; 4];
-        bs58::decode(src).into(&mut buf)?;
-        Ok(Self {
-            value: i32::from_be_bytes(buf),
-        })
-    }
-}
+type ForgotPasswordKey = crate::Pineapple;
 
 async fn route_unstable_forgot_password_keys_create(
     _: (),

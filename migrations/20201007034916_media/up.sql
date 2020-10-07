@@ -1,0 +1,8 @@
+BEGIN;
+	CREATE TABLE media (
+		id INTEGER PRIMARY KEY,
+		path TEXT NOT NULL,
+		person BIGINT NOT NULL REFERENCES person,
+		mime TEXT NOT NULL
+	);
+COMMIT;

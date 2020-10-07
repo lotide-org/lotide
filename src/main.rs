@@ -1,3 +1,4 @@
+use rand::Rng;
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -89,6 +90,43 @@ impl Into<activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>
 #[derive(Serialize, Default)]
 pub struct Empty {}
 
+pub struct Pineapple {
+    value: i32,
+}
+
+impl Pineapple {
+    pub fn generate() -> Self {
+        Self {
+            value: rand::thread_rng().gen(),
+        }
+    }
+
+    pub fn as_int(&self) -> i32 {
+        self.value
+    }
+}
+
+// implementing this trait is discouraged in favor of Display, but bs58 doesn't do streaming output
+impl std::string::ToString for Pineapple {
+    fn to_string(&self) -> String {
+        bs58::encode(&self.value.to_be_bytes()).into_string()
+    }
+}
+
+impl std::str::FromStr for Pineapple {
+    type Err = bs58::decode::Error;
+
+    fn from_str(src: &str) -> Result<Self, Self::Err> {
+        let src = src.trim_matches(|c: char| !c.is_alphanumeric());
+
+        let mut buf = [0; 4];
+        bs58::decode(src).into(&mut buf)?;
+        Ok(Self {
+            value: i32::from_be_bytes(buf),
+        })
+    }
+}
+
 pub type DbPool = deadpool_postgres::Pool;
 pub type HttpClient = hyper::Client<hyper_tls::HttpsConnector<hyper::client::HttpConnector>>;
 
@@ -100,8 +138,26 @@ pub struct BaseContext {
     pub host_url_apub: BaseURL,
     pub http_client: HttpClient,
     pub apub_proxy_rewrites: bool,
+    pub media_location: Option<std::path::PathBuf>,
 
     pub local_hostname: String,
+}
+
+impl BaseContext {
+    pub fn process_href_opt<'a>(
+        &self,
+        href: Option<&'a str>,
+        post_id: PostLocalID,
+    ) -> Option<Cow<'a, str>> {
+        match href {
+            Some(href) => Some(if href.starts_with("local-media://") {
+                format!("{}/unstable/posts/{}/href", self.host_url_api, post_id).into()
+            } else {
+                href.into()
+            }),
+            None => None,
+        }
+    }
 }
 
 pub struct RouteContext {
@@ -814,6 +870,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .try_into()
         .expect("HOST_URL_ACTIVITYPUB is not a valid base URL");
 
+    let media_location = std::env::var_os("MEDIA_LOCATION").map(std::path::PathBuf::from);
+
     let smtp_url: Option<url::Url> = match std::env::var("SMTP_URL") {
         Ok(value) => Some(value.parse().expect("Failed to parse SMTP_URL")),
         Err(std::env::VarError::NotPresent) => None,
@@ -862,6 +920,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         db_pool,
         mailer,
         mail_from,
+        media_location,
         host_url_api,
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),

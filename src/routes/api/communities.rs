@@ -625,7 +625,7 @@ async fn route_unstable_communities_posts_list(
             let post = RespPostListPost {
                 id,
                 title,
-                href,
+                href: ctx.process_href_opt(href, id),
                 content_text,
                 content_html,
                 author: author.as_ref(),

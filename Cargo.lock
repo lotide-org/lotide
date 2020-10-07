@@ -976,6 +976,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "tokio-util",
  "trout",
  "unic-char-range",
  "unic-langid",

@@ -9,6 +9,7 @@ use std::sync::Arc;
 mod comments;
 mod communities;
 mod forgot_password;
+mod media;
 mod posts;
 mod users;
 
@@ -87,7 +88,7 @@ struct RespMinimalPostInfo<'a> {
 struct RespPostListPost<'a> {
     id: PostLocalID,
     title: &'a str,
-    href: Option<&'a str>,
+    href: Option<Cow<'a, str>>,
     content_text: Option<&'a str>,
     content_html: Option<&'a str>,
     author: Option<&'a RespMinimalAuthorInfo<'a>>,
@@ -157,6 +158,7 @@ pub fn route_api() -> crate::RouteNode<()> {
                             .with_handler_async("DELETE", route_unstable_logins_current_delete),
                     ),
             )
+            .with_child("media", media::route_media())
             .with_child(
                 "nodeinfo/2.0",
                 crate::RouteNode::new().with_handler_async("GET", route_unstable_nodeinfo_20_get),
@@ -706,7 +708,7 @@ async fn route_unstable_misc_render_markdown(
 async fn handle_common_posts_list(
     stream: impl futures::stream::TryStream<Ok = tokio_postgres::Row, Error = tokio_postgres::Error>
         + Send,
-    local_hostname: &str,
+    ctx: &crate::RouteContext,
 ) -> Result<Vec<serde_json::Value>, crate::Error> {
     use futures::stream::TryStreamExt;
 
@@ -737,7 +739,7 @@ async fn handle_common_posts_list(
                     host: crate::get_actor_host_or_unknown(
                         author_local,
                         author_ap_id,
-                        &local_hostname,
+                        &ctx.local_hostname,
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
@@ -753,7 +755,7 @@ async fn handle_common_posts_list(
                 host: crate::get_actor_host_or_unknown(
                     community_local,
                     community_ap_id,
-                    &local_hostname,
+                    &ctx.local_hostname,
                 ),
                 remote_url: community_ap_id,
             };
@@ -761,7 +763,7 @@ async fn handle_common_posts_list(
             let post = RespPostListPost {
                 id,
                 title,
-                href,
+                href: ctx.process_href_opt(href, id),
                 content_text,
                 content_html,
                 author: author.as_ref(),

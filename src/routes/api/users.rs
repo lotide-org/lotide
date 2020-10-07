@@ -260,7 +260,7 @@ async fn route_unstable_users_following_posts_list(
         values.iter().map(|s| *s as _)
     ).await?;
 
-    let posts = handle_common_posts_list(stream, &ctx.local_hostname).await?;
+    let posts = handle_common_posts_list(stream, &ctx).await?;
 
     crate::json_response(&posts)
 }
