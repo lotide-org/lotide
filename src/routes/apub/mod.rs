@@ -487,7 +487,7 @@ async fn handler_users_outbox_page_get(
                 let res = crate::apub_util::local_post_to_create_ap(
                     &post_info,
                     community_ap_id.into(),
-                    &ctx.host_url_apub,
+                    &ctx,
                 );
                 last_created = Some(created);
                 res
@@ -1101,7 +1101,7 @@ async fn handler_posts_get(
                 title: row.get(2),
             };
 
-            let body = crate::apub_util::post_to_ap(&post_info, community_ap_id.into(), &ctx.host_url_apub)?;
+            let body = crate::apub_util::post_to_ap(&post_info, community_ap_id.into(), &ctx)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
@@ -1175,7 +1175,7 @@ async fn handler_posts_create_get(
                 title: row.get(3),
             };
 
-            let body = crate::apub_util::local_post_to_create_ap(&post_info, community_ap_id.into(), &ctx.host_url_apub)?;
+            let body = crate::apub_util::local_post_to_create_ap(&post_info, community_ap_id.into(), &ctx)?;
 
             let body = serde_json::to_vec(&body)?.into();
 

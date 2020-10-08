@@ -144,17 +144,21 @@ pub struct BaseContext {
 }
 
 impl BaseContext {
+    pub fn process_href<'a>(&self, href: &'a str, post_id: PostLocalID) -> Cow<'a, str> {
+        if href.starts_with("local-media://") {
+            format!("{}/unstable/posts/{}/href", self.host_url_api, post_id).into()
+        } else {
+            href.into()
+        }
+    }
+
     pub fn process_href_opt<'a>(
         &self,
         href: Option<&'a str>,
         post_id: PostLocalID,
     ) -> Option<Cow<'a, str>> {
         match href {
-            Some(href) => Some(if href.starts_with("local-media://") {
-                format!("{}/unstable/posts/{}/href", self.host_url_api, post_id).into()
-            } else {
-                href.into()
-            }),
+            Some(href) => Some(self.process_href(href, post_id)),
             None => None,
         }
     }

@@ -69,6 +69,7 @@ pub enum KnownObject {
         >,
     ),
     Article(activitystreams::object::Article),
+    Image(activitystreams::object::Image),
     Page(activitystreams::object::Page),
     Note(activitystreams::object::Note),
 }
@@ -995,7 +996,7 @@ pub fn spawn_enqueue_send_community_follow_accept(
 pub fn post_to_ap(
     post: &crate::PostInfo<'_>,
     community_ap_id: url::Url,
-    host_url_apub: &BaseURL,
+    ctx: &crate::BaseContext,
 ) -> Result<activitystreams::base::AnyBase, crate::Error> {
     fn apply_content<
         K,
@@ -1023,36 +1024,59 @@ pub fn post_to_ap(
 
     match post.href {
         Some(href) => {
-            let mut post_ap = activitystreams::object::Page::new();
+            if href.starts_with("local-media://") {
+                let mut post_ap = activitystreams::object::Image::new();
 
-            post_ap
-                .set_context(activitystreams::context())
-                .set_id(get_local_post_apub_id(post.id, &host_url_apub).into())
-                .set_attributed_to(get_local_person_apub_id(
-                    post.author.unwrap(),
-                    &host_url_apub,
-                ))
-                .set_url(href.to_owned())
-                .set_summary(post.title)
-                .set_published(*post.created)
-                .set_to(community_ap_id)
-                .set_cc(activitystreams::public());
+                post_ap
+                    .set_context(activitystreams::context())
+                    .set_id(get_local_post_apub_id(post.id, &ctx.host_url_apub).into())
+                    .set_attributed_to(get_local_person_apub_id(
+                        post.author.unwrap(),
+                        &ctx.host_url_apub,
+                    ))
+                    .set_url(ctx.process_href(href, post.id).into_owned())
+                    .set_summary(post.title)
+                    .set_published(*post.created)
+                    .set_to(community_ap_id)
+                    .set_cc(activitystreams::public());
 
-            let mut post_ap = activitystreams::object::ApObject::new(post_ap);
+                let mut post_ap = activitystreams::object::ApObject::new(post_ap);
 
-            apply_content(&mut post_ap, post)?;
+                apply_content(&mut post_ap, post)?;
 
-            Ok(post_ap.into_any_base()?)
+                Ok(post_ap.into_any_base()?)
+            } else {
+                let mut post_ap = activitystreams::object::Page::new();
+
+                post_ap
+                    .set_context(activitystreams::context())
+                    .set_id(get_local_post_apub_id(post.id, &ctx.host_url_apub).into())
+                    .set_attributed_to(get_local_person_apub_id(
+                        post.author.unwrap(),
+                        &ctx.host_url_apub,
+                    ))
+                    .set_url(href.to_owned())
+                    .set_summary(post.title)
+                    .set_published(*post.created)
+                    .set_to(community_ap_id)
+                    .set_cc(activitystreams::public());
+
+                let mut post_ap = activitystreams::object::ApObject::new(post_ap);
+
+                apply_content(&mut post_ap, post)?;
+
+                Ok(post_ap.into_any_base()?)
+            }
         }
         None => {
             let mut post_ap = activitystreams::object::Note::new();
 
             post_ap
                 .set_context(activitystreams::context())
-                .set_id(get_local_post_apub_id(post.id, &host_url_apub).into())
+                .set_id(get_local_post_apub_id(post.id, &ctx.host_url_apub).into())
                 .set_attributed_to(Into::<url::Url>::into(get_local_person_apub_id(
                     post.author.unwrap(),
-                    &host_url_apub,
+                    &ctx.host_url_apub,
                 )))
                 .set_summary(post.title)
                 .set_published(*post.created)
@@ -1071,16 +1095,16 @@ pub fn post_to_ap(
 pub fn local_post_to_create_ap(
     post: &crate::PostInfo<'_>,
     community_ap_id: url::Url,
-    host_url_apub: &BaseURL,
+    ctx: &crate::BaseContext,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
-    let post_ap = post_to_ap(&post, community_ap_id, &host_url_apub)?;
+    let post_ap = post_to_ap(&post, community_ap_id, &ctx)?;
 
     let mut create = activitystreams::activity::Create::new(
-        get_local_person_apub_id(post.author.unwrap(), &host_url_apub),
+        get_local_person_apub_id(post.author.unwrap(), &ctx.host_url_apub),
         post_ap,
     );
     create.set_context(activitystreams::context()).set_id({
-        let mut res = get_local_post_apub_id(post.id, host_url_apub);
+        let mut res = get_local_post_apub_id(post.id, &ctx.host_url_apub);
         res.path_segments_mut().push("create");
         res.into()
     });
@@ -1176,7 +1200,7 @@ pub fn spawn_enqueue_send_local_post_to_community(
             }
         };
 
-        let create = local_post_to_create_ap(&(&post).into(), community_ap_id, &ctx.host_url_apub)?;
+        let create = local_post_to_create_ap(&(&post).into(), community_ap_id, &ctx)?;
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: Cow::Owned(community_inbox),
@@ -1439,6 +1463,7 @@ pub async fn handle_recieved_object_for_local_community<'a>(
 ) -> Result<(), crate::Error> {
     let (to, in_reply_to, obj_id) = match obj.deref() {
         KnownObject::Page(obj) => (obj.to(), None, obj.id_unchecked()),
+        KnownObject::Image(obj) => (obj.to(), None, obj.id_unchecked()),
         KnownObject::Article(obj) => (obj.to(), None, obj.id_unchecked()),
         KnownObject::Note(obj) => (obj.to(), obj.in_reply_to(), obj.id_unchecked()),
         _ => (None, None, None),
@@ -1558,6 +1583,16 @@ pub async fn handle_recieved_object_for_community<'a>(
 
     match obj.into_inner() {
         KnownObject::Page(obj) => {
+            handle_received_page_for_community(
+                community_local_id,
+                community_is_local,
+                is_announce,
+                Verified(obj),
+                ctx,
+            )
+            .await?
+        }
+        KnownObject::Image(obj) => {
             handle_received_page_for_community(
                 community_local_id,
                 community_is_local,
