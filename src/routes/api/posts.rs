@@ -820,24 +820,8 @@ async fn route_unstable_posts_replies_create(
 
     let body: RepliesCreateBody<'_> = serde_json::from_slice(&body)?;
 
-    if !(body.content_markdown.is_some() ^ body.content_text.is_some()) {
-        return Err(crate::Error::UserError(crate::simple_response(
-            hyper::StatusCode::BAD_REQUEST,
-            lang.tr("comment_content_conflict", None).into_owned(),
-        )));
-    }
-
-    let (content_text, content_markdown, content_html) = match body.content_markdown {
-        Some(md) => {
-            let (html, md) =
-                tokio::task::spawn_blocking(move || (crate::render_markdown(&md), md)).await?;
-            (None, Some(md), Some(html))
-        }
-        None => match body.content_text {
-            Some(text) => (Some(text), None, None),
-            None => (None, None, None),
-        },
-    };
+    let (content_text, content_markdown, content_html) =
+        super::process_comment_content(&lang, body.content_text, body.content_markdown).await?;
 
     let row = db.query_one(
         "INSERT INTO reply (post, author, created, local, content_text, content_markdown, content_html) VALUES ($1, $2, current_timestamp, TRUE, $3, $4, $5) RETURNING id, created",

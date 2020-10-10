@@ -1,4 +1,5 @@
 comment_content_conflict = Exactly one of content_markdown and content_text must be specified
+comment_empty = Comment may not be empty
 comment_not_yours = That's not your comment
 community_edit_denied = You are not authorized to modify this community
 community_name_disallowed_chars = Community name contains disallowed characters

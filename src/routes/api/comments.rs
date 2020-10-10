@@ -520,24 +520,8 @@ async fn route_unstable_comments_replies_create(
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let body: CommentRepliesCreateBody<'_> = serde_json::from_slice(&body)?;
 
-    if !(body.content_markdown.is_some() ^ body.content_text.is_some()) {
-        return Err(crate::Error::UserError(crate::simple_response(
-            hyper::StatusCode::BAD_REQUEST,
-            lang.tr("comment_content_conflict", None).into_owned(),
-        )));
-    }
-
-    let (content_text, content_markdown, content_html) = match body.content_markdown {
-        Some(md) => {
-            let (html, md) =
-                tokio::task::spawn_blocking(move || (crate::render_markdown(&md), md)).await?;
-            (None, Some(md), Some(html))
-        }
-        None => match body.content_text {
-            Some(text) => (Some(text), None, None),
-            None => (None, None, None),
-        },
-    };
+    let (content_text, content_markdown, content_html) =
+        super::process_comment_content(&lang, body.content_text, body.content_markdown).await?;
 
     let post: PostLocalID = match db
         .query_opt("SELECT post FROM reply WHERE id=$1", &[&parent_id])

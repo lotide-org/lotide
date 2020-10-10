@@ -778,3 +778,44 @@ async fn handle_common_posts_list(
 
     Ok(posts)
 }
+
+pub async fn process_comment_content<'a>(
+    lang: &crate::Translator,
+    content_text: Option<Cow<'a, str>>,
+    content_markdown: Option<String>,
+) -> Result<(Option<Cow<'a, str>>, Option<String>, Option<String>), crate::Error> {
+    if !(content_markdown.is_some() ^ content_text.is_some()) {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            lang.tr("comment_content_conflict", None).into_owned(),
+        )));
+    }
+
+    Ok(match content_markdown {
+        Some(md) => {
+            if md.trim().is_empty() {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    lang.tr("comment_empty", None).into_owned(),
+                )));
+            }
+
+            let (html, md) =
+                tokio::task::spawn_blocking(move || (crate::render_markdown(&md), md)).await?;
+            (None, Some(md), Some(html))
+        }
+        None => match content_text {
+            Some(text) => {
+                if text.trim().is_empty() {
+                    return Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        lang.tr("comment_empty", None).into_owned(),
+                    )));
+                }
+
+                (Some(text), None, None)
+            }
+            None => (None, None, None),
+        },
+    })
+}
