@@ -1025,7 +1025,10 @@ pub fn post_to_ap(
     match post.href {
         Some(href) => {
             if href.starts_with("local-media://") {
-                let mut post_ap = activitystreams::object::Image::new();
+                let mut attachment = activitystreams::object::Image::new();
+                attachment.set_url(ctx.process_href(href, post.id).into_owned());
+
+                let mut post_ap = activitystreams::object::Note::new();
 
                 post_ap
                     .set_context(activitystreams::context())
@@ -1034,11 +1037,11 @@ pub fn post_to_ap(
                         post.author.unwrap(),
                         &ctx.host_url_apub,
                     ))
-                    .set_url(ctx.process_href(href, post.id).into_owned())
                     .set_summary(post.title)
                     .set_published(*post.created)
                     .set_to(community_ap_id)
-                    .set_cc(activitystreams::public());
+                    .set_cc(activitystreams::public())
+                    .add_attachment(attachment.into_any_base()?);
 
                 let mut post_ap = activitystreams::object::ApObject::new(post_ap);
 
