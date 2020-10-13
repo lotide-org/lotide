@@ -22,7 +22,6 @@ impl<K: Eq + std::hash::Hash + std::fmt::Debug> RatelimitBucket<K> {
         let inner = self.inner.read().await;
         let seconds_into = now.duration_since(inner.divider_time).as_secs();
         if seconds_into >= 60 {
-            println!("new minute");
             std::mem::drop(inner);
             let mut inner = self.inner.write().await;
 
@@ -53,7 +52,6 @@ impl<K: Eq + std::hash::Hash + std::fmt::Debug> RatelimitBucket<K> {
     }
 
     async fn try_for_current(&self, seconds_into: u64, inner: &Inner<K>, key: K) -> bool {
-        println!("key={:?}", key);
         let prev_count = if let Some(last_minute) = &inner.last_minute {
             if let Some(prev_count) = last_minute.get(&key) {
                 (u64::from(prev_count.load(std::sync::atomic::Ordering::Relaxed))
@@ -72,8 +70,6 @@ impl<K: Eq + std::hash::Hash + std::fmt::Debug> RatelimitBucket<K> {
                 .entry(key)
                 .or_default()
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-        println!("count={:?}", count);
 
         count < self.cap
     }

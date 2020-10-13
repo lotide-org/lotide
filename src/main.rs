@@ -937,7 +937,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
         apub_proxy_rewrites,
-        api_ratelimit: ratelimit::RatelimitBucket::new(1),
+        api_ratelimit: ratelimit::RatelimitBucket::new(300),
     });
 
     let worker_trigger = worker::start_worker(base_context.clone());
