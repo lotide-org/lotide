@@ -957,7 +957,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let routes = routes.clone();
                     let context = context.clone();
                     async move {
-                        let addr = if allow_forwarded {
+                        let ratelimit_addr = if allow_forwarded {
                             if let Some(value) = req
                                 .headers()
                                 .get(hyper::header::HeaderName::from_static("x-forwarded-for"))
@@ -974,16 +974,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             "Invalid X-Forwarded-For value",
                                         ));
                                     }
-                                    Ok(value) => value,
+                                    Ok(value) => Some(value),
                                 }
                             } else {
-                                addr_direct
+                                None
                             }
                         } else {
-                            addr_direct
+                            Some(addr_direct)
                         };
 
-                        let ratelimit_ok = context.api_ratelimit.try_call(addr).await;
+                        let ratelimit_ok = match ratelimit_addr {
+                            Some(addr) => context.api_ratelimit.try_call(addr).await,
+                            None => true,
+                        };
                         let result = if !ratelimit_ok {
                             Ok(simple_response(
                                 hyper::StatusCode::TOO_MANY_REQUESTS,
