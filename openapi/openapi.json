@@ -2,7 +2,7 @@
 	"openapi": "3.0.1",
 	"info": {
 		"title": "lotide API",
-		"version": "0.6.0-pre"
+		"version": "0.7.0-pre"
 	},
 	"components": {
 		"schemas": {
@@ -957,6 +957,29 @@
 				"security": [{"bearer": []}]
 			}
 		},
+		"/api/unstable/media": {
+			"post": {
+				"summary": "Upload an image",
+				"description": "Uploads an image as hosted media. File content must be sent as the request body.",
+				"responses": {
+					"200": {
+						"description": "Successfully uploaded.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["id"],
+									"properties": {
+										"id": {"type": "string"}
+									}
+								}
+							}
+						}
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
 		"/api/unstable/misc/render_markdown": {
 			"post": {
 				"summary": "Preview Markdown rendering",
@@ -1020,7 +1043,10 @@
 								"required": ["community", "title"],
 								"properties": {
 									"community": {"type": "integer"},
-									"href": {"type": "string"},
+									"href": {
+										"type": "string",
+										"description": "URL target for the post. Can be set to a hosted media file by specifying `local-media://<id>`"
+									},
 									"content_markdown": {"type": "string"},
 									"content_text": {"type": "string"},
 									"title": {"type": "string"}
