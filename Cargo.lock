@@ -703,6 +703,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "henry"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6426cea37391e26fd222f13377b524426fc02eefb3d67f20f576cbdebc46dca"
+dependencies = [
+ "dashmap",
+ "tokio",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1000,7 +1010,6 @@ dependencies = [
  "bumpalo",
  "bytes",
  "chrono",
- "dashmap",
  "deadpool-postgres",
  "either",
  "fast_chemail",
@@ -1009,6 +1018,7 @@ dependencies = [
  "futures",
  "hancock",
  "headers",
+ "henry",
  "http",
  "hyper",
  "hyper-tls",
@@ -1881,9 +1891,9 @@ checksum = "53953d2d3a5ad81d9f844a32f14ebb121f50b650cd59d0ee2a07cf13c617efed"
 
 [[package]]
 name = "tokio"
-version = "0.2.21"
+version = "0.2.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d099fa27b9702bed751524694adbe393e18b36b204da91eb1cbbbbb4a5ee2d58"
+checksum = "5d34ca54d84bf2b5b4d7d31e901a8464f7b60ac145a284fba25ceb801f2ddccd"
 dependencies = [
  "bytes",
  "fnv",

@@ -47,7 +47,7 @@ rand = "0.7.3"
 bs58 = "0.3.1"
 bumpalo = "3.4.0"
 tokio-util = "0.3.1"
-dashmap = "3.11.10"
+henry = "0.1.0"
 
 [dev-dependencies]
 rand = "0.7.3"

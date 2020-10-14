@@ -8,7 +8,6 @@ use std::sync::Arc;
 use trout::hyper::RoutingFailureExtHyper;
 
 mod apub_util;
-mod ratelimit;
 mod routes;
 mod tasks;
 mod worker;
@@ -140,7 +139,7 @@ pub struct BaseContext {
     pub http_client: HttpClient,
     pub apub_proxy_rewrites: bool,
     pub media_location: Option<std::path::PathBuf>,
-    pub api_ratelimit: ratelimit::RatelimitBucket<std::net::IpAddr>,
+    pub api_ratelimit: henry::RatelimitBucket<std::net::IpAddr>,
 
     pub local_hostname: String,
 }
@@ -937,7 +936,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
         apub_proxy_rewrites,
-        api_ratelimit: ratelimit::RatelimitBucket::new(300),
+        api_ratelimit: henry::RatelimitBucket::new(300),
     });
 
     let worker_trigger = worker::start_worker(base_context.clone());
