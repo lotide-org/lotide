@@ -536,6 +536,8 @@ async fn route_unstable_communities_posts_list(
     struct Query {
         #[serde(default = "default_sort")]
         sort: super::SortType,
+        #[serde(default)]
+        include_your: bool,
     }
 
     let query: Query = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -544,6 +546,13 @@ async fn route_unstable_communities_posts_list(
 
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
+
+    let include_your_for = if query.include_your {
+        let user = crate::require_login(&req, &db).await?;
+        Some(user)
+    } else {
+        None
+    };
 
     let community_row = db
         .query_opt(
@@ -581,9 +590,15 @@ async fn route_unstable_communities_posts_list(
 
     let limit: i64 = 30; // TODO make configurable
 
-    let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&community_id, &limit];
+    let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&community_id, &limit];
     let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {} LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id){} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {} LIMIT $2",
+        if let Some(user) = &include_your_for {
+            values.push(user);
+            ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$3)"
+        } else {
+            ""
+        },
         query.sort.post_sort_sql(),
     );
 
@@ -631,6 +646,16 @@ async fn route_unstable_communities_posts_list(
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,
+                score: row.get(11),
+                your_vote: if include_your_for.is_some() {
+                    Some(if row.get(12) {
+                        Some(crate::Empty {})
+                    } else {
+                        None
+                    })
+                } else {
+                    None
+                },
             };
 
             futures::future::ready(serde_json::to_value(&post).map_err(Into::into))

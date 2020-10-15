@@ -102,6 +102,9 @@ struct RespPostListPost<'a> {
     author: Option<&'a RespMinimalAuthorInfo<'a>>,
     created: &'a str,
     community: &'a RespMinimalCommunityInfo<'a>,
+    score: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    your_vote: Option<Option<crate::Empty>>,
 }
 
 #[derive(Serialize)]
@@ -727,6 +730,7 @@ async fn handle_common_posts_list(
     stream: impl futures::stream::TryStream<Ok = tokio_postgres::Row, Error = tokio_postgres::Error>
         + Send,
     ctx: &crate::RouteContext,
+    include_your: bool,
 ) -> Result<Vec<serde_json::Value>, crate::Error> {
     use futures::stream::TryStreamExt;
 
@@ -787,6 +791,16 @@ async fn handle_common_posts_list(
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,
+                score: row.get(15),
+                your_vote: if include_your {
+                    Some(if row.get(16) {
+                        Some(crate::Empty {})
+                    } else {
+                        None
+                    })
+                } else {
+                    None
+                },
             };
 
             futures::future::ready(serde_json::to_value(&post).map_err(Into::into))

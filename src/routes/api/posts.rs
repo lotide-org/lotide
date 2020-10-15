@@ -99,18 +99,36 @@ async fn get_post_comments<'a>(
 async fn route_unstable_posts_list(
     _: (),
     ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
+    req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
     let db = ctx.db_pool.get().await?;
+
+    let include_your_for = if query.include_your {
+        let user = crate::require_login(&req, &db).await?;
+        Some(user)
+    } else {
+        None
+    };
 
     let limit: i64 = 30;
 
-    let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
-        ([limit]).iter().map(|x| x as _),
-    ).await?;
+    let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&limit];
 
-    let posts = super::handle_common_posts_list(stream, &ctx).await?;
+    let sql: &str = &format!(
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id){} FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
+        if let Some(user) = &include_your_for {
+            values.push(user);
+            ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$2)"
+        } else {
+            ""
+        },
+    );
+
+    let stream = crate::query_stream(&db, sql, &values).await?;
+
+    let posts = super::handle_common_posts_list(stream, &ctx, include_your_for.is_some()).await?;
 
     crate::json_response(&posts)
 }
@@ -253,10 +271,7 @@ async fn route_unstable_posts_get(
         #[serde(flatten)]
         post: &'a RespPostListPost<'a>,
         approved: bool,
-        score: i64,
         replies: Vec<RespPostCommentInfo<'a>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        your_vote: Option<Option<crate::Empty>>,
     }
 
     let (post_id,) = params;
@@ -340,14 +355,14 @@ async fn route_unstable_posts_get(
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,
+                score: row.get(13),
+                your_vote,
             };
 
             let output = RespPostInfo {
                 post: &post,
                 replies: comments,
                 approved: row.get(14),
-                score: row.get(13),
-                your_vote,
             };
 
             crate::json_response(&output)

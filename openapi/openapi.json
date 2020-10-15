@@ -102,7 +102,7 @@
 			},
 			"PostListPost": {
 				"type": "object",
-				"required": ["id", "title", "created", "community"],
+				"required": ["id", "title", "created", "community", "score"],
 				"properties": {
 					"id": {"type": "integer"},
 					"title": {"type": "string"},
@@ -129,7 +129,9 @@
 							"host": {"type": "string"},
 							"remote_url": {"type": "string", "nullable": true}
 						}
-					}
+					},
+					"score": {"type": "integer"},
+					"your_vote": {"$ref": "#/components/schemas/YourVote"}
 				}
 			},
 			"PostCommentInfo": {
@@ -687,6 +689,12 @@
 						"in": "query",
 						"required": false,
 						"schema": {"$ref": "#/components/schemas/SortType"}
+					},
+					{
+						"name": "include_your",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"}
 					}
 				],
 				"responses": {
@@ -1024,6 +1032,14 @@
 		"/api/unstable/posts": {
 			"get": {
 				"summary": "List posts",
+				"parameters": [
+					{
+						"name": "include_your",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"}
+					}
+				],
 				"responses": {
 					"200": {
 						"description": "",
@@ -1105,15 +1121,13 @@
 								"schema": {
 									"allOf": [{"$ref": "#/components/schemas/PostListPost"}],
 									"type": "object",
-									"required": ["approved", "score", "replies"],
+									"required": ["approved", "replies"],
 									"properties": {
 										"approved": {"type": "boolean"},
-										"score": {"type": "integer"},
 										"replies": {
 											"type": "array",
 											"items": {"$ref": "#/components/schemas/PostCommentInfo"}
-										},
-										"your_vote": {"$ref": "#/components/schemas/YourVote"}
+										}
 									}
 								}
 							}
@@ -1479,7 +1493,12 @@
 								"schema": {
 									"type": "array",
 									"items": {
-										"$ref": "#/components/schemas/PostListPost"
+										"allOf": [{"$ref": "#/components/schemas/PostListPost"}],
+										"type": "object",
+										"required": ["your_vote"],
+										"properties": {
+											"your_vote": {"$ref": "#/components/schemas/YourVote"}
+										}
 									}
 								}
 							}
