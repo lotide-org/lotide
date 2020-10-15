@@ -642,7 +642,7 @@ async fn route_unstable_communities_posts_list(
                 title,
                 href: ctx.process_href_opt(href, id),
                 content_text,
-                content_html,
+                content_html_safe: content_html.map(|html| ammonia::clean(&html)),
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,

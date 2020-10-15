@@ -1006,7 +1006,9 @@ pub fn post_to_ap(
         post: &crate::PostInfo,
     ) -> Result<(), crate::Error> {
         if let Some(html) = post.content_html {
-            props.set_content(html).set_media_type(mime::TEXT_HTML);
+            props
+                .set_content(ammonia::clean(&html))
+                .set_media_type(mime::TEXT_HTML);
 
             if let Some(md) = post.content_markdown {
                 let mut src = activitystreams::object::Object::<()>::new();
@@ -1137,7 +1139,7 @@ pub fn local_comment_to_ap(
     let mut obj = activitystreams::object::ApObject::new(obj);
 
     if let Some(html) = &comment.content_html {
-        obj.set_content(html.as_ref().to_owned())
+        obj.set_content(ammonia::clean(&html))
             .set_media_type(mime::TEXT_HTML);
 
         if let Some(md) = &comment.content_markdown {

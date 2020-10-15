@@ -305,7 +305,7 @@ async fn route_unstable_posts_get(
         Some(row) => {
             let href = row.get(1);
             let content_text = row.get(2);
-            let content_html = row.get(5);
+            let content_html: Option<&str> = row.get(5);
             let title = row.get(3);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
             let community_id = CommunityLocalID(row.get(6));
@@ -351,7 +351,7 @@ async fn route_unstable_posts_get(
                 title,
                 href: ctx.process_href_opt(href, post_id),
                 content_text,
-                content_html,
+                content_html_safe: content_html.map(|html| ammonia::clean(&html)),
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,
