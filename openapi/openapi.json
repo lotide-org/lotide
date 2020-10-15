@@ -1105,11 +1105,11 @@
 								"schema": {
 									"allOf": [{"$ref": "#/components/schemas/PostListPost"}],
 									"type": "object",
-									"required": ["approved", "score", "comments"],
+									"required": ["approved", "score", "replies"],
 									"properties": {
 										"approved": {"type": "boolean"},
 										"score": {"type": "integer"},
-										"comments": {
+										"replies": {
 											"type": "array",
 											"items": {"$ref": "#/components/schemas/PostCommentInfo"}
 										},
