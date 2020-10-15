@@ -16,6 +16,16 @@
 				"type": "string",
 				"enum": ["hot", "new"]
 			},
+			"LoginUserInfo": {
+				"type": "object",
+				"required": ["id", "username", "is_site_admin", "has_unread_notification"],
+				"properties": {
+					"id": {"type": "integer"},
+					"username": {"type": "string"},
+					"is_site_admin": {"type": "boolean"},
+					"has_unread_notification": {"type": "boolean"}
+				}
+			},
 			"MinimalCommentInfo": {
 				"type": "object",
 				"required": ["id"],
@@ -905,9 +915,12 @@
 							"application/json": {
 								"schema": {
 									"type": "object",
-									"required": ["token"],
+									"required": ["token", "user"],
 									"properties": {
-										"token": {"type": "string"}
+										"token": {"type": "string"},
+										"user": {
+											"$ref": "#/components/schemas/LoginUserInfo"
+										}
 									}
 								}
 							}
@@ -929,14 +942,7 @@
 									"required": ["user"],
 									"properties": {
 										"user": {
-											"type": "object",
-											"required": ["id", "name", "is_site_admin", "has_unread_notifications"],
-											"properties": {
-												"id": {"type": "integer"},
-												"name": {"type": "string"},
-												"is_site_admin": {"type": "boolean"},
-												"has_unread_notifications": {"type": "boolean"}
-											}
+											"$ref": "#/components/schemas/LoginUserInfo"
 										}
 									}
 								}
@@ -1099,11 +1105,11 @@
 								"schema": {
 									"allOf": [{"$ref": "#/components/schemas/PostListPost"}],
 									"type": "object",
-									"required": ["approved", "score", "comments"],
+									"required": ["approved", "score", "replies"],
 									"properties": {
 										"approved": {"type": "boolean"},
 										"score": {"type": "integer"},
-										"comments": {
+										"replies": {
 											"type": "array",
 											"items": {"$ref": "#/components/schemas/PostCommentInfo"}
 										},
@@ -1294,11 +1300,7 @@
 									"required": ["user"],
 									"properties": {
 										"user": {
-											"type": "object",
-											"required": ["id"],
-											"properties": {
-												"id": {"type": "integer"}
-											}
+											"$ref": "#/components/schemas/LoginUserInfo"
 										},
 										"token": {
 											"type": "string"

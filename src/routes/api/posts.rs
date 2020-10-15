@@ -254,7 +254,7 @@ async fn route_unstable_posts_get(
         post: &'a RespPostListPost<'a>,
         approved: bool,
         score: i64,
-        comments: Vec<RespPostCommentInfo<'a>>,
+        replies: Vec<RespPostCommentInfo<'a>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         your_vote: Option<Option<crate::Empty>>,
     }
@@ -344,7 +344,7 @@ async fn route_unstable_posts_get(
 
             let output = RespPostInfo {
                 post: &post,
-                comments,
+                replies: comments,
                 approved: row.get(14),
                 score: row.get(13),
                 your_vote,
