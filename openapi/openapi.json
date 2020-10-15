@@ -113,7 +113,7 @@
 					},
 					"content_html": {
 						"type": "string",
-						"description": "Content in HTML form. May be untrusted, should be sanitized by clients before display."
+						"description": "Content in HTML form."
 					},
 					"author": {
 						"$ref": "#/components/schemas/MinimalUserInfo"
