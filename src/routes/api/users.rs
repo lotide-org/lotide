@@ -1,6 +1,7 @@
 use super::{
-    handle_common_posts_list, MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo,
-    RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo, RespThingInfo,
+    handle_common_posts_list, MaybeIncludeYour, RespAvatarInfo, RespLoginUserInfo,
+    RespMinimalAuthorInfo, RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo,
+    RespThingInfo,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
@@ -156,11 +157,18 @@ async fn route_unstable_users_create(
         UserLocalID(row.get(0))
     };
 
+    let info = RespLoginUserInfo {
+        id: user_id,
+        username: &body.username,
+        is_site_admin: false,
+        has_unread_notifications: false,
+    };
+
     let output = if body.login {
         let token = super::insert_token(user_id, &db).await?;
-        serde_json::json!({"user": {"id": user_id}, "token": token.to_string()})
+        serde_json::json!({"user": info, "token": token.to_string()})
     } else {
-        serde_json::json!({"user": {"id": user_id}})
+        serde_json::json!({ "user": info })
     };
 
     crate::json_response(&output)

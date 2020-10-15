@@ -65,6 +65,14 @@ struct RespMinimalAuthorInfo<'a> {
 }
 
 #[derive(Serialize)]
+struct RespLoginUserInfo<'a> {
+    id: UserLocalID,
+    username: &'a str,
+    is_site_admin: bool,
+    has_unread_notifications: bool,
+}
+
+#[derive(Serialize)]
 struct JustUser<'a> {
     user: RespMinimalAuthorInfo<'a>,
 }
@@ -322,7 +330,7 @@ async fn route_unstable_logins_create(
 
     let row = db
         .query_opt(
-            "SELECT id, passhash FROM person WHERE LOWER(username)=LOWER($1) AND local",
+            "SELECT id, username, passhash, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications) FROM person WHERE LOWER(username)=LOWER($1) AND local",
             &[&body.username],
         )
         .await?
@@ -334,7 +342,8 @@ async fn route_unstable_logins_create(
         })?;
 
     let id = UserLocalID(row.get(0));
-    let passhash: Option<String> = row.get(1);
+    let username: &str = row.get(1);
+    let passhash: Option<String> = row.get(2);
 
     let passhash = passhash.ok_or_else(|| {
         crate::Error::UserError(crate::simple_response(
@@ -352,7 +361,14 @@ async fn route_unstable_logins_create(
     if correct {
         let token = insert_token(id, &db).await?;
 
-        crate::json_response(&serde_json::json!({"token": token.to_string()}))
+        crate::json_response(
+            &serde_json::json!({"token": token.to_string(), "user": RespLoginUserInfo {
+                id,
+                username,
+                is_site_admin: row.get(3),
+                has_unread_notifications: row.get(4),
+            }}),
+        )
     } else {
         Ok(crate::simple_response(
             hyper::StatusCode::FORBIDDEN,
@@ -371,12 +387,14 @@ async fn route_unstable_logins_current_get(
     let user = crate::require_login(&req, &db).await?;
 
     let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications) FROM person WHERE id=$1", &[&user]).await?;
-    let username: &str = row.get(0);
-    let is_site_admin: bool = row.get(1);
-    let has_notifications: bool = row.get(2);
 
     crate::json_response(&serde_json::json!({
-        "user": {"id": user, "name": username, "is_site_admin": is_site_admin, "has_unread_notifications": has_notifications}
+        "user": RespLoginUserInfo {
+            id: user,
+            username: row.get(0),
+            is_site_admin: row.get(1),
+            has_unread_notifications: row.get(2),
+        },
     }))
 }
 
