@@ -69,7 +69,7 @@ async fn get_post_comments<'a>(
                     base: RespMinimalCommentInfo {
                         id,
                         content_text: content_text.map(From::from),
-                        content_html: content_html.map(From::from),
+                        content_html_safe: content_html.map(|html| ammonia::clean(&html)),
                     },
 
                     author,

@@ -112,7 +112,8 @@ struct RespPostListPost<'a> {
 struct RespMinimalCommentInfo<'a> {
     id: CommentLocalID,
     content_text: Option<Cow<'a, str>>,
-    content_html: Option<Cow<'a, str>>,
+    #[serde(rename = "content_html")]
+    content_html_safe: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -675,7 +676,7 @@ async fn get_comments_replies<'a>(
                     base: RespMinimalCommentInfo {
                         id,
                         content_text: content_text.map(From::from),
-                        content_html: content_html.map(From::from),
+                        content_html_safe: content_html.map(|html| ammonia::clean(&html)),
                     },
 
                     author,

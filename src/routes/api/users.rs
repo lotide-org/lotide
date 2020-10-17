@@ -340,7 +340,9 @@ async fn route_unstable_users_notifications_list(
                             let comment = RespMinimalCommentInfo {
                                 id: CommentLocalID(reply_id),
                                 content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
-                                content_html: row.get::<_, Option<_>>(4).map(Cow::Borrowed),
+                                content_html_safe: row
+                                    .get::<_, Option<&str>>(4)
+                                    .map(|html| ammonia::clean(&html)),
                             };
                             let post = RespMinimalPostInfo {
                                 id: PostLocalID(post_id),
@@ -364,7 +366,9 @@ async fn route_unstable_users_notifications_list(
                             let reply = RespMinimalCommentInfo {
                                 id: CommentLocalID(reply_id),
                                 content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
-                                content_html: row.get::<_, Option<_>>(4).map(Cow::Borrowed),
+                                content_html_safe: row
+                                    .get::<_, Option<&str>>(4)
+                                    .map(|html| ammonia::clean(&html)),
                             };
                             let parent_id = CommentLocalID(parent_id);
                             let post =
@@ -545,7 +549,9 @@ async fn route_unstable_users_things_list(
                     base: RespMinimalCommentInfo {
                         id: CommentLocalID(row.get(1)),
                         content_text: row.get::<_, Option<_>>(2).map(Cow::Borrowed),
-                        content_html: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
+                        content_html_safe: row
+                            .get::<_, Option<&str>>(3)
+                            .map(|html| ammonia::clean(&html)),
                     },
                     created,
                     post: RespMinimalPostInfo {

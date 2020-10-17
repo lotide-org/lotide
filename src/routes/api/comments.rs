@@ -109,7 +109,9 @@ async fn route_unstable_comments_get(
                     base: RespMinimalCommentInfo {
                         id: comment_id,
                         content_text: row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
-                        content_html: row.get::<_, Option<&str>>(5).map(Cow::Borrowed),
+                        content_html_safe: row
+                            .get::<_, Option<&str>>(5)
+                            .map(|html| ammonia::clean(&html)),
                     },
 
                     author,
