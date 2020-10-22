@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE reply ADD COLUMN attachment_href TEXT;
+COMMIT;

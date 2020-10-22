@@ -163,6 +163,25 @@ impl BaseContext {
             None => None,
         }
     }
+
+    pub fn process_attachments_inner<'a>(
+        &self,
+        href: Option<Cow<'a, str>>,
+        comment_id: CommentLocalID,
+    ) -> Option<Cow<'a, str>> {
+        match href {
+            Some(href) => Some(if href.starts_with("local-media://") {
+                format!(
+                    "{}/unstable/comments/{}/attachments/0/href",
+                    self.host_url_api, comment_id
+                )
+                .into()
+            } else {
+                href
+            }),
+            None => None,
+        }
+    }
 }
 
 pub struct RouteContext {
