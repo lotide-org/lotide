@@ -188,6 +188,28 @@ impl RouteContext {
             }
         }
     }
+
+    pub async fn enqueue_tasks<T: crate::tasks::TaskDef>(
+        &self,
+        tasks: &[T],
+    ) -> Result<(), crate::Error> {
+        let params_ary: Vec<_> = tasks
+            .iter()
+            .map(|task| tokio_postgres::types::Json(task))
+            .collect();
+        let db = self.db_pool.get().await?;
+        db.execute(
+            "INSERT INTO task (kind, max_attempts, created_at, params) SELECT $1, $3, current_timestamp, * FROM UNNEST($2::JSON[])",
+            &[&T::KIND, &params_ary, &T::MAX_ATTEMPTS],
+        ).await?;
+
+        match self.worker_trigger.clone().try_send(()) {
+            Ok(_) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                Err(crate::Error::InternalStrStatic("Worker channel closed"))
+            }
+        }
+    }
 }
 
 impl std::ops::Deref for RouteContext {
@@ -624,6 +646,16 @@ pub fn render_markdown(src: &str) -> String {
     pulldown_cmark::html::push_html(&mut output, parser);
 
     output
+}
+
+pub async fn prepare_delete_user(
+    trans: &tokio_postgres::Transaction<'_>,
+    user_id: UserLocalID,
+) -> Result<(), tokio_postgres::Error> {
+    trans.execute("UPDATE post SET href=NULL, title='[deleted]', content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE, author=NULL WHERE author=$1", &[&user_id]).await?;
+    trans.execute("UPDATE reply SET content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE, author=NULL WHERE author=$1", &[&user_id]).await?;
+
+    Ok(())
 }
 
 pub fn on_community_add_post(

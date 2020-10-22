@@ -425,11 +425,11 @@ async fn route_unstable_posts_delete(
 
                         if let Some(community_inbox) = community_inbox {
                             crate::spawn_task(async move {
-                                ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                                    inbox: Cow::Owned(community_inbox.parse()?),
-                                    sign_as: Some(crate::ActorLocalRef::Person(user)),
-                                    object: serde_json::to_string(&delete_ap)?,
-                                })
+                                ctx.enqueue_task(&crate::tasks::DeliverToInbox::signed_as(
+                                    crate::ActorLocalRef::Person(user),
+                                    Cow::Owned(community_inbox.parse()?),
+                                    serde_json::to_string(&delete_ap)?,
+                                ))
                                 .await
                             });
                         }
@@ -581,11 +581,11 @@ async fn route_unstable_posts_like(
                 let body = serde_json::to_string(&like)?;
 
                 for inbox in inboxes {
-                    ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                        inbox: Cow::Owned(inbox.parse()?),
-                        sign_as: Some(crate::ActorLocalRef::Person(user)),
-                        object: (&body).into(),
-                    })
+                    ctx.enqueue_task(&crate::tasks::DeliverToInbox::signed_as(
+                        crate::ActorLocalRef::Person(user),
+                        Cow::Owned(inbox.parse()?),
+                        (&body).into(),
+                    ))
                     .await?;
                 }
 
@@ -787,11 +787,11 @@ async fn route_unstable_posts_unlike(
                 let body = serde_json::to_string(&undo)?;
 
                 for inbox in inboxes {
-                    ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                        inbox: Cow::Owned(inbox.parse()?),
-                        sign_as: Some(crate::ActorLocalRef::Person(user)),
-                        object: (&body).into(),
-                    })
+                    ctx.enqueue_task(&crate::tasks::DeliverToInbox::signed_as(
+                        crate::ActorLocalRef::Person(user),
+                        Cow::Owned(inbox.parse()?),
+                        (&body).into(),
+                    ))
                     .await?;
                 }
 

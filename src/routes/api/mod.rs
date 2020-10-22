@@ -565,7 +565,7 @@ async fn apply_comments_replies<'a, T>(
         use futures::stream::TryStreamExt;
 
         let stream = crate::query_stream(
-            &db,
+            db,
             "SELECT DISTINCT parent FROM reply WHERE parent = ANY($1)",
             &[&ids],
         )

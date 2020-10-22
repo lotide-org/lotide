@@ -11,9 +11,38 @@ pub trait TaskDef: Serialize + std::fmt::Debug + Sync {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct DeliverToInbox<'a> {
-    pub inbox: Cow<'a, url::Url>,
-    pub sign_as: Option<crate::ActorLocalRef>,
-    pub object: String,
+    inbox: Cow<'a, url::Url>,
+    sign_as: Option<crate::ActorLocalRef>,
+    sign_with: Option<Cow<'a, str>>,
+    object: Cow<'a, str>,
+}
+
+impl<'a> DeliverToInbox<'a> {
+    pub fn signed_as(
+        actor: crate::ActorLocalRef,
+        inbox: Cow<'a, url::Url>,
+        object: String,
+    ) -> Self {
+        DeliverToInbox {
+            inbox,
+            object: object.into(),
+            sign_as: Some(actor),
+            sign_with: None,
+        }
+    }
+
+    pub fn signed_with(
+        key: impl Into<Cow<'a, str>>,
+        inbox: Cow<'a, url::Url>,
+        object: impl Into<Cow<'a, str>>,
+    ) -> Self {
+        DeliverToInbox {
+            inbox,
+            object: object.into(),
+            sign_as: None,
+            sign_with: Some(key.into()),
+        }
+    }
 }
 
 #[async_trait]
@@ -37,7 +66,7 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
 
         let mut req = hyper::Request::post(self.inbox.as_str().parse::<hyper::Uri>()?)
             .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
-            .body(self.object.into())?;
+            .body(self.object.into_owned().into())?;
 
         if let Ok(path_and_query) = crate::get_path_and_query(&self.inbox) {
             req.headers_mut()
@@ -65,14 +94,14 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-pub struct DeliverToFollowers {
+pub struct DeliverToFollowers<'a> {
     pub actor: crate::ActorLocalRef,
     pub sign: bool,
-    pub object: String,
+    pub object: Cow<'a, str>,
 }
 
 #[async_trait]
-impl TaskDef for DeliverToFollowers {
+impl<'a> TaskDef for DeliverToFollowers<'a> {
     const KIND: &'static str = "deliver_to_followers";
 
     async fn perform(self, ctx: &crate::BaseContext) -> Result<(), crate::Error> {

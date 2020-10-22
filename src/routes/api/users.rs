@@ -250,6 +250,88 @@ async fn route_unstable_users_patch(
     Ok(crate::empty_response())
 }
 
+async fn route_unstable_users_delete(
+    params: (UserIDOrMe,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let mut db = ctx.db_pool.get().await?;
+
+    let user_id = params.0.require_me(&req, &db).await?; // user should be guaranteed local because they're logged in
+
+    let target_info_row = db.query_one("WITH targets AS ((SELECT community FROM post WHERE author=$1 OR id IN (SELECT post FROM reply WHERE author=$1)) UNION (SELECT community FROM community_follow WHERE follower=$1)) SELECT (SELECT array_agg(id) FROM community WHERE id IN (SELECT * FROM targets) AND local), (SELECT array_agg(DISTINCT COALESCE(ap_shared_inbox, ap_inbox)) FROM community WHERE id IN (SELECT * FROM targets) AND NOT local)", &[&user_id]).await?;
+
+    let trans = db.transaction().await?;
+
+    crate::prepare_delete_user(&trans, user_id).await?;
+
+    let person_row = trans
+        .query_opt(
+            "DELETE FROM person WHERE id=$1 RETURNING private_key",
+            &[&user_id],
+        )
+        .await?;
+    let private_key: Option<String> = match person_row {
+        None => return Ok(crate::empty_response()), // already deleted, rollback & early return
+        Some(row) => row.get(0),
+    };
+
+    trans.commit().await?;
+
+    // if there's no private key, nothing has been sent out, probably fine to skip this
+    if let Some(private_key) = private_key {
+        let user_ap_id = crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
+
+        crate::spawn_task(async move {
+            use activitystreams::object::ObjectExt;
+
+            let target_local_communities: Option<Vec<i64>> = target_info_row.get(0);
+            let target_community_inboxes: Option<Vec<Option<&str>>> = target_info_row.get(1);
+
+            let mut activity =
+                activitystreams::activity::Delete::new(user_ap_id.clone(), user_ap_id);
+            activity.set_to(activitystreams::public());
+            let activity = serde_json::to_string(&activity)?;
+
+            if let Some(target_community_inboxes) = target_community_inboxes {
+                let tasks1: Result<Vec<_>, url::ParseError> = target_community_inboxes
+                    .iter()
+                    .filter_map(Option::as_ref)
+                    .map(|inbox| {
+                        let inbox = inbox.parse()?;
+                        Ok(crate::tasks::DeliverToInbox::signed_with(
+                            &private_key,
+                            Cow::Owned(inbox),
+                            &activity,
+                        ))
+                    })
+                    .collect();
+                let tasks1 = tasks1?;
+
+                ctx.enqueue_tasks(&tasks1).await?;
+            }
+
+            if let Some(target_local_communities) = target_local_communities {
+                let tasks2: Vec<_> = target_local_communities
+                    .into_iter()
+                    .map(CommunityLocalID)
+                    .map(|id| crate::tasks::DeliverToFollowers {
+                        actor: crate::ActorLocalRef::Community(id),
+                        sign: false,
+                        object: (&activity).into(),
+                    })
+                    .collect();
+
+                ctx.enqueue_tasks(&tasks2).await?;
+            }
+
+            Ok(())
+        });
+    }
+
+    Ok(crate::empty_response())
+}
+
 async fn route_unstable_users_following_posts_list(
     params: (UserIDOrMe,),
     ctx: Arc<crate::RouteContext>,
@@ -573,6 +655,7 @@ pub fn route_users() -> crate::RouteNode<()> {
             crate::RouteNode::new()
                 .with_handler_async("GET", route_unstable_users_get)
                 .with_handler_async("PATCH", route_unstable_users_patch)
+                .with_handler_async("DELETE", route_unstable_users_delete)
                 .with_child(
                     "following:posts",
                     crate::RouteNode::new()

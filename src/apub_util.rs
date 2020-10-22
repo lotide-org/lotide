@@ -664,11 +664,11 @@ pub fn spawn_enqueue_send_community_follow(
 
         std::mem::drop(db);
 
-        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: Cow::Owned(community_inbox),
-            sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
-            object: serde_json::to_string(&follow)?,
-        })
+        ctx.enqueue_task(&crate::tasks::DeliverToInbox::signed_as(
+            crate::ActorLocalRef::Person(local_follower),
+            Cow::Owned(community_inbox),
+            serde_json::to_string(&follow)?,
+        ))
         .await?;
 
         Ok(())
@@ -716,11 +716,11 @@ pub fn spawn_enqueue_send_community_follow_undo(
             &ctx.host_url_apub,
         )?;
 
-        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: Cow::Owned(community_inbox),
-            sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
-            object: serde_json::to_string(&undo)?,
-        })
+        ctx.enqueue_task(&crate::tasks::DeliverToInbox::signed_as(
+            crate::ActorLocalRef::Person(local_follower),
+            Cow::Owned(community_inbox),
+            serde_json::to_string(&undo)?,
+        ))
         .await?;
 
         Ok(())
@@ -982,11 +982,11 @@ pub fn spawn_enqueue_send_community_follow_accept(
 
         std::mem::drop(db);
 
-        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: Cow::Owned(follower_inbox),
-            sign_as: Some(crate::ActorLocalRef::Community(local_community)),
-            object: body,
-        })
+        ctx.enqueue_task(&crate::tasks::DeliverToInbox::signed_as(
+            crate::ActorLocalRef::Community(local_community),
+            Cow::Owned(follower_inbox),
+            body,
+        ))
         .await?;
 
         Ok(())
@@ -1207,11 +1207,11 @@ pub fn spawn_enqueue_send_local_post_to_community(
 
         let create = local_post_to_create_ap(&(&post).into(), community_ap_id, &ctx)?;
 
-        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: Cow::Owned(community_inbox),
-            sign_as: Some(crate::ActorLocalRef::Person(post.author.unwrap())),
-            object: serde_json::to_string(&create)?,
-        })
+        ctx.enqueue_task(&crate::tasks::DeliverToInbox::signed_as(
+            crate::ActorLocalRef::Person(post.author.unwrap()),
+            Cow::Owned(community_inbox),
+            serde_json::to_string(&create)?,
+        ))
         .await?;
 
         Ok(())
@@ -1405,11 +1405,11 @@ pub fn spawn_enqueue_send_comment(
 
         // TODO maybe insert these at the same time
         for inbox in inboxes {
-            ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                inbox: Cow::Owned(inbox),
-                sign_as: Some(crate::ActorLocalRef::Person(author)),
-                object: serde_json::to_string(&create)?,
-            })
+            ctx.enqueue_task(&crate::tasks::DeliverToInbox::signed_as(
+                crate::ActorLocalRef::Person(author),
+                Cow::Owned(inbox),
+                serde_json::to_string(&create)?,
+            ))
             .await?;
         }
 
@@ -1419,13 +1419,13 @@ pub fn spawn_enqueue_send_comment(
 
 pub async fn enqueue_forward_to_community_followers(
     community_id: CommunityLocalID,
-    body: String,
+    body: impl Into<Cow<'_, str>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     ctx.enqueue_task(&crate::tasks::DeliverToFollowers {
         actor: crate::ActorLocalRef::Community(community_id),
         sign: false,
-        object: body,
+        object: body.into(),
     })
     .await
 }
@@ -1438,7 +1438,7 @@ async fn enqueue_send_to_community_followers(
     ctx.enqueue_task(&crate::tasks::DeliverToFollowers {
         actor: crate::ActorLocalRef::Community(community_id),
         sign: true,
-        object: serde_json::to_string(&activity)?,
+        object: Cow::Owned(serde_json::to_string(&activity)?),
     })
     .await
 }
@@ -1973,7 +1973,7 @@ pub async fn handle_delete(
         require_containment(object_id, actor_id)?;
 
         let row = db.query_opt(
-            "WITH deleted_post AS (UPDATE post SET href=NULL, title='[deleted]', content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id = post.community AND community.local)), deleted_reply AS (UPDATE reply SET content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id=(SELECT community FROM post WHERE id=reply.post) AND community.local)) (SELECT * FROM deleted_post) UNION ALL (SELECT * FROM deleted_reply) LIMIT 1",
+            "WITH deleted_post AS (UPDATE post SET href=NULL, title='[deleted]', content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id = post.community AND community.local)), deleted_reply AS (UPDATE reply SET content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id=(SELECT community FROM post WHERE id=reply.post) AND community.local)), deleted_user AS (DELETE FROM person WHERE ap_id=$1 RETURNING NULL) (SELECT * FROM deleted_post) UNION ALL (SELECT * FROM deleted_reply) LIMIT 1",
             &[&object_id.as_str()],
             ).await?;
 
