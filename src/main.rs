@@ -399,6 +399,7 @@ pub struct CommentInfo<'a> {
     content_html: Option<Cow<'a, str>>,
     created: chrono::DateTime<chrono::FixedOffset>,
     ap_id: APIDOrLocal,
+    attachment_href: Option<Cow<'a, str>>,
 }
 
 pub const KEY_BITS: u32 = 2048;

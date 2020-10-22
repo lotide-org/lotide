@@ -452,7 +452,7 @@ async fn handler_users_outbox_page_get(
         }
     };
 
-    let sql: &str = &format!("(SELECT TRUE, post.id, post.href, post.title, post.created, post.content_text, post.content_markdown, post.content_html, community.id, community.local, community.ap_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted{}) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, parent_or_post_author.ap_id, reply.content_markdown, parent_reply.ap_id, post.id, post.local, post.ap_id, parent_reply.id, parent_reply.local, parent_or_post_author.id, parent_or_post_author.local, community.id, community.local, community.ap_id FROM reply INNER JOIN post ON (post.id = reply.post) INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = reply.parent) LEFT OUTER JOIN person AS parent_or_post_author ON (parent_or_post_author.id = COALESCE(parent_reply.author, post.author)) WHERE reply.author = $1 AND NOT reply.deleted{}) ORDER BY created DESC LIMIT $2", extra_conditions_posts, extra_conditions_comments);
+    let sql: &str = &format!("(SELECT TRUE, post.id, post.href, post.title, post.created, post.content_text, post.content_markdown, post.content_html, community.id, community.local, community.ap_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted{}) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, parent_or_post_author.ap_id, reply.content_markdown, parent_reply.ap_id, post.id, post.local, post.ap_id, parent_reply.id, parent_reply.local, parent_or_post_author.id, parent_or_post_author.local, community.id, community.local, community.ap_id, reply.attachment_href FROM reply INNER JOIN post ON (post.id = reply.post) INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = reply.parent) LEFT OUTER JOIN person AS parent_or_post_author ON (parent_or_post_author.id = COALESCE(parent_reply.author, post.author)) WHERE reply.author = $1 AND NOT reply.deleted{}) ORDER BY created DESC LIMIT $2", extra_conditions_posts, extra_conditions_comments);
 
     let rows = db.query(sql, &values[..]).await?;
 
@@ -495,6 +495,7 @@ async fn handler_users_outbox_page_get(
                 let id = CommentLocalID(row.get(1));
                 let post_id = PostLocalID(row.get(8));
                 let parent_id = row.get::<_, Option<_>>(11).map(CommentLocalID);
+
                 let comment_info = crate::CommentInfo {
                     id,
                     author: Some(user),
@@ -505,6 +506,7 @@ async fn handler_users_outbox_page_get(
                     content_html: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
                     created,
                     ap_id: crate::APIDOrLocal::Local,
+                    attachment_href: row.get::<_, Option<_>>(18).map(Cow::Borrowed),
                 };
 
                 let res = crate::apub_util::local_comment_to_create_ap(
@@ -542,7 +544,7 @@ async fn handler_users_outbox_page_get(
                     } else {
                         std::str::FromStr::from_str(row.get(17))?
                     },
-                    &ctx.host_url_apub,
+                    &ctx,
                 );
 
                 last_created = Some(created);
@@ -587,7 +589,7 @@ async fn handler_comments_get(
 
     match db
         .query_opt(
-            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id, reply.deleted, reply.content_markdown, reply.content_html FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
+            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id, reply.deleted, reply.content_markdown, reply.content_html, reply.attachment_href FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
             &[&comment_id],
         )
         .await?
@@ -647,6 +649,7 @@ async fn handler_comments_get(
             let content_markdown = row.get::<_, Option<_>>(20).map(Cow::Borrowed);
             let content_html = row.get::<_, Option<_>>(21).map(Cow::Borrowed);
 
+            let attachment_href = row.get::<_, Option<_>>(22).map(Cow::Borrowed);
 
             let info = crate::CommentInfo {
                 author: Some(UserLocalID(row.get(0))),
@@ -658,6 +661,7 @@ async fn handler_comments_get(
                 post: post_local_id,
                 parent: parent_local_id,
                 ap_id: crate::APIDOrLocal::Local,
+                attachment_href,
             };
 
             let parent_ap_id = match row.get(11) {
@@ -694,7 +698,7 @@ async fn handler_comments_get(
                 },
             };
 
-            let body = crate::apub_util::local_comment_to_ap(&info, &post_ap_id, parent_ap_id.map(From::from), post_or_parent_author_ap_id.map(From::from), community_ap_id.into(), &ctx.host_url_apub)?;
+            let body = crate::apub_util::local_comment_to_ap(&info, &post_ap_id, parent_ap_id.map(From::from), post_or_parent_author_ap_id.map(From::from), community_ap_id.into(), &ctx)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
@@ -719,7 +723,7 @@ async fn handler_comments_create_get(
 
     match db
         .query_opt(
-            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id, reply.deleted, reply.content_markdown, reply.content_html FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
+            "SELECT reply.author, reply.content_text, reply.post, reply.created, reply.local, reply.parent, post.local, post.ap_id, post.community, community.local, community.ap_id, reply_parent.local, reply_parent.ap_id, post_author.id, post_author.local, post_author.ap_id, reply_parent_author.id, reply_parent_author.local, reply_parent_author.ap_id, reply.deleted, reply.content_markdown, reply.content_html, reply.attachment_href FROM reply LEFT OUTER JOIN post ON (post.id = reply.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) LEFT OUTER JOIN reply AS reply_parent ON (reply_parent.id = reply.parent) LEFT OUTER JOIN person AS reply_parent_author ON (reply_parent_author.id = reply_parent.author) WHERE reply.id=$1",
             &[&comment_id],
         )
         .await?
@@ -767,6 +771,8 @@ async fn handler_comments_create_get(
             let content_markdown = row.get::<_, Option<_>>(20).map(Cow::Borrowed);
             let content_html = row.get::<_, Option<_>>(21).map(Cow::Borrowed);
 
+            let attachment_href = row.get::<_, Option<_>>(22).map(Cow::Borrowed);
+
             let info = crate::CommentInfo {
                 author: Some(UserLocalID(row.get(0))),
                 created: row.get(3),
@@ -777,6 +783,7 @@ async fn handler_comments_create_get(
                 post: post_local_id,
                 parent: parent_local_id,
                 ap_id: crate::APIDOrLocal::Local,
+                attachment_href,
             };
 
             let parent_ap_id = match row.get(11) {
@@ -813,7 +820,7 @@ async fn handler_comments_create_get(
                 },
             };
 
-            let body = crate::apub_util::local_comment_to_create_ap(&info, &post_ap_id, parent_ap_id.map(From::from), post_or_parent_author_ap_id.map(From::from), community_ap_id.into(), &ctx.host_url_apub)?;
+            let body = crate::apub_util::local_comment_to_create_ap(&info, &post_ap_id, parent_ap_id.map(From::from), post_or_parent_author_ap_id.map(From::from), community_ap_id.into(), &ctx)?;
 
             let body = serde_json::to_vec(&body)?.into();
 

@@ -872,6 +872,7 @@ async fn route_unstable_posts_replies_create(
         content_html: content_html.map(Cow::Owned),
         created,
         ap_id: crate::APIDOrLocal::Local,
+        attachment_href: body.attachment,
     };
 
     crate::on_post_add_comment(comment, ctx);
