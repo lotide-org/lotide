@@ -1123,18 +1123,28 @@ pub fn local_comment_to_ap(
     parent_ap_id: Option<url::Url>,
     parent_or_post_author_ap_id: Option<url::Url>,
     community_ap_id: url::Url,
-    host_url_apub: &BaseURL,
+    ctx: &crate::BaseContext,
 ) -> Result<activitystreams::object::ApObject<activitystreams::object::Note>, crate::Error> {
     let mut obj = activitystreams::object::Note::new();
 
     obj.set_context(activitystreams::context())
-        .set_id(get_local_comment_apub_id(comment.id, &host_url_apub).into())
+        .set_id(get_local_comment_apub_id(comment.id, &ctx.host_url_apub).into())
         .set_attributed_to(url::Url::from(get_local_person_apub_id(
             comment.author.unwrap(),
-            &host_url_apub,
+            &ctx.host_url_apub,
         )))
         .set_published(comment.created)
         .set_in_reply_to(parent_ap_id.unwrap_or_else(|| post_ap_id.clone()));
+
+    if let Some(attachment_href) = ctx.process_attachments_inner(
+        comment.attachment_href.as_deref().map(Cow::Borrowed),
+        comment.id,
+    ) {
+        let mut attachment = activitystreams::object::Image::new();
+        attachment.set_url(attachment_href.into_owned());
+
+        obj.add_attachment(attachment.into_any_base()?);
+    }
 
     let mut obj = activitystreams::object::ApObject::new(obj);
 
@@ -1264,7 +1274,7 @@ pub fn local_comment_to_create_ap(
     parent_ap_id: Option<url::Url>,
     parent_or_post_author_ap_id: Option<url::Url>,
     community_ap_id: url::Url,
-    host_url_apub: &BaseURL,
+    ctx: &crate::BaseContext,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
     let comment_ap = local_comment_to_ap(
         &comment,
@@ -1272,17 +1282,17 @@ pub fn local_comment_to_create_ap(
         parent_ap_id,
         parent_or_post_author_ap_id.clone(),
         community_ap_id.clone(),
-        &host_url_apub,
+        ctx,
     )?;
 
     let author = comment.author.unwrap();
 
     let mut create = activitystreams::activity::Create::new(
-        get_local_person_apub_id(author, host_url_apub),
+        get_local_person_apub_id(author, &ctx.host_url_apub),
         comment_ap.into_any_base()?,
     );
     create.set_context(activitystreams::context()).set_id({
-        let mut res = get_local_comment_apub_id(comment.id, host_url_apub);
+        let mut res = get_local_comment_apub_id(comment.id, &ctx.host_url_apub);
         res.path_segments_mut().push("create");
         res.into()
     });
@@ -1395,7 +1405,7 @@ pub fn spawn_enqueue_send_comment(
         parent_ap_id,
         post_or_parent_author_ap_id,
         community_ap_id,
-        &ctx.host_url_apub,
+        &ctx,
     );
 
     let author = comment.author.unwrap();
@@ -1503,6 +1513,30 @@ pub async fn handle_recieved_object_for_local_community<'a>(
                         require_containment(obj_id, author)?;
                     }
 
+                    // fetch first attachment
+                    let attachment_href = obj
+                        .attachment()
+                        .and_then(|x| x.iter().next())
+                        .and_then(
+                            |base: &activitystreams::base::AnyBase| match base.kind_str() {
+                                Some("Document") => Some(
+                                    activitystreams::object::Document::from_any_base(base.clone())
+                                        .map(|obj| obj.unwrap().take_url()),
+                                ),
+                                Some("Image") => Some(
+                                    activitystreams::object::Image::from_any_base(base.clone())
+                                        .map(|obj| obj.unwrap().take_url()),
+                                ),
+                                _ => None,
+                            },
+                        )
+                        .transpose()?
+                        .flatten();
+                    let attachment_href = attachment_href
+                        .as_ref()
+                        .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
+                        .map(|href| href.as_str());
+
                     handle_recieved_reply(
                         obj_id,
                         content.unwrap_or(""),
@@ -1510,6 +1544,7 @@ pub async fn handle_recieved_object_for_local_community<'a>(
                         created.as_ref(),
                         author,
                         &in_reply_to,
+                        attachment_href,
                         ctx,
                     )
                     .await?;
@@ -1623,6 +1658,30 @@ pub async fn handle_recieved_object_for_community<'a>(
             let created = obj.published();
             let author = obj.attributed_to().and_then(|x| x.as_single_id());
 
+            // fetch first attachment
+            let attachment_href = obj
+                .attachment()
+                .and_then(|x| x.iter().next())
+                .and_then(
+                    |base: &activitystreams::base::AnyBase| match base.kind_str() {
+                        Some("Document") => Some(
+                            activitystreams::object::Document::from_any_base(base.clone())
+                                .map(|obj| obj.unwrap().take_url()),
+                        ),
+                        Some("Image") => Some(
+                            activitystreams::object::Image::from_any_base(base.clone())
+                                .map(|obj| obj.unwrap().take_url()),
+                        ),
+                        _ => None,
+                    },
+                )
+                .transpose()?
+                .flatten();
+            let attachment_href = attachment_href
+                .as_ref()
+                .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
+                .map(|href| href.as_str());
+
             if let Some(object_id) = obj.id_unchecked() {
                 if let Some(in_reply_to) = obj.in_reply_to() {
                     // it's a reply
@@ -1634,6 +1693,7 @@ pub async fn handle_recieved_object_for_community<'a>(
                         created.as_ref(),
                         author,
                         in_reply_to,
+                        attachment_href,
                         ctx,
                     )
                     .await?;
@@ -1745,6 +1805,7 @@ async fn handle_recieved_reply(
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
     author: Option<&url::Url>,
     in_reply_to: &activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>,
+    attachment_href: Option<&str>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
@@ -1826,8 +1887,8 @@ async fn handle_recieved_reply(
                 };
 
                 let row = db.query_opt(
-                    "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
-                    &[&post, &parent, &author, &content_text, &content_html, &created, &object_id.as_str()],
+                    "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id, attachment_href) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7, $8) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
+                    &[&post, &parent, &author, &content_text, &content_html, &created, &object_id.as_str(), &attachment_href],
                     ).await?;
 
                 if let Some(row) = row {
@@ -1844,6 +1905,7 @@ async fn handle_recieved_reply(
                                 .with_timezone(&chrono::offset::FixedOffset::west(0))
                         }),
                         ap_id: crate::APIDOrLocal::APID(object_id.to_owned()),
+                        attachment_href: attachment_href.map(|x| Cow::Owned(x.to_owned())),
                     };
 
                     crate::on_post_add_comment(info, ctx);

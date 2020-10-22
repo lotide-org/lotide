@@ -1,5 +1,5 @@
 use super::{
-    MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    JustURL, MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
@@ -12,11 +12,11 @@ async fn get_post_comments<'a>(
     post_id: PostLocalID,
     include_your_for: Option<UserLocalID>,
     db: &tokio_postgres::Client,
-    local_hostname: &'a str,
+    ctx: &'a crate::BaseContext,
 ) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href";
     let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -54,7 +54,7 @@ async fn get_post_comments<'a>(
                     host: crate::get_actor_host_or_unknown(
                         author_local,
                         author_ap_id,
-                        &local_hostname,
+                        &ctx.local_hostname,
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
@@ -72,6 +72,12 @@ async fn get_post_comments<'a>(
                         content_html_safe: content_html.map(|html| ammonia::clean(&html)),
                     },
 
+                    attachments: match ctx
+                        .process_attachments_inner(row.get::<_, Option<_>>(10).map(Cow::Owned), id)
+                    {
+                        None => vec![],
+                        Some(href) => vec![JustURL { url: href }],
+                    },
                     author,
                     created: created.to_rfc3339(),
                     deleted: row.get(8),
@@ -79,7 +85,7 @@ async fn get_post_comments<'a>(
                     has_replies: false,
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(10) {
+                        Some(_) => Some(if row.get(11) {
                             Some(crate::Empty {})
                         } else {
                             None
@@ -91,7 +97,7 @@ async fn get_post_comments<'a>(
         .try_collect()
         .await?;
 
-    super::apply_comments_replies(&mut comments, include_your_for, 2, db, local_hostname).await?;
+    super::apply_comments_replies(&mut comments, include_your_for, 2, db, &ctx).await?;
 
     Ok(comments.into_iter().map(|(_, comment)| comment).collect())
 }
@@ -282,7 +288,7 @@ async fn route_unstable_posts_get(
             &[&post_id],
         )
         .map_err(crate::Error::from),
-        get_post_comments(post_id, include_your_for, &db, &ctx.local_hostname),
+        get_post_comments(post_id, include_your_for, &db, &ctx),
         async {
             if let Some(user) = include_your_for {
                 let row = db.query_opt("SELECT 1 FROM post_like WHERE post=$1 AND person=$2", &[&post_id, &user]).await?;
@@ -831,16 +837,26 @@ async fn route_unstable_posts_replies_create(
     struct RepliesCreateBody<'a> {
         content_text: Option<Cow<'a, str>>,
         content_markdown: Option<String>,
+        attachment: Option<Cow<'a, str>>,
     }
 
     let body: RepliesCreateBody<'_> = serde_json::from_slice(&body)?;
+
+    if let Some(attachment) = &body.attachment {
+        if !attachment.starts_with("local-media://") {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Comment attachment must be local media",
+            )));
+        }
+    }
 
     let (content_text, content_markdown, content_html) =
         super::process_comment_content(&lang, body.content_text, body.content_markdown).await?;
 
     let row = db.query_one(
-        "INSERT INTO reply (post, author, created, local, content_text, content_markdown, content_html) VALUES ($1, $2, current_timestamp, TRUE, $3, $4, $5) RETURNING id, created",
-        &[&post_id, &user, &content_text, &content_markdown, &content_html],
+        "INSERT INTO reply (post, author, created, local, content_text, content_markdown, content_html, attachment_href) VALUES ($1, $2, current_timestamp, TRUE, $3, $4, $5, $6) RETURNING id, created",
+        &[&post_id, &user, &content_text, &content_markdown, &content_html, &body.attachment],
     ).await?;
 
     let reply_id = CommentLocalID(row.get(0));
@@ -856,6 +872,7 @@ async fn route_unstable_posts_replies_create(
         content_html: content_html.map(Cow::Owned),
         created,
         ap_id: crate::APIDOrLocal::Local,
+        attachment_href: body.attachment,
     };
 
     crate::on_post_add_comment(comment, ctx);

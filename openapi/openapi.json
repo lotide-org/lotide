@@ -136,11 +136,21 @@
 			},
 			"PostCommentInfo": {
 				"type": "object",
-				"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "has_replies"],
+				"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "has_replies", "attachments"],
 				"properties": {
 					"id": {"type": "integer"},
 					"content_text": {"type": "string", "nullable": true},
 					"content_html": {"type": "string", "nullable": true},
+					"attachments": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"required": ["url"],
+							"properties": {
+								"url": {"type": "string"}
+							}
+						}
+					},
 					"author": {
 						"$ref": "#/components/schemas/NullableMinimalUserInfo"
 					},
@@ -300,7 +310,11 @@
 								"type": "object",
 								"properties": {
 									"content_text": {"type": "string"},
-									"content_markdown": {"type": "string"}
+									"content_markdown": {"type": "string"},
+									"attachment": {
+										"type": "string",
+										"description": "Must be a `local-media://` reference"
+									}
 								}
 							}
 						}
@@ -1173,7 +1187,11 @@
 								"type": "object",
 								"properties": {
 									"content_text": {"type": "string"},
-									"content_markdown": {"type": "string"}
+									"content_markdown": {"type": "string"},
+									"attachment": {
+										"type": "string",
+										"description": "Must be a `local-media://` reference"
+									}
 								}
 							}
 						}

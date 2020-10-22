@@ -117,10 +117,16 @@ struct RespMinimalCommentInfo<'a> {
 }
 
 #[derive(Serialize)]
+struct JustURL<'a> {
+    url: Cow<'a, str>,
+}
+
+#[derive(Serialize)]
 struct RespPostCommentInfo<'a> {
     #[serde(flatten)]
     base: RespMinimalCommentInfo<'a>,
 
+    attachments: Vec<JustURL<'a>>,
     author: Option<RespMinimalAuthorInfo<'a>>,
     created: String,
     deleted: bool,
@@ -546,7 +552,7 @@ async fn apply_comments_replies<'a, T>(
     include_your_for: Option<UserLocalID>,
     depth: u8,
     db: &tokio_postgres::Client,
-    local_hostname: &'a str,
+    ctx: &'a crate::BaseContext,
 ) -> Result<(), crate::Error> {
     let ids = comments
         .iter()
@@ -554,7 +560,7 @@ async fn apply_comments_replies<'a, T>(
         .collect::<Vec<_>>();
     if depth > 0 {
         let mut replies =
-            get_comments_replies_box(&ids, include_your_for, depth - 1, db, local_hostname).await?;
+            get_comments_replies_box(&ids, include_your_for, depth - 1, db, ctx).await?;
 
         for (_, comment) in comments.iter_mut() {
             let current = replies.remove(&comment.base.id).unwrap_or_else(Vec::new);
@@ -592,7 +598,7 @@ fn get_comments_replies_box<'a: 'b, 'b>(
     include_your_for: Option<UserLocalID>,
     depth: u8,
     db: &'b tokio_postgres::Client,
-    local_hostname: &'a str,
+    ctx: &'a crate::BaseContext,
 ) -> std::pin::Pin<
     Box<
         dyn Future<
@@ -609,7 +615,7 @@ fn get_comments_replies_box<'a: 'b, 'b>(
         include_your_for,
         depth,
         db,
-        local_hostname,
+        ctx,
     ))
 }
 
@@ -618,11 +624,11 @@ async fn get_comments_replies<'a>(
     include_your_for: Option<UserLocalID>,
     depth: u8,
     db: &tokio_postgres::Client,
-    local_hostname: &'a str,
+    ctx: &'a crate::BaseContext,
 ) -> Result<HashMap<CommentLocalID, Vec<RespPostCommentInfo<'a>>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href";
     let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -661,7 +667,7 @@ async fn get_comments_replies<'a>(
                     host: crate::get_actor_host_or_unknown(
                         author_local,
                         author_ap_id,
-                        &local_hostname,
+                        &ctx.local_hostname,
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
@@ -679,6 +685,12 @@ async fn get_comments_replies<'a>(
                         content_html_safe: content_html.map(|html| ammonia::clean(&html)),
                     },
 
+                    attachments: match ctx
+                        .process_attachments_inner(row.get::<_, Option<_>>(11).map(Cow::Owned), id)
+                    {
+                        None => vec![],
+                        Some(href) => vec![JustURL { url: href }],
+                    },
                     author,
                     created: created.to_rfc3339(),
                     deleted: row.get(9),
@@ -686,7 +698,7 @@ async fn get_comments_replies<'a>(
                     has_replies: false,
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(11) {
+                        Some(_) => Some(if row.get(12) {
                             Some(crate::Empty {})
                         } else {
                             None
@@ -698,7 +710,7 @@ async fn get_comments_replies<'a>(
         .try_collect()
         .await?;
 
-    apply_comments_replies(&mut comments, include_your_for, depth, db, local_hostname).await?;
+    apply_comments_replies(&mut comments, include_your_for, depth, db, &ctx).await?;
 
     let mut result = HashMap::new();
     for (parent, comment) in comments {
