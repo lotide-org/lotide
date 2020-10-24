@@ -903,19 +903,6 @@ pub fn route_posts() -> crate::RouteNode<()> {
                         .with_handler_async("GET", route_unstable_posts_href_get),
                 )
                 .with_child(
-                    "like",
-                    crate::RouteNode::new().with_handler_async("POST", route_unstable_posts_like),
-                )
-                .with_child(
-                    "likes",
-                    crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_posts_likes_list),
-                )
-                .with_child(
-                    "unlike",
-                    crate::RouteNode::new().with_handler_async("POST", route_unstable_posts_unlike),
-                )
-                .with_child(
                     "replies",
                     crate::RouteNode::new()
                         .with_handler_async("POST", route_unstable_posts_replies_create),

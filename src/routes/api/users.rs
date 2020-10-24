@@ -59,9 +59,7 @@ impl std::str::FromStr for UserIDOrMe {
     type Err = std::num::ParseIntError;
 
     fn from_str(src: &str) -> Result<Self, Self::Err> {
-        if src == "~me" || src == "me"
-        /* temporary backward compat */
-        {
+        if src == "~me" {
             Ok(UserIDOrMe::Me)
         } else {
             src.parse().map(UserIDOrMe::User)
