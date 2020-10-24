@@ -16,7 +16,7 @@ async fn get_post_comments<'a>(
 ) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local";
     let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -81,11 +81,12 @@ async fn get_post_comments<'a>(
                     author,
                     created: created.to_rfc3339(),
                     deleted: row.get(8),
+                    local: row.get(11),
                     replies: None,
                     has_replies: false,
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(11) {
+                        Some(_) => Some(if row.get(12) {
                             Some(crate::Empty {})
                         } else {
                             None
@@ -277,6 +278,7 @@ async fn route_unstable_posts_get(
         #[serde(flatten)]
         post: &'a RespPostListPost<'a>,
         approved: bool,
+        local: bool,
         replies: Vec<RespPostCommentInfo<'a>>,
     }
 
@@ -284,7 +286,7 @@ async fn route_unstable_posts_get(
 
     let (row, comments, your_vote) = futures::future::try_join3(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -367,6 +369,7 @@ async fn route_unstable_posts_get(
 
             let output = RespPostInfo {
                 post: &post,
+                local: row.get(16),
                 replies: comments,
                 approved: row.get(14),
             };
@@ -386,11 +389,11 @@ async fn route_unstable_posts_delete(
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
-    let user = crate::require_login(&req, &db).await?;
+    let login_user = crate::require_login(&req, &db).await?;
 
     let row = db
         .query_opt(
-            "SELECT author, community FROM post WHERE id=$1 AND deleted=FALSE",
+            "SELECT author, community, local FROM post WHERE id=$1 AND deleted=FALSE",
             &[&post_id],
         )
         .await?;
@@ -398,12 +401,18 @@ async fn route_unstable_posts_delete(
         None => Ok(crate::empty_response()), // already gone
         Some(row) => {
             let author = row.get::<_, Option<_>>(0).map(UserLocalID);
-            if author != Some(user) {
-                return Err(crate::Error::UserError(crate::simple_response(
-                    hyper::StatusCode::FORBIDDEN,
-                    lang.tr("post_not_yours", None).into_owned(),
-                )));
+            if author != Some(login_user) {
+                if row.get(2) && crate::is_site_admin(&db, login_user).await? {
+                    // still ok
+                } else {
+                    return Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        lang.tr("post_not_yours", None).into_owned(),
+                    )));
+                }
             }
+
+            let actor = author.unwrap_or(login_user);
 
             db.execute("UPDATE post SET had_href=(href IS NOT NULL), href=NULL, title='[deleted]', content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE id=$1", &[&post_id]).await?;
 
@@ -412,7 +421,7 @@ async fn route_unstable_posts_delete(
                 if let Some(community) = community {
                     let delete_ap = crate::apub_util::local_post_delete_to_ap(
                         post_id,
-                        user,
+                        actor,
                         &ctx.host_url_apub,
                     )?;
                     let row = db.query_one("SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox) FROM community WHERE id=$1", &[&community]).await?;
@@ -433,7 +442,7 @@ async fn route_unstable_posts_delete(
                             crate::spawn_task(async move {
                                 ctx.enqueue_task(&crate::tasks::DeliverToInbox {
                                     inbox: Cow::Owned(community_inbox.parse()?),
-                                    sign_as: Some(crate::ActorLocalRef::Person(user)),
+                                    sign_as: Some(crate::ActorLocalRef::Person(actor)),
                                     object: serde_json::to_string(&delete_ap)?,
                                 })
                                 .await

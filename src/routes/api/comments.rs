@@ -119,6 +119,7 @@ async fn route_unstable_comments_get(
                     author,
                     created: created.to_rfc3339(),
                     deleted: row.get(10),
+                    local: row.get(4),
                     has_replies: !replies.is_empty(),
                     replies: Some(replies),
                     your_vote,
@@ -144,11 +145,11 @@ async fn route_unstable_comments_delete(
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
-    let user = crate::require_login(&req, &db).await?;
+    let login_user = crate::require_login(&req, &db).await?;
 
     let row = db
         .query_opt(
-            "SELECT author, (SELECT community FROM post WHERE id=reply.post) FROM reply WHERE id=$1 AND deleted=FALSE",
+            "SELECT author, (SELECT community FROM post WHERE id=reply.post), local FROM reply WHERE id=$1 AND deleted=FALSE",
             &[&comment_id],
         )
         .await?;
@@ -156,12 +157,18 @@ async fn route_unstable_comments_delete(
         None => Ok(crate::empty_response()), // already gone
         Some(row) => {
             let author = row.get::<_, Option<_>>(0).map(UserLocalID);
-            if author != Some(user) {
-                return Err(crate::Error::UserError(crate::simple_response(
-                    hyper::StatusCode::FORBIDDEN,
-                    lang.tr("comment_not_yours", None).into_owned(),
-                )));
+            if author != Some(login_user) {
+                if row.get(2) && crate::is_site_admin(&db, login_user).await? {
+                    // still ok
+                } else {
+                    return Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        lang.tr("comment_not_yours", None).into_owned(),
+                    )));
+                }
             }
+
+            let actor = author.unwrap_or(login_user);
 
             db.execute(
                 "UPDATE reply SET content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE id=$1",
@@ -174,7 +181,7 @@ async fn route_unstable_comments_delete(
                 if let Some(community) = community {
                     let delete_ap = crate::apub_util::local_comment_delete_to_ap(
                         comment_id,
-                        user,
+                        actor,
                         &ctx.host_url_apub,
                     )?;
                     let row = db.query_one("SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox) FROM community WHERE id=$1", &[&community]).await?;
@@ -195,7 +202,7 @@ async fn route_unstable_comments_delete(
                             crate::spawn_task(async move {
                                 ctx.enqueue_task(&crate::tasks::DeliverToInbox {
                                     inbox: Cow::Owned(community_inbox.parse()?),
-                                    sign_as: Some(crate::ActorLocalRef::Person(user)),
+                                    sign_as: Some(crate::ActorLocalRef::Person(actor)),
                                     object: body,
                                 })
                                 .await

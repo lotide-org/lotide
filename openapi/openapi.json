@@ -136,7 +136,7 @@
 			},
 			"PostCommentInfo": {
 				"type": "object",
-				"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "has_replies", "attachments"],
+				"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "has_replies", "attachments", "local"],
 				"properties": {
 					"id": {"type": "integer"},
 					"content_text": {"type": "string", "nullable": true},
@@ -156,6 +156,7 @@
 					},
 					"created": {"type": "string", "format": "date-time"},
 					"deleted": {"type": "boolean"},
+					"local": {"type": "boolean"},
 					"replies": {
 						"type": "array",
 						"nullable": true,
@@ -1135,9 +1136,10 @@
 								"schema": {
 									"allOf": [{"$ref": "#/components/schemas/PostListPost"}],
 									"type": "object",
-									"required": ["approved", "replies"],
+									"required": ["approved", "local", "replies"],
 									"properties": {
 										"approved": {"type": "boolean"},
+										"local": {"type": "local"},
 										"replies": {
 											"type": "array",
 											"items": {"$ref": "#/components/schemas/PostCommentInfo"}
