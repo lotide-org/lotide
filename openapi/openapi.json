@@ -1488,7 +1488,8 @@
 								"properties": {
 									"description": {"type": "string"},
 									"email_address": {"type": "string", "format": "email"},
-									"password": {"type": "string", "format": "password"}
+									"password": {"type": "string", "format": "password"},
+									"avatar": {"type": "string", "description": "User profile image. Must be a `local-media://` link"}
 								}
 							}
 						}
