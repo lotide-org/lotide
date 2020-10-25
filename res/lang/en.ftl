@@ -29,3 +29,4 @@ post_not_yours = That's not your post
 root = lotide is running. Note that lotide itself does not include a frontend, and you'll need to install one separately.
 user_email_invalid = Specified email address is invalid
 user_name_disallowed_chars = Username contains disallowed characters
+user_no_avatar = That user does not have an avatar

@@ -118,7 +118,7 @@ async fn handler_users_get(
 
     match db
         .query_opt(
-            "SELECT username, local, public_key, description FROM person WHERE id=$1",
+            "SELECT username, local, public_key, description, avatar FROM person WHERE id=$1",
             &[&user_id.raw()],
         )
         .await?
@@ -150,6 +150,8 @@ async fn handler_users_get(
 
             let description: &str = row.get(3);
 
+            let avatar: Option<&str> = row.get(4);
+
             let user_ap_id =
                 crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
 
@@ -161,6 +163,13 @@ async fn handler_users_get(
             info.set_id(user_ap_id.deref().clone())
                 .set_name(username.as_ref())
                 .set_summary(description);
+
+            if let Some(avatar) = avatar {
+                let mut attachment = activitystreams::object::Image::new();
+                attachment.set_url(ctx.process_avatar_href(avatar, user_id).into_owned());
+
+                info.set_icon(attachment.into_any_base()?);
+            }
 
             let endpoints = activitystreams::actor::Endpoints {
                 shared_inbox: Some(

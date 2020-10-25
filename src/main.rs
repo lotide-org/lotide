@@ -182,6 +182,18 @@ impl BaseContext {
             None => None,
         }
     }
+
+    pub fn process_avatar_href<'a>(&self, href: &'a str, user_id: UserLocalID) -> Cow<'a, str> {
+        if href.starts_with("local-media://") {
+            format!(
+                "{}/unstable/users/{}/avatar/href",
+                self.host_url_api, user_id,
+            )
+            .into()
+        } else {
+            href.into()
+        }
+    }
 }
 
 pub struct RouteContext {
