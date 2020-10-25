@@ -1139,7 +1139,7 @@
 									"required": ["approved", "local", "replies"],
 									"properties": {
 										"approved": {"type": "boolean"},
-										"local": {"type": "local"},
+										"local": {"type": "boolean"},
 										"replies": {
 											"type": "array",
 											"items": {"$ref": "#/components/schemas/PostCommentInfo"}
