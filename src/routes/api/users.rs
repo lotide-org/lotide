@@ -705,9 +705,11 @@ async fn route_unstable_users_things_list(
                 let community_local = row.get(7);
                 let community_ap_id = row.get(8);
 
+                let post_id = PostLocalID(row.get(1));
+
                 RespThingInfo::Post {
-                    id: PostLocalID(row.get(1)),
-                    href: row.get(2),
+                    id: post_id,
+                    href: ctx.process_href_opt(row.get(2), post_id),
                     title: row.get(3),
                     created,
                     community: RespMinimalCommunityInfo {

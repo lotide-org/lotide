@@ -143,7 +143,7 @@ enum RespThingInfo<'a> {
     #[serde(rename = "post")]
     Post {
         id: PostLocalID,
-        href: Option<&'a str>,
+        href: Option<Cow<'a, str>>,
         title: &'a str,
         created: String,
         community: RespMinimalCommunityInfo<'a>,
