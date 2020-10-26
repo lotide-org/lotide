@@ -8,6 +8,11 @@ use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
+struct MeOrAdminResult {
+    pub login_user: UserLocalID,
+    pub target_user: UserLocalID,
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum UserIDOrMe {
     User(UserLocalID),
@@ -48,6 +53,33 @@ impl UserIDOrMe {
                     Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::FORBIDDEN,
                         "This endpoint is only available for the current user",
+                    )))
+                }
+            }
+        }
+    }
+
+    pub async fn require_me_or_admin(
+        self,
+        req: &hyper::Request<hyper::Body>,
+        db: &tokio_postgres::Client,
+    ) -> Result<MeOrAdminResult, crate::Error> {
+        let login_user = crate::require_login(req, db).await?;
+        match self {
+            UserIDOrMe::Me => Ok(MeOrAdminResult {
+                login_user,
+                target_user: login_user,
+            }),
+            UserIDOrMe::User(target_user) => {
+                if target_user == login_user || crate::is_site_admin(db, login_user).await? {
+                    Ok(MeOrAdminResult {
+                        login_user,
+                        target_user,
+                    })
+                } else {
+                    Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        "You do not have permission to do that",
                     )))
                 }
             }
@@ -180,7 +212,8 @@ async fn route_unstable_users_patch(
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
-    let user_id = params.0.require_me(&req, &db).await?;
+    let me_or_admin = params.0.require_me_or_admin(&req, &db).await?;
+    let user_id = me_or_admin.target_user;
 
     #[derive(Deserialize)]
     struct UsersEditBody<'a> {
