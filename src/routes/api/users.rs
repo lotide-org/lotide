@@ -8,9 +8,32 @@ use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::sync::Arc;
 
-struct MeOrAdminResult {
+struct MeOrLocalAndAdminResult {
     pub login_user: UserLocalID,
     pub target_user: UserLocalID,
+    is_admin: Option<bool>,
+}
+
+impl MeOrLocalAndAdminResult {
+    pub async fn require_admin(
+        &self,
+        db: &tokio_postgres::Client,
+        lang: &crate::Translator,
+    ) -> Result<(), crate::Error> {
+        let is_admin = match self.is_admin {
+            Some(value) => value,
+            None => crate::is_site_admin(db, self.login_user).await?,
+        };
+
+        if is_admin {
+            Ok(())
+        } else {
+            Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::FORBIDDEN,
+                lang.tr("not_admin", None).into_owned(),
+            )))
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -59,22 +82,32 @@ impl UserIDOrMe {
         }
     }
 
-    pub async fn require_me_or_admin(
+    pub async fn require_me_or_local_and_admin(
         self,
         req: &hyper::Request<hyper::Body>,
         db: &tokio_postgres::Client,
-    ) -> Result<MeOrAdminResult, crate::Error> {
+    ) -> Result<MeOrLocalAndAdminResult, crate::Error> {
         let login_user = crate::require_login(req, db).await?;
         match self {
-            UserIDOrMe::Me => Ok(MeOrAdminResult {
+            UserIDOrMe::Me => Ok(MeOrLocalAndAdminResult {
                 login_user,
                 target_user: login_user,
+                is_admin: None,
             }),
             UserIDOrMe::User(target_user) => {
-                if target_user == login_user || crate::is_site_admin(db, login_user).await? {
-                    Ok(MeOrAdminResult {
+                if target_user == login_user {
+                    Ok(MeOrLocalAndAdminResult {
                         login_user,
                         target_user,
+                        is_admin: None,
+                    })
+                } else if crate::is_site_admin(db, login_user).await?
+                    && crate::is_local_user(db, target_user).await?
+                {
+                    Ok(MeOrLocalAndAdminResult {
+                        login_user,
+                        target_user,
+                        is_admin: Some(true),
                     })
                 } else {
                     Err(crate::Error::UserError(crate::simple_response(
@@ -110,6 +143,8 @@ struct RespUserInfo<'a> {
     base: RespMinimalAuthorInfo<'a>,
 
     description: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suspended: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     your_note: Option<Option<JustContentText<'a>>>,
 }
@@ -210,9 +245,9 @@ async fn route_unstable_users_patch(
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let lang = crate::get_lang_for_req(&req);
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
-    let me_or_admin = params.0.require_me_or_admin(&req, &db).await?;
+    let me_or_admin = params.0.require_me_or_local_and_admin(&req, &db).await?;
     let user_id = me_or_admin.target_user;
 
     #[derive(Deserialize)]
@@ -221,6 +256,7 @@ async fn route_unstable_users_patch(
         email_address: Option<Cow<'a, str>>,
         password: Option<String>,
         avatar: Option<Cow<'a, str>>,
+        suspended: Option<bool>,
     }
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
@@ -260,6 +296,11 @@ async fn route_unstable_users_patch(
 
         changes.push(("avatar", avatar));
     }
+    if let Some(suspended) = &body.suspended {
+        me_or_admin.require_admin(&db, &lang).await?;
+
+        changes.push(("suspended", suspended));
+    }
 
     if !changes.is_empty() {
         use std::fmt::Write;
@@ -286,7 +327,17 @@ async fn route_unstable_users_patch(
 
         let sql: &str = &sql;
 
-        db.execute(sql, &values).await?;
+        let trans = db.transaction().await?;
+        trans.execute(sql, &values).await?;
+        if body.suspended == Some(true) {
+            // just suspended, need to clear out current logins
+
+            trans
+                .execute("DELETE FROM login WHERE person=$1", &[&user_id])
+                .await?;
+        }
+
+        trans.commit().await?;
     }
 
     Ok(crate::empty_response())
@@ -565,7 +616,7 @@ async fn route_unstable_users_get(
 
     let row = db
         .query_opt(
-            "SELECT username, local, ap_id, description, avatar FROM person WHERE id=$1",
+            "SELECT username, local, ap_id, description, avatar, suspended FROM person WHERE id=$1",
             &[&user_id],
         )
         .await?;
@@ -595,6 +646,7 @@ async fn route_unstable_users_get(
     let info = RespUserInfo {
         base: info,
         description: row.get(3),
+        suspended: if local { Some(row.get(5)) } else { None },
         your_note,
     };
 

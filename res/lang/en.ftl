@@ -30,3 +30,4 @@ root = lotide is running. Note that lotide itself does not include a frontend, a
 user_email_invalid = Specified email address is invalid
 user_name_disallowed_chars = Username contains disallowed characters
 user_no_avatar = That user does not have an avatar
+user_suspended_error = This account has been suspended

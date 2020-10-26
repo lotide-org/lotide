@@ -653,6 +653,16 @@ pub async fn is_site_admin(db: &tokio_postgres::Client, user: UserLocalID) -> Re
     })
 }
 
+pub async fn is_local_user(db: &tokio_postgres::Client, user: UserLocalID) -> Result<bool, Error> {
+    let row = db
+        .query_opt("SELECT local FROM person WHERE id=$1", &[&user])
+        .await?;
+    Ok(match row {
+        None => false,
+        Some(row) => row.get(0),
+    })
+}
+
 pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 'static>(task: F) {
     use futures::future::TryFutureExt;
     tokio::spawn(task.map_err(|err| {

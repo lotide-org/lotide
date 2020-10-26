@@ -342,7 +342,7 @@ async fn route_unstable_logins_create(
 
     let row = db
         .query_opt(
-            "SELECT id, username, passhash, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications) FROM person WHERE LOWER(username)=LOWER($1) AND local",
+            "SELECT id, username, passhash, is_site_admin, suspended, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications) FROM person WHERE LOWER(username)=LOWER($1) AND local",
             &[&body.username],
         )
         .await?
@@ -371,6 +371,13 @@ async fn route_unstable_logins_create(
             .await??;
 
     if correct {
+        if row.get(4) {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::FORBIDDEN,
+                lang.tr("user_suspended_error", None).into_owned(),
+            )));
+        }
+
         let token = insert_token(id, &db).await?;
 
         crate::json_response(
@@ -378,7 +385,7 @@ async fn route_unstable_logins_create(
                 id,
                 username,
                 is_site_admin: row.get(3),
-                has_unread_notifications: row.get(4),
+                has_unread_notifications: row.get(5),
             }}),
         )
     } else {
@@ -526,12 +533,7 @@ async fn route_unstable_instance_patch(
 
     let user = crate::require_login(&req_parts, &db).await?;
 
-    let is_site_admin: bool = {
-        let row = db
-            .query_one("SELECT is_site_admin FROM person WHERE id=$1", &[&user])
-            .await?;
-        row.get(0)
-    };
+    let is_site_admin = crate::is_site_admin(&db, user).await?;
 
     if is_site_admin {
         if let Some(description) = body.description {
