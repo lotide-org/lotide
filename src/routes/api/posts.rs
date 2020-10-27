@@ -108,7 +108,16 @@ async fn route_unstable_posts_list(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    #[derive(Deserialize)]
+    struct PostsListQuery<'a> {
+        #[serde(default)]
+        search: Option<Cow<'a, str>>,
+
+        #[serde(default)]
+        include_your: bool,
+    }
+
+    let query: PostsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
     let db = ctx.db_pool.get().await?;
 
@@ -121,17 +130,25 @@ async fn route_unstable_posts_list(
 
     let limit: i64 = 30;
 
+    let mut sql = String::from("SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id)");
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&limit];
 
-    let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id){} FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
-        if let Some(user) = &include_your_for {
-            values.push(user);
-            ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$2)"
-        } else {
-            ""
-        },
+    if let Some(user) = &include_your_for {
+        values.push(user);
+        sql.push_str(", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$2)");
+    }
+    sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE");
+    if let Some(search) = &query.search {
+        use std::fmt::Write;
+
+        values.push(search);
+        write!(sql, " AND to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')) @@ plainto_tsquery('english', ${})", values.len()).unwrap();
+    }
+    sql.push_str(
+        " ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
     );
+
+    let sql: &str = &sql;
 
     let stream = crate::query_stream(&db, sql, &values).await?;
 
