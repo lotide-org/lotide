@@ -147,7 +147,7 @@ pub struct BaseContext {
 impl BaseContext {
     pub fn process_href<'a>(&self, href: &'a str, post_id: PostLocalID) -> Cow<'a, str> {
         if href.starts_with("local-media://") {
-            format!("{}/unstable/posts/{}/href", self.host_url_api, post_id).into()
+            format!("{}/stable/posts/{}/href", self.host_url_api, post_id).into()
         } else {
             href.into()
         }
@@ -172,7 +172,7 @@ impl BaseContext {
         match href {
             Some(href) => Some(if href.starts_with("local-media://") {
                 format!(
-                    "{}/unstable/comments/{}/attachments/0/href",
+                    "{}/stable/comments/{}/attachments/0/href",
                     self.host_url_api, comment_id
                 )
                 .into()
@@ -185,11 +185,7 @@ impl BaseContext {
 
     pub fn process_avatar_href<'a>(&self, href: &'a str, user_id: UserLocalID) -> Cow<'a, str> {
         if href.starts_with("local-media://") {
-            format!(
-                "{}/unstable/users/{}/avatar/href",
-                self.host_url_api, user_id,
-            )
-            .into()
+            format!("{}/stable/users/{}/avatar/href", self.host_url_api, user_id,).into()
         } else {
             href.into()
         }
