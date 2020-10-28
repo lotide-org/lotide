@@ -58,7 +58,7 @@ async fn get_post_comments<'a>(
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
-                        url: url.to_owned().into(),
+                        url: ctx.process_avatar_href(url, author_id).into_owned().into(),
                     }),
                 }
             });
@@ -324,11 +324,12 @@ async fn route_unstable_posts_get(
 
             let author = match row.get(10) {
                 Some(author_username) => {
+                    let author_id = UserLocalID(row.get(0));
                     let author_local = row.get(11);
                     let author_ap_id = row.get(12);
                     let author_avatar: Option<&str> = row.get(15);
                     Some(RespMinimalAuthorInfo {
-                        id: UserLocalID(row.get(0)),
+                        id: author_id,
                         username: Cow::Borrowed(author_username),
                         local: author_local,
                         host: crate::get_actor_host_or_unknown(
@@ -337,7 +338,9 @@ async fn route_unstable_posts_get(
                             &ctx.local_hostname,
                         ),
                         remote_url: author_ap_id.map(From::from),
-                        avatar: author_avatar.map(|url| RespAvatarInfo { url: url.into() }),
+                        avatar: author_avatar.map(|url| RespAvatarInfo {
+                            url: ctx.process_avatar_href(url, author_id),
+                        }),
                     })
                 }
                 None => None,
@@ -634,7 +637,9 @@ async fn route_unstable_posts_likes_list(
                     local,
                     host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
                     remote_url: ap_id.map(From::from),
-                    avatar: avatar.map(|url| RespAvatarInfo { url: url.into() }),
+                    avatar: avatar.map(|url| RespAvatarInfo {
+                        url: ctx.process_avatar_href(url, id),
+                    }),
                 },
             }
         })

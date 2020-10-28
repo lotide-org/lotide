@@ -361,18 +361,19 @@ async fn route_unstable_communities_moderators_list(
     let output: Vec<_> = rows
         .iter()
         .map(|row| {
+            let id = UserLocalID(row.get(0));
             let local = row.get(2);
             let ap_id = row.get(3);
 
             RespMinimalAuthorInfo {
-                id: UserLocalID(row.get(0)),
+                id,
                 username: Cow::Borrowed(row.get(1)),
                 local,
                 host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
                 remote_url: ap_id.map(|x| x.into()),
-                avatar: row
-                    .get::<_, Option<&str>>(4)
-                    .map(|url| RespAvatarInfo { url: url.into() }),
+                avatar: row.get::<_, Option<&str>>(4).map(|url| RespAvatarInfo {
+                    url: ctx.process_avatar_href(url, id),
+                }),
             }
         })
         .collect();
@@ -633,7 +634,9 @@ async fn route_unstable_communities_posts_list(
                         }
                     },
                     remote_url: author_ap_id.map(From::from),
-                    avatar: author_avatar.map(|url| RespAvatarInfo { url: url.into() }),
+                    avatar: author_avatar.map(|url| RespAvatarInfo {
+                        url: ctx.process_avatar_href(url, id),
+                    }),
                 }
             });
 

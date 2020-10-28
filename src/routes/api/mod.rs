@@ -680,7 +680,7 @@ async fn get_comments_replies<'a>(
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
-                        url: url.to_owned().into(),
+                        url: ctx.process_avatar_href(url, author_id).into_owned().into(),
                     }),
                 }
             });
@@ -790,7 +790,7 @@ async fn handle_common_posts_list(
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
-                        url: url.to_owned().into(),
+                        url: ctx.process_avatar_href(url, id).into_owned().into(),
                     }),
                 }
             });
