@@ -6,6 +6,7 @@ use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::fmt::Write;
 use std::sync::Arc;
 
 async fn get_post_comments<'a>(
@@ -109,16 +110,39 @@ async fn route_unstable_posts_list(
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     #[derive(Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum PostsListExtraSortType {
+        Relevant,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum PostsListSortType {
+        Normal(super::SortType),
+        Extra(PostsListExtraSortType),
+    }
+
+    impl Default for PostsListSortType {
+        fn default() -> Self {
+            Self::Normal(super::SortType::Hot)
+        }
+    }
+
+    #[derive(Deserialize)]
     struct PostsListQuery<'a> {
         #[serde(default)]
         search: Option<Cow<'a, str>>,
 
         #[serde(default)]
         include_your: bool,
+
+        #[serde(default)]
+        sort: PostsListSortType,
     }
 
     let query: PostsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
+    let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
     let include_your_for = if query.include_your {
@@ -127,6 +151,8 @@ async fn route_unstable_posts_list(
     } else {
         None
     };
+
+    let mut search_value_idx = None;
 
     let limit: i64 = 30;
 
@@ -139,14 +165,25 @@ async fn route_unstable_posts_list(
     }
     sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE");
     if let Some(search) = &query.search {
-        use std::fmt::Write;
-
         values.push(search);
+        search_value_idx = Some(values.len());
         write!(sql, " AND to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')) @@ plainto_tsquery('english', ${})", values.len()).unwrap();
     }
-    sql.push_str(
-        " ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
-    );
+    sql.push_str(" ORDER BY ");
+    match query.sort {
+        PostsListSortType::Normal(ty) => sql.push_str(ty.post_sort_sql()),
+        PostsListSortType::Extra(PostsListExtraSortType::Relevant) => {
+            if let Some(search_value_idx) = search_value_idx {
+                write!(sql, "ts_rank_cd(to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')), plainto_tsquery('english', ${}))", search_value_idx).unwrap();
+            } else {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    lang.tr("sort_relevant_not_search", None).into_owned(),
+                )));
+            }
+        }
+    }
+    sql.push_str(" LIMIT $1");
 
     let sql: &str = &sql;
 

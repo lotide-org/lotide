@@ -27,6 +27,7 @@ post_needs_content = Post must contain one of href, content_text, or content_mar
 post_not_in_community = That post is not in this community
 post_not_yours = That's not your post
 root = lotide is running. Note that lotide itself does not include a frontend, and you'll need to install one separately.
+sort_relevant_not_search = Sorting by relevance is only allowed when searching
 user_email_invalid = Specified email address is invalid
 user_name_disallowed_chars = Username contains disallowed characters
 user_no_avatar = That user does not have an avatar
