@@ -5,7 +5,7 @@ use std::borrow::Cow;
 #[async_trait]
 pub trait TaskDef: Serialize + std::fmt::Debug + Sync {
     const KIND: &'static str;
-    const MAX_ATTEMPTS: i16 = 3;
+    const MAX_ATTEMPTS: i16 = 8;
     async fn perform(self, ctx: &crate::BaseContext) -> Result<(), crate::Error>;
 }
 
