@@ -16,7 +16,7 @@ async fn get_post_comments<'a>(
 ) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
     let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -84,9 +84,10 @@ async fn get_post_comments<'a>(
                     local: row.get(11),
                     replies: None,
                     has_replies: false,
+                    score: row.get(12),
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(12) {
+                        Some(_) => Some(if row.get(13) {
                             Some(crate::Empty {})
                         } else {
                             None

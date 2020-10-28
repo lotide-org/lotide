@@ -134,6 +134,7 @@ struct RespPostCommentInfo<'a> {
     local: bool,
     replies: Option<Vec<RespPostCommentInfo<'a>>>,
     has_replies: bool,
+    score: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     your_vote: Option<Option<crate::Empty>>,
 }
@@ -636,7 +637,7 @@ async fn get_comments_replies<'a>(
 ) -> Result<HashMap<CommentLocalID, Vec<RespPostCommentInfo<'a>>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
     let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -705,9 +706,10 @@ async fn get_comments_replies<'a>(
                     local: row.get(12),
                     replies: None,
                     has_replies: false,
+                    score: row.get(13),
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(13) {
+                        Some(_) => Some(if row.get(14) {
                             Some(crate::Empty {})
                         } else {
                             None

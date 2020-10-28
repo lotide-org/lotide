@@ -39,7 +39,7 @@ async fn route_unstable_comments_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id) FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
             &[&comment_id],
         )
         .map_err(crate::Error::from),
@@ -122,6 +122,7 @@ async fn route_unstable_comments_get(
                     local: row.get(4),
                     has_replies: !replies.is_empty(),
                     replies: Some(replies),
+                    score: row.get(14),
                     your_vote,
                 },
                 parent: row.get::<_, Option<_>>(11).map(|id| super::JustID {
