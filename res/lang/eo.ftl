@@ -2,6 +2,7 @@ comment_content_conflict = Precize unu el content_markdown kaj content_text deva
 comment_empty = Komento ne rajtas malpleni
 comment_not_yours = Tio ne estas via komento
 community_edit_denied = Vi ne rajtas ŝanĝi ĉi tiun komunumo
+community_moderators_not_local = Nur povas listigi kontrolantojn de loka komunumoj
 community_name_disallowed_chars = Nomo enhavas malpermesitajn signojn
 email_content_forgot_password = Saluton { $username }, se vi petis rekomencigo de pasvorto de lotide, uzu ĉi tiun kodon: { $key }
 email_not_configured = Retpoŝto ne estas ŝaltita en ĉi tiu servilo

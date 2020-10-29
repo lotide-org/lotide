@@ -341,7 +341,7 @@ async fn route_unstable_communities_moderators_list(
 
     ({
         let row = db
-            .query_opt("SELECT 1 FROM community WHERE id=$1", &[&community_id])
+            .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
             .await?;
 
         match row {
@@ -349,7 +349,16 @@ async fn route_unstable_communities_moderators_list(
                 hyper::StatusCode::NOT_FOUND,
                 lang.tr("no_such_community", None).into_owned(),
             ))),
-            Some(_) => Ok(()),
+            Some(row) => {
+                if row.get(0) {
+                    Ok(())
+                } else {
+                    Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::NOT_FOUND,
+                        lang.tr("community_moderators_not_local", None).into_owned(),
+                    )))
+                }
+            }
         }
     })?;
 
