@@ -1791,7 +1791,7 @@ async fn handle_recieved_post(
     if community_is_local {
         if let Some(row) = row {
             let post_local_id = PostLocalID(row.get(0));
-            crate::on_community_add_post(community_local_id, post_local_id, object_id, ctx);
+            crate::on_local_community_add_post(community_local_id, post_local_id, object_id, ctx);
         }
     }
 

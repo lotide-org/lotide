@@ -674,7 +674,7 @@ pub fn render_markdown(src: &str) -> String {
     output
 }
 
-pub fn on_community_add_post(
+pub fn on_local_community_add_post(
     community: CommunityLocalID,
     post_local_id: PostLocalID,
     post_ap_id: url::Url,
@@ -684,7 +684,7 @@ pub fn on_community_add_post(
     crate::apub_util::spawn_announce_community_post(community, post_local_id, post_ap_id, ctx);
 }
 
-pub fn on_community_add_comment(
+pub fn on_local_community_add_comment(
     community: CommunityLocalID,
     comment_local_id: CommentLocalID,
     comment_ap_id: url::Url,
@@ -733,9 +733,9 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
             }
         ).await?;
 
-        if let Some(row) = res.0 {
-            let community_local: bool = row.get(1);
-            let post_local: bool = row.get(4);
+        if let Some(post_row) = res.0 {
+            let community_local: bool = post_row.get(1);
+            let post_local: bool = post_row.get(4);
 
             let post_ap_id = if post_local {
                 Some(crate::apub_util::get_local_post_apub_id(
@@ -743,7 +743,8 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                     &ctx.host_url_apub,
                 ))
             } else {
-                row.get::<_, Option<&str>>(5)
+                post_row
+                    .get::<_, Option<&str>>(5)
                     .map(std::str::FromStr::from_str)
                     .transpose()?
             };
@@ -764,7 +765,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                 post_or_parent_author_ap_inbox,
             ) = match comment.parent {
                 None => {
-                    let author_id = UserLocalID(row.get(6));
+                    let author_id = UserLocalID(post_row.get(6));
                     if post_local {
                         (
                             None,
@@ -781,11 +782,13 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             None,
                             Some(author_id),
                             Some(false),
-                            row.get::<_, Option<_>>(7)
+                            post_row
+                                .get::<_, Option<_>>(7)
                                 .map(std::str::FromStr::from_str)
                                 .transpose()?
                                 .map(Cow::Owned),
-                            row.get::<_, Option<_>>(8)
+                            post_row
+                                .get::<_, Option<_>>(8)
                                 .map(std::str::FromStr::from_str)
                                 .transpose()?
                                 .map(Cow::Owned),
@@ -852,33 +855,50 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                 }
             }
 
+            // should always be Some
             if let Some(post_ap_id) = post_ap_id {
+                let community_id = CommunityLocalID(post_row.get(0));
                 if community_local {
-                    let community = CommunityLocalID(row.get(0));
-                    crate::on_community_add_comment(community, comment.id, comment_ap_id, ctx);
-                } else if comment.ap_id == APIDOrLocal::Local {
-                    let community_ap_id = std::str::FromStr::from_str(row.get(2))?;
-                    let community_inbox = std::str::FromStr::from_str(row.get(3))?;
+                    crate::on_local_community_add_comment(
+                        community_id,
+                        comment.id,
+                        comment_ap_id,
+                        ctx.clone(),
+                    );
+                }
+                if comment.ap_id == APIDOrLocal::Local {
                     let mut inboxes = HashSet::new();
 
-                    inboxes.insert(community_inbox);
+                    if !community_local {
+                        let community_inbox = std::str::FromStr::from_str(post_row.get(3))?;
+                        inboxes.insert(community_inbox);
+                    }
 
-                    if post_or_parent_author_local == Some(true) {
+                    if post_or_parent_author_local == Some(false) {
                         if let Some(post_or_parent_author_ap_inbox) = post_or_parent_author_ap_inbox
                         {
                             inboxes.insert(post_or_parent_author_ap_inbox.into_owned());
                         }
                     }
 
-                    crate::apub_util::spawn_enqueue_send_comment(
-                        inboxes,
-                        comment,
-                        community_ap_id,
-                        post_ap_id.into(),
-                        parent_ap_id.map(|x| x.deref().clone()),
-                        post_or_parent_author_ap_id.map(|x| x.into_owned().into()),
-                        ctx,
-                    );
+                    if !inboxes.is_empty() {
+                        let community_ap_id = if community_local {
+                            apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub)
+                                .into()
+                        } else {
+                            std::str::FromStr::from_str(post_row.get(2))?
+                        };
+
+                        crate::apub_util::spawn_enqueue_send_comment(
+                            inboxes,
+                            comment,
+                            community_ap_id,
+                            post_ap_id.into(),
+                            parent_ap_id.map(|x| x.deref().clone()),
+                            post_or_parent_author_ap_id.map(|x| x.into_owned().into()),
+                            ctx,
+                        );
+                    }
                 }
             }
         }

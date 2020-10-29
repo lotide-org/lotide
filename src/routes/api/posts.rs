@@ -239,7 +239,7 @@ async fn route_unstable_posts_create(
 
     crate::spawn_task(async move {
         if community_local {
-            crate::on_community_add_post(
+            crate::on_local_community_add_post(
                 post.community,
                 post.id,
                 crate::apub_util::get_local_post_apub_id(post.id, &ctx.host_url_apub).into(),
