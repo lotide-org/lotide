@@ -1132,6 +1132,13 @@
 						"in": "query",
 						"required": false,
 						"schema": {"$ref": "#/components/schemas/SortType"}
+					},
+					{
+						"name": "replies_linear",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"},
+						"description": "If true, will return replies in a linear form rather than nesting"
 					}
 				],
 				"responses": {

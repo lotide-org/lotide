@@ -12,12 +12,18 @@ async fn get_post_comments<'a>(
     post_id: PostLocalID,
     include_your_for: Option<UserLocalID>,
     sort: super::SortType,
+    linear: bool,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
     use futures::TryStreamExt;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
+    let sql0 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.parent";
+    let sql1 = if linear {
+        ", EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id)"
+    } else {
+        ""
+    };
     let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -27,9 +33,13 @@ async fn get_post_comments<'a>(
         } else {
             ("", vec![&post_id])
         };
-    let sql3 = format!(" FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY {}", sort.comment_sort_sql());
+    let sql3 = format!(" FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND {} ORDER BY {}", if linear {
+        "deleted = FALSE"
+    } else {
+        "parent IS NULL"
+    }, sort.comment_sort_sql());
 
-    let sql: &str = &format!("{}{}{}", sql1, sql2, sql3);
+    let sql: &str = &format!("{}{}{}{}", sql0, sql1, sql2, sql3);
 
     let stream = crate::query_stream(db, sql, &values[..]).await?;
 
@@ -84,11 +94,11 @@ async fn get_post_comments<'a>(
                     deleted: row.get(8),
                     local: row.get(11),
                     replies: None,
-                    has_replies: false,
+                    has_replies: linear && row.get(14), // for non-linear, will be reassigned later
                     score: row.get(12),
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(13) {
+                        Some(_) => Some(if row.get(14 + if linear { 1 } else { 0 }) {
                             Some(crate::Empty {})
                         } else {
                             None
@@ -100,7 +110,9 @@ async fn get_post_comments<'a>(
         .try_collect()
         .await?;
 
-    super::apply_comments_replies(&mut comments, include_your_for, 2, db, &ctx).await?;
+    if !linear {
+        super::apply_comments_replies(&mut comments, include_your_for, 2, db, &ctx).await?;
+    }
 
     Ok(comments.into_iter().map(|(_, comment)| comment).collect())
 }
@@ -273,6 +285,8 @@ async fn route_unstable_posts_get(
         include_your: bool,
         #[serde(default = "default_sort")]
         replies_sort: super::SortType,
+        #[serde(default)]
+        replies_linear: bool,
     }
 
     let query: PostsGetQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -304,7 +318,7 @@ async fn route_unstable_posts_get(
             &[&post_id],
         )
         .map_err(crate::Error::from),
-        get_post_comments(post_id, include_your_for, query.replies_sort, &db, &ctx),
+        get_post_comments(post_id, include_your_for, query.replies_sort, query.replies_linear, &db, &ctx),
         async {
             if let Some(user) = include_your_for {
                 let row = db.query_opt("SELECT 1 FROM post_like WHERE post=$1 AND person=$2", &[&post_id, &user]).await?;
