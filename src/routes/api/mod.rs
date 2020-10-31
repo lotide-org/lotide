@@ -27,6 +27,7 @@ lazy_static::lazy_static! {
 enum SortType {
     Hot,
     New,
+    Old,
 }
 
 impl SortType {
@@ -34,6 +35,7 @@ impl SortType {
         match self {
             SortType::Hot => "hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC",
             SortType::New => "post.created DESC",
+            SortType::Old => "post.created ASC",
         }
     }
 
@@ -41,6 +43,7 @@ impl SortType {
         match self {
             SortType::Hot => "hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC",
             SortType::New => "reply.created DESC",
+            SortType::Old => "reply.created ASC",
         }
     }
 }
