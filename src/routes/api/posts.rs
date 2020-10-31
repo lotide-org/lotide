@@ -11,6 +11,7 @@ use std::sync::Arc;
 async fn get_post_comments<'a>(
     post_id: PostLocalID,
     include_your_for: Option<UserLocalID>,
+    sort: super::SortType,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
@@ -26,7 +27,7 @@ async fn get_post_comments<'a>(
         } else {
             ("", vec![&post_id])
         };
-    let sql3 = " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC";
+    let sql3 = format!(" FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY {}", sort.comment_sort_sql());
 
     let sql: &str = &format!("{}{}{}", sql1, sql2, sql3);
 
@@ -262,7 +263,19 @@ async fn route_unstable_posts_get(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     use futures::future::TryFutureExt;
 
-    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    fn default_sort() -> super::SortType {
+        super::SortType::Hot
+    }
+
+    #[derive(Deserialize)]
+    struct PostsGetQuery {
+        #[serde(default)]
+        include_your: bool,
+        #[serde(default = "default_sort")]
+        replies_sort: super::SortType,
+    }
+
+    let query: PostsGetQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
@@ -291,7 +304,7 @@ async fn route_unstable_posts_get(
             &[&post_id],
         )
         .map_err(crate::Error::from),
-        get_post_comments(post_id, include_your_for, &db, &ctx),
+        get_post_comments(post_id, include_your_for, query.replies_sort, &db, &ctx),
         async {
             if let Some(user) = include_your_for {
                 let row = db.query_opt("SELECT 1 FROM post_like WHERE post=$1 AND person=$2", &[&post_id, &user]).await?;

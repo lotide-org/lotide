@@ -1126,6 +1126,12 @@
 						"in": "query",
 						"required": false,
 						"schema": {"type": "boolean"}
+					},
+					{
+						"name": "replies_sort",
+						"in": "query",
+						"required": false,
+						"schema": {"$ref": "#/components/schemas/SortType"}
 					}
 				],
 				"responses": {

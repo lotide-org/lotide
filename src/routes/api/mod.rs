@@ -36,6 +36,13 @@ impl SortType {
             SortType::New => "post.created DESC",
         }
     }
+
+    pub fn comment_sort_sql(&self) -> &'static str {
+        match self {
+            SortType::Hot => "hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC",
+            SortType::New => "reply.created DESC",
+        }
+    }
 }
 
 #[derive(Serialize)]
