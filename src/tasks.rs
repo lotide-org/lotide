@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::sync::Arc;
 
 #[async_trait]
 pub trait TaskDef: Serialize + std::fmt::Debug + Sync {
     const KIND: &'static str;
     const MAX_ATTEMPTS: i16 = 8;
-    async fn perform(self, ctx: &crate::BaseContext) -> Result<(), crate::Error>;
+    async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error>;
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -20,7 +21,7 @@ pub struct DeliverToInbox<'a> {
 impl<'a> TaskDef for DeliverToInbox<'a> {
     const KIND: &'static str = "deliver_to_inbox";
 
-    async fn perform(self, ctx: &crate::BaseContext) -> Result<(), crate::Error> {
+    async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
         let db = ctx.db_pool.get().await?;
 
         let signing_info: Option<(_, _)> = match self.sign_as {
@@ -75,7 +76,7 @@ pub struct DeliverToFollowers {
 impl TaskDef for DeliverToFollowers {
     const KIND: &'static str = "deliver_to_followers";
 
-    async fn perform(self, ctx: &crate::BaseContext) -> Result<(), crate::Error> {
+    async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
         let community_id = match self.actor {
             crate::ActorLocalRef::Community(id) => id,
             crate::ActorLocalRef::Person(_) => return Ok(()), // We don't have user followers at this point
@@ -101,10 +102,8 @@ pub struct FetchActor<'a> {
 impl<'a> TaskDef for FetchActor<'a> {
     const KIND: &'static str = "fetch_actor";
 
-    async fn perform(self, ctx: &crate::BaseContext) -> Result<(), crate::Error> {
-        let db = ctx.db_pool.get().await?;
-
-        crate::apub_util::fetch_actor(&self.actor_ap_id, &db, &ctx.http_client).await?;
+    async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
+        crate::apub_util::fetch_actor(&self.actor_ap_id, ctx).await?;
 
         Ok(())
     }

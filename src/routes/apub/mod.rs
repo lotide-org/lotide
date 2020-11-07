@@ -229,13 +229,7 @@ async fn inbox_common(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let db = ctx.db_pool.get().await?;
 
-    let object = crate::apub_util::verify_incoming_object(
-        req,
-        &db,
-        &ctx.http_client,
-        ctx.apub_proxy_rewrites,
-    )
-    .await?;
+    let object = crate::apub_util::verify_incoming_object(req, &db, &ctx).await?;
 
     crate::apub_util::ingest::ingest_object(
         object,

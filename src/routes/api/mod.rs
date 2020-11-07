@@ -258,8 +258,6 @@ async fn route_unstable_actors_lookup(
     let (query,) = params;
     println!("lookup {}", query);
 
-    let db = ctx.db_pool.get().await?;
-
     let lookup = parse_lookup(&query)?;
 
     let uri = match lookup {
@@ -314,7 +312,7 @@ async fn route_unstable_actors_lookup(
         }
     };
 
-    let actor = crate::apub_util::fetch_actor(&uri, &db, &ctx.http_client).await?;
+    let actor = crate::apub_util::fetch_actor(&uri, ctx).await?;
 
     let info = match actor {
         crate::apub_util::ActorLocalInfo::Community { id, .. } => {

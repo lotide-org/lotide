@@ -361,116 +361,11 @@ pub async fn fetch_ap_object(
 
 pub async fn fetch_actor(
     req_ap_id: &url::Url,
-    db: &tokio_postgres::Client,
-    http_client: &crate::HttpClient,
+    ctx: Arc<crate::BaseContext>,
 ) -> Result<ActorLocalInfo, crate::Error> {
-    let obj = fetch_ap_object(req_ap_id, http_client).await?;
-    let ap_id = req_ap_id;
-
-    match obj.deref() {
-        KnownObject::Person(person) => {
-            let username = person
-                .preferred_username()
-                .or_else(|| {
-                    person
-                        .name()
-                        .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
-                })
-                .unwrap_or("");
-            let inbox = person.inbox_unchecked().as_str();
-            let shared_inbox = person
-                .endpoints_unchecked()
-                .and_then(|endpoints| endpoints.shared_inbox)
-                .map(|url| url.as_str());
-            let public_key = person
-                .ext_one
-                .public_key
-                .as_ref()
-                .map(|key| key.public_key_pem.as_bytes());
-            let public_key_sigalg = person
-                .ext_one
-                .public_key
-                .as_ref()
-                .and_then(|key| key.signature_algorithm.as_deref());
-            let description = person
-                .summary()
-                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
-                .unwrap_or("");
-
-            let avatar = person.icon().and_then(|icon| {
-                icon.iter()
-                    .filter_map(|icon| {
-                        if icon.kind_str() == Some("Image") {
-                            match activitystreams::object::Image::from_any_base(icon.clone()) {
-                                Err(_) | Ok(None) => None,
-                                Ok(Some(icon)) => Some(icon),
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .next()
-            });
-            let avatar = avatar
-                .as_ref()
-                .and_then(|icon| icon.url().and_then(|url| url.as_single_id()))
-                .map(|x| x.as_str());
-
-            let id = UserLocalID(db.query_one(
-                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description, avatar) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7, avatar=$8 RETURNING id",
-                &[&username, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description, &avatar],
-            ).await?.get(0));
-
-            Ok(ActorLocalInfo::User {
-                id,
-                public_key: public_key.map(|key| PubKeyInfo {
-                    algorithm: get_message_digest(public_key_sigalg),
-                    key: key.to_owned(),
-                }),
-            })
-        }
-        KnownObject::Group(group) => {
-            let name = group
-                .preferred_username()
-                .or_else(|| {
-                    group
-                        .name()
-                        .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
-                })
-                .unwrap_or("");
-            let description = group
-                .summary()
-                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
-                .unwrap_or("");
-            let inbox = group.inbox_unchecked().as_str();
-            let shared_inbox = group
-                .endpoints_unchecked()
-                .and_then(|endpoints| endpoints.shared_inbox)
-                .map(|url| url.as_str());
-            let public_key = group
-                .ext_one
-                .public_key
-                .as_ref()
-                .map(|key| key.public_key_pem.as_bytes());
-            let public_key_sigalg = group
-                .ext_one
-                .public_key
-                .as_ref()
-                .and_then(|key| key.signature_algorithm.as_deref());
-
-            let id = CommunityLocalID(db.query_one(
-                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7 RETURNING id",
-                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description],
-            ).await?.get(0));
-
-            Ok(ActorLocalInfo::Community {
-                id,
-                public_key: public_key.map(|key| PubKeyInfo {
-                    algorithm: get_message_digest(public_key_sigalg),
-                    key: key.to_owned(),
-                }),
-            })
-        }
+    let obj = fetch_ap_object(req_ap_id, &ctx.http_client).await?;
+    match ingest::ingest_object_boxed(obj, ingest::FoundFrom::Other, ctx).await? {
+        Some(info) => Ok(info),
         _ => Err(crate::Error::InternalStrStatic("Unrecognized actor type")),
     }
 }
@@ -478,10 +373,9 @@ pub async fn fetch_actor(
 pub async fn get_or_fetch_user_local_id(
     ap_id: &url::Url,
     db: &tokio_postgres::Client,
-    host_url_apub: &BaseURL,
-    http_client: &crate::HttpClient,
+    ctx: &Arc<crate::BaseContext>,
 ) -> Result<UserLocalID, crate::Error> {
-    if let Some(remaining) = try_strip_host(ap_id, host_url_apub) {
+    if let Some(remaining) = try_strip_host(ap_id, &ctx.host_url_apub) {
         if remaining.starts_with("/users/") {
             Ok(remaining[7..].parse()?)
         } else {
@@ -499,7 +393,7 @@ pub async fn get_or_fetch_user_local_id(
             None => {
                 // Not known yet, time to fetch
 
-                let actor = fetch_actor(ap_id, db, http_client).await?;
+                let actor = fetch_actor(ap_id, ctx.clone()).await?;
 
                 if let ActorLocalInfo::User { id, .. } = actor {
                     Ok(id)
@@ -1489,7 +1383,7 @@ pub async fn check_signature_for_actor(
     headers: &hyper::header::HeaderMap,
     actor_ap_id: &url::Url,
     db: &tokio_postgres::Client,
-    http_client: &crate::HttpClient,
+    ctx: &Arc<crate::BaseContext>,
 ) -> Result<bool, crate::Error> {
     let found_key = db.query_opt("(SELECT public_key, public_key_sigalg FROM person WHERE ap_id=$1) UNION ALL (SELECT public_key, public_key_sigalg FROM community WHERE ap_id=$1) LIMIT 1", &[&actor_ap_id.as_str()]).await?
         .and_then(|row| {
@@ -1521,7 +1415,7 @@ pub async fn check_signature_for_actor(
     // Either no key found or failed to verify
     // Try fetching the actor/key
 
-    let actor = fetch_actor(actor_ap_id, db, http_client).await?;
+    let actor = fetch_actor(actor_ap_id, ctx.clone()).await?;
 
     if let Some(key_info) = actor.public_key() {
         let key = openssl::pkey::PKey::public_key_from_pem(&key_info.key)?;
@@ -1544,8 +1438,7 @@ pub async fn check_signature_for_actor(
 pub async fn verify_incoming_object(
     mut req: hyper::Request<hyper::Body>,
     db: &tokio_postgres::Client,
-    http_client: &crate::HttpClient,
-    apub_proxy_rewrites: bool,
+    ctx: &Arc<crate::BaseContext>,
 ) -> Result<Verified<KnownObject>, crate::Error> {
     let req_body = hyper::body::to_bytes(req.body_mut()).await?;
 
@@ -1556,7 +1449,7 @@ pub async fn verify_incoming_object(
                 crate::Error::InternalStrStatic("Missing id in received activity")
             })?;
 
-            let res_body = fetch_ap_object(&ap_id, http_client).await?;
+            let res_body = fetch_ap_object(&ap_id, &ctx.http_client).await?;
 
             Ok(res_body)
         }
@@ -1582,7 +1475,7 @@ pub async fn verify_incoming_object(
                 .as_str();
 
             // path ends up wrong with our recommended proxy config
-            let path_and_query = if apub_proxy_rewrites {
+            let path_and_query = if ctx.apub_proxy_rewrites {
                 req.headers()
                     .get("x-forwarded-path")
                     .map(|x| x.to_str())
@@ -1599,7 +1492,7 @@ pub async fn verify_incoming_object(
                 &req.headers(),
                 &actor_ap_id,
                 db,
-                http_client,
+                &ctx,
             )
             .await?
             {

@@ -27,7 +27,7 @@ impl FoundFrom {
 pub async fn ingest_object(
     object: Verified<KnownObject>,
     found_from: FoundFrom,
-    ctx: Arc<crate::RouteContext>,
+    ctx: Arc<crate::BaseContext>,
 ) -> Result<Option<super::ActorLocalInfo>, crate::Error> {
     let db = ctx.db_pool.get().await?;
     match object.into_inner() {
@@ -157,13 +157,8 @@ pub async fn ingest_object(
                 crate::apub_util::require_containment(activity_ap_id, follower_ap_id)?;
                 let follow = crate::apub_util::Contained(Cow::Borrowed(&follow));
 
-                let follower_local_id = crate::apub_util::get_or_fetch_user_local_id(
-                    follower_ap_id,
-                    &db,
-                    &ctx.host_url_apub,
-                    &ctx.http_client,
-                )
-                .await?;
+                let follower_local_id =
+                    crate::apub_util::get_or_fetch_user_local_id(follower_ap_id, &db, &ctx).await?;
 
                 if let Some(target) = target {
                     if let Some(community_id) =
@@ -363,7 +358,7 @@ pub async fn ingest_object(
 pub fn ingest_object_boxed(
     object: Verified<KnownObject>,
     found_from: FoundFrom,
-    ctx: Arc<crate::RouteContext>,
+    ctx: Arc<crate::BaseContext>,
 ) -> std::pin::Pin<
     Box<dyn Future<Output = Result<Option<super::ActorLocalInfo>, crate::Error>> + Send>,
 > {
@@ -383,9 +378,7 @@ pub async fn ingest_like(
     if let Some(actor_id) = activity.actor_unchecked().as_single_id() {
         super::require_containment(activity_id, actor_id)?;
 
-        let actor_local_id =
-            super::get_or_fetch_user_local_id(actor_id, &db, &ctx.host_url_apub, &ctx.http_client)
-                .await?;
+        let actor_local_id = super::get_or_fetch_user_local_id(actor_id, &db, &ctx).await?;
 
         if let Some(object_id) = activity.object().as_single_id() {
             let thing_local_ref = if let Some(remaining) =
@@ -566,7 +559,7 @@ pub async fn ingest_undo(
 
 pub async fn ingest_create(
     activity: Verified<activitystreams::activity::Create>,
-    ctx: Arc<crate::RouteContext>,
+    ctx: Arc<crate::BaseContext>,
 ) -> Result<(), crate::Error> {
     for req_obj in activity.object().iter() {
         let object_id = req_obj.id();
@@ -819,10 +812,7 @@ async fn handle_recieved_reply(
     let db = ctx.db_pool.get().await?;
 
     let author = match author {
-        Some(author) => Some(
-            super::get_or_fetch_user_local_id(&author, &db, &ctx.host_url_apub, &ctx.http_client)
-                .await?,
-        ),
+        Some(author) => Some(super::get_or_fetch_user_local_id(&author, &db, &ctx).await?),
         None => None,
     };
 
@@ -999,10 +989,7 @@ async fn handle_recieved_post(
 ) -> Result<(), crate::Error> {
     let db = ctx.db_pool.get().await?;
     let author = match author {
-        Some(author) => Some(
-            super::get_or_fetch_user_local_id(&author, &db, &ctx.host_url_apub, &ctx.http_client)
-                .await?,
-        ),
+        Some(author) => Some(super::get_or_fetch_user_local_id(&author, &db, &ctx).await?),
         None => None,
     };
 

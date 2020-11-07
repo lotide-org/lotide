@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
-pub fn start_worker(ctx: Arc<crate::BaseContext>) -> tokio::sync::mpsc::Sender<()> {
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
+pub fn start_worker(ctx: Arc<crate::BaseContext>, rx: tokio::sync::mpsc::Receiver<()>) {
     crate::spawn_task(run_worker(ctx, rx));
-
-    tx
 }
 
 async fn run_worker(
@@ -39,7 +36,7 @@ async fn run_worker(
             let kind: &str = row.get(1);
             let params: serde_json::Value = row.get(2);
 
-            let result = perform_task(&ctx, kind, params).await;
+            let result = perform_task(ctx.clone(), kind, params).await;
             if let Err(err) = result {
                 let err = format!("{:?}", err);
                 db.execute(
@@ -63,7 +60,7 @@ async fn run_worker(
 }
 
 async fn perform_task(
-    ctx: &crate::BaseContext,
+    ctx: Arc<crate::BaseContext>,
     kind: &str,
     params: serde_json::Value,
 ) -> Result<(), crate::Error> {
