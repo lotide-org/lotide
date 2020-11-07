@@ -1,6 +1,5 @@
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
-use std::borrow::Cow;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -388,93 +387,11 @@ async fn handler_communities_followers_accept_get(
 }
 
 async fn handler_communities_inbox_post(
-    params: (CommunityLocalID,),
+    _: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    use crate::apub_util::{KnownObject, Verified};
-
-    let (community_id,) = params;
-    let db = ctx.db_pool.get().await?;
-
-    let object = crate::apub_util::verify_incoming_object(
-        req,
-        &db,
-        &ctx.http_client,
-        ctx.apub_proxy_rewrites,
-    )
-    .await?;
-
-    match object.into_inner() {
-        KnownObject::Create(create) => {
-            super::inbox_common_create(Verified(create), ctx).await?;
-        }
-        KnownObject::Follow(follow) => {
-            let follow = Verified(follow);
-            let follower_ap_id = follow.actor_unchecked().as_single_id();
-            let target_community = follow.object().as_single_id();
-
-            if let Some(follower_ap_id) = follower_ap_id {
-                let activity_ap_id = follow
-                    .id_unchecked()
-                    .ok_or(crate::Error::InternalStrStatic("Missing activitity ID"))?;
-
-                crate::apub_util::require_containment(activity_ap_id, follower_ap_id)?;
-                let follow = crate::apub_util::Contained(Cow::Borrowed(&follow));
-
-                let follower_local_id = crate::apub_util::get_or_fetch_user_local_id(
-                    follower_ap_id,
-                    &db,
-                    &ctx.host_url_apub,
-                    &ctx.http_client,
-                )
-                .await?;
-
-                if let Some(target_community) = target_community {
-                    if target_community
-                        == crate::apub_util::get_local_community_apub_id(
-                            community_id,
-                            &ctx.host_url_apub,
-                        )
-                        .deref()
-                    {
-                        let row = db
-                            .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
-                            .await?;
-                        if let Some(row) = row {
-                            let local: bool = row.get(0);
-                            if local {
-                                db.execute("INSERT INTO community_follow (community, follower, local, ap_id, accepted) VALUES ($1, $2, FALSE, $3, TRUE) ON CONFLICT (community, follower) DO NOTHING", &[&community_id, &follower_local_id, &activity_ap_id.as_str()]).await?;
-
-                                crate::apub_util::spawn_enqueue_send_community_follow_accept(
-                                    community_id,
-                                    follower_local_id,
-                                    follow.with_owned(),
-                                    ctx,
-                                );
-                            }
-                        } else {
-                            eprintln!("Warning: recieved follow for unknown community");
-                        }
-                    } else {
-                        eprintln!("Warning: recieved follow for wrong community");
-                    }
-                }
-            }
-        }
-        KnownObject::Delete(activity) => {
-            crate::apub_util::handle_delete(Verified(activity), ctx).await?;
-        }
-        KnownObject::Like(activity) => {
-            crate::apub_util::handle_like(Verified(activity), ctx).await?;
-        }
-        KnownObject::Undo(activity) => {
-            crate::apub_util::handle_undo(Verified(activity), ctx).await?;
-        }
-        _ => {}
-    }
-
-    Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
+    super::inbox_common(ctx, req).await
 }
 
 async fn handler_communities_outbox_get(
