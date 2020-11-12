@@ -111,6 +111,8 @@ struct RespPostListPost<'a> {
     author: Option<&'a RespMinimalAuthorInfo<'a>>,
     created: &'a str,
     community: &'a RespMinimalCommunityInfo<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    replies_count_total: Option<i64>,
     score: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     your_vote: Option<Option<crate::Empty>>,
@@ -156,6 +158,8 @@ enum RespThingInfo<'a> {
         title: &'a str,
         created: String,
         community: RespMinimalCommunityInfo<'a>,
+        replies_count_total: i64,
+        score: i64,
     },
     #[serde(rename = "comment")]
     Comment {
@@ -758,6 +762,18 @@ async fn route_unstable_misc_render_markdown(
     crate::json_response(&serde_json::json!({ "content_html": html }))
 }
 
+fn common_posts_list_query(include_your_idx: Option<usize>) -> Cow<'static, str> {
+    const BASE: &str = "post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id)";
+    match include_your_idx {
+        None => BASE.into(),
+        Some(idx) => format!(
+            "{}, EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=${})",
+            BASE, idx
+        )
+        .into(),
+    }
+}
+
 async fn handle_common_posts_list(
     stream: impl futures::stream::TryStream<Ok = tokio_postgres::Row, Error = tokio_postgres::Error>
         + Send,
@@ -824,8 +840,9 @@ async fn handle_common_posts_list(
                 created: &created.to_rfc3339(),
                 community: &community,
                 score: row.get(15),
+                replies_count_total: Some(row.get(16)),
                 your_vote: if include_your {
-                    Some(if row.get(16) {
+                    Some(if row.get(17) {
                         Some(crate::Empty {})
                     } else {
                         None

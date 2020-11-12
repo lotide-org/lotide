@@ -125,14 +125,17 @@ async fn route_unstable_posts_list(
 
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&limit];
 
-    let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id){} FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
-        if let Some(user) = &include_your_for {
+    let include_your_idx = match &include_your_for {
+        None => None,
+        Some(user) => {
             values.push(user);
-            ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$2)"
-        } else {
-            ""
-        },
+            Some(values.len())
+        }
+    };
+
+    let sql: &str = &format!(
+        "SELECT {} FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $1",
+        super::common_posts_list_query(include_your_idx),
     );
 
     let stream = crate::query_stream(&db, sql, &values).await?;
@@ -380,6 +383,7 @@ async fn route_unstable_posts_get(
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,
+                replies_count_total: None,
                 score: row.get(13),
                 your_vote,
             };

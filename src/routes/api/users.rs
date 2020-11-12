@@ -1,11 +1,11 @@
 use super::{
-    handle_common_posts_list, MaybeIncludeYour, RespAvatarInfo, RespLoginUserInfo,
-    RespMinimalAuthorInfo, RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo,
-    RespThingInfo,
+    MaybeIncludeYour, RespAvatarInfo, RespLoginUserInfo, RespMinimalAuthorInfo,
+    RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo, RespThingInfo,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::ops::Deref;
 use std::sync::Arc;
 
 struct MeOrLocalAndAdminResult {
@@ -357,11 +357,11 @@ async fn route_unstable_users_following_posts_list(
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&user, &limit];
 
     let stream = db.query_raw(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), EXISTS(SELECT 1 FROM post_like WHERE post = post.id AND person = $1) FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.approved AND post.deleted=FALSE AND community.id IN (SELECT community FROM community_follow WHERE follower=$1 AND accepted) ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $2",
+        format!("SELECT {} FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.approved AND post.deleted=FALSE AND community.id IN (SELECT community FROM community_follow WHERE follower=$1 AND accepted) ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $2", super::common_posts_list_query(Some(1))).deref(),
         values.iter().map(|s| *s as _)
     ).await?;
 
-    let posts = handle_common_posts_list(stream, &ctx, true).await?;
+    let posts = super::handle_common_posts_list(stream, &ctx, true).await?;
 
     crate::json_response(&posts)
 }
@@ -608,7 +608,7 @@ async fn route_unstable_users_things_list(
     let limit: i64 = 30;
 
     let rows = db.query(
-        "(SELECT TRUE, post.id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, NULL FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted) ORDER BY created DESC LIMIT $2",
+        "(SELECT TRUE, post.id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id) FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, NULL, NULL, NULL FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted) ORDER BY created DESC LIMIT $2",
         &[&user_id, &limit],
     )
         .await?;
@@ -641,6 +641,8 @@ async fn route_unstable_users_things_list(
                         ),
                         remote_url: community_ap_id,
                     },
+                    replies_count_total: row.get(10),
+                    score: row.get(9),
                 }
             } else {
                 RespThingInfo::Comment {

@@ -100,7 +100,7 @@
 					}
 				}
 			},
-			"PostListPost": {
+			"SomePostInfo": {
 				"type": "object",
 				"required": ["id", "title", "created", "community", "score"],
 				"properties": {
@@ -133,6 +133,18 @@
 					"score": {"type": "integer"},
 					"your_vote": {"$ref": "#/components/schemas/YourVote"}
 				}
+			},
+			"PostListPost": {
+				"allOf": [
+					{"$ref": "#/components/schemas/SomePostInfo"},
+					{
+						"type": "object",
+						"required": ["replies_count_total"],
+						"properties": {
+							"replies_count_total": {"type": "integer"}
+						}
+					}
+				]
 			},
 			"PostCommentInfo": {
 				"type": "object",
@@ -1140,7 +1152,7 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"allOf": [{"$ref": "#/components/schemas/PostListPost"}],
+									"allOf": [{"$ref": "#/components/schemas/SomePostInfo"}],
 									"type": "object",
 									"required": ["approved", "local", "replies"],
 									"properties": {

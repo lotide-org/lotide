@@ -602,7 +602,7 @@ async fn route_unstable_communities_posts_list(
 
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&community_id, &limit];
     let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id){} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {} LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id){} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {} LIMIT $2",
         if let Some(user) = &include_your_for {
             values.push(user);
             ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$3)"
@@ -658,9 +658,10 @@ async fn route_unstable_communities_posts_list(
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,
+                replies_count_total: Some(row.get(12)),
                 score: row.get(11),
                 your_vote: if include_your_for.is_some() {
-                    Some(if row.get(12) {
+                    Some(if row.get(13) {
                         Some(crate::Empty {})
                     } else {
                         None
