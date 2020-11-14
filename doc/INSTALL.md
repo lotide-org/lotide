@@ -1,6 +1,6 @@
 # lotide installation
 ## For production
-Requirements: rustc, cargo, openssl, [Migrant](https://github.com/jaemk/migrant), and a PostgreSQL database
+Requirements: rustc (>=1.45.0), cargo, openssl, [Migrant](https://github.com/jaemk/migrant), and a PostgreSQL database
 
 Set these environment variables:
  - PGDATABASE, PGHOST, PGUSER, PGPASSWORD - Credentials for database connection, used by Migrant
