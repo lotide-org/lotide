@@ -297,6 +297,13 @@ impl ActorLocalInfo {
             ActorLocalInfo::Community { public_key, .. } => public_key.as_ref(),
         }
     }
+
+    pub fn as_ref(&self) -> crate::ThingLocalRef {
+        match self {
+            ActorLocalInfo::User { id, .. } => crate::ThingLocalRef::User(*id),
+            ActorLocalInfo::Community { id, .. } => crate::ThingLocalRef::Community(*id),
+        }
+    }
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -365,7 +372,7 @@ pub async fn fetch_actor(
 ) -> Result<ActorLocalInfo, crate::Error> {
     let obj = fetch_ap_object(req_ap_id, &ctx.http_client).await?;
     match ingest::ingest_object_boxed(obj, ingest::FoundFrom::Other, ctx).await? {
-        Some(info) => Ok(info),
+        Some(ingest::IngestResult::Actor(info)) => Ok(info),
         _ => Err(crate::Error::InternalStrStatic("Unrecognized actor type")),
     }
 }

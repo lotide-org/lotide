@@ -336,9 +336,13 @@ pub enum ActorLocalRef {
     Community(CommunityLocalID),
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(tag = "type")]
 pub enum ThingLocalRef {
     Post(PostLocalID),
     Comment(CommentLocalID),
+    User(UserLocalID),
+    Community(CommunityLocalID),
 }
 
 #[derive(Debug)]

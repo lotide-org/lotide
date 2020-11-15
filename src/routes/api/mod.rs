@@ -188,6 +188,13 @@ pub fn route_api() -> crate::RouteNode<()> {
                     crate::RouteNode::new()
                         .with_handler_async("GET", route_unstable_nodeinfo_20_get),
                 )
+                .with_child(
+                    "objects:lookup",
+                    crate::RouteNode::new().with_child_str(
+                        crate::RouteNode::new()
+                            .with_handler_async("GET", route_unstable_objects_lookup),
+                    ),
+                )
                 .with_child("communities", communities::route_communities())
                 .with_child(
                     "instance",
@@ -551,6 +558,81 @@ async fn route_unstable_instance_patch(
             hyper::StatusCode::FORBIDDEN,
             lang.tr("not_admin", None).into_owned(),
         ))
+    }
+}
+
+async fn route_unstable_objects_lookup(
+    params: (String,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (query,) = params;
+    println!("lookup {}", query);
+
+    let lookup = parse_lookup(&query)?;
+
+    let uri = match lookup {
+        Lookup::URL(uri) => Some(uri),
+        Lookup::WebFinger { user, host } => {
+            let uri = format!(
+                "https://{}/.well-known/webfinger?{}",
+                host,
+                serde_urlencoded::to_string(FingerRequestQuery {
+                    resource: format!("acct:{}@{}", user, host).into(),
+                    rel: Some("self".into()),
+                })?
+            );
+            println!("{}", uri);
+            let res = ctx
+                .http_client
+                .request(hyper::Request::get(uri).body(Default::default())?)
+                .await?;
+
+            if res.status() == hyper::StatusCode::NOT_FOUND {
+                println!("not found");
+                None
+            } else {
+                let res = crate::res_to_error(res).await?;
+
+                let res = hyper::body::to_bytes(res.into_body()).await?;
+                let res: FingerResponse = serde_json::from_slice(&res)?;
+
+                let mut found_uri = None;
+                for entry in res.links {
+                    if entry.rel == "self"
+                        && entry.type_.as_deref() == Some(crate::apub_util::ACTIVITY_TYPE)
+                    {
+                        if let Some(href) = entry.href {
+                            found_uri = Some(href.parse()?);
+                            break;
+                        }
+                    }
+                }
+
+                found_uri
+            }
+        }
+    };
+
+    let res = match &uri {
+        Some(uri) => {
+            let obj = crate::apub_util::fetch_ap_object(&uri, &ctx.http_client).await?;
+
+            crate::apub_util::ingest::ingest_object(
+                obj,
+                crate::apub_util::ingest::FoundFrom::Other,
+                ctx,
+            )
+            .await?
+        }
+        None => None,
+    };
+
+    match res {
+        None => Ok(crate::common_response_builder()
+            .header(hyper::header::CONTENT_TYPE, "application/json")
+            .body("[]".into())?),
+        Some(res) => crate::json_response(&[res.into_ref()]),
     }
 }
 
