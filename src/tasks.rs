@@ -35,8 +35,14 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
             ),
         };
 
+        let digest =
+            openssl::hash::hash(openssl::hash::MessageDigest::sha256(), self.object.as_ref())?;
+        let mut digest_header = "SHA-256=".to_owned();
+        base64::encode_config_buf(digest, base64::STANDARD, &mut digest_header);
+
         let mut req = hyper::Request::post(self.inbox.as_str().parse::<hyper::Uri>()?)
             .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+            .header("Digest", digest_header)
             .body(self.object.into())?;
 
         if let Ok(path_and_query) = crate::get_path_and_query(&self.inbox) {
