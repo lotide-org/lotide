@@ -40,10 +40,27 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
         let mut digest_header = "SHA-256=".to_owned();
         base64::encode_config_buf(digest, base64::STANDARD, &mut digest_header);
 
-        let mut req = hyper::Request::post(self.inbox.as_str().parse::<hyper::Uri>()?)
+        let inbox_uri = self.inbox.as_str().parse::<hyper::Uri>()?;
+
+        let mut req = hyper::Request::post(&inbox_uri)
             .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
             .header("Digest", digest_header)
             .body(self.object.into())?;
+
+        req.headers_mut()
+            .entry(hyper::header::HOST)
+            .or_insert_with(|| {
+                let uri = inbox_uri;
+
+                let hostname = uri.host().expect("authority implies host");
+                if let Some(port) = uri.port() {
+                    let s = format!("{}:{}", hostname, port);
+                    hyper::header::HeaderValue::from_str(&s)
+                } else {
+                    hyper::header::HeaderValue::from_str(hostname)
+                }
+                .expect("uri host is valid header value")
+            });
 
         if let Ok(path_and_query) = crate::get_path_and_query(&self.inbox) {
             req.headers_mut()
