@@ -100,6 +100,26 @@
 					}
 				}
 			},
+			"CommunityInfo": {
+				"allOf": [{"$ref": "#/components/schemas/MinimalCommunityInfo"}],
+				"type": "object",
+				"required": ["description"],
+				"properties": {
+					"description": {"type": "string"},
+					"you_are_moderator": {"type": "boolean"},
+					"your_follow": {
+						"type": "object",
+						"nullable": true,
+						"required": ["accepted"],
+						"properties": {
+							"accepted": {
+								"type": "boolean",
+								"description": "Whether your follow request has been accepted by the community."
+							}
+						}
+					}
+				}
+			},
 			"SomePostInfo": {
 				"type": "object",
 				"required": ["id", "title", "created", "community", "score"],
@@ -445,6 +465,15 @@
 		"/api/unstable/communities": {
 			"get": {
 				"summary": "List communities",
+				"parameters": [
+					{
+						"name": "include_your",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"},
+						"description": "If true, will include `you_are_moderator` and `your_follow` in list. Requires login."
+					}
+				],
 				"responses": {
 					"200": {
 						"description": "",
@@ -453,13 +482,14 @@
 								"schema": {
 									"type": "array",
 									"items": {
-										"$ref": "#/components/schemas/MinimalCommunityInfo"
+										"$ref": "#/components/schemas/CommunityInfo"
 									}
 								}
 							}
 						}
 					}
-				}
+				},
+				"security": [{"bearer": []}]
 			},
 			"post": {
 				"summary": "Create a community",
@@ -525,24 +555,7 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"allOf": [{"$ref": "#/components/schemas/MinimalCommunityInfo"}],
-									"type": "object",
-									"required": ["description"],
-									"properties": {
-										"description": {"type": "string"},
-										"you_are_moderator": {"type": "boolean"},
-										"your_follow": {
-											"type": "object",
-											"nullable": true,
-											"required": ["accepted"],
-											"properties": {
-												"accepted": {
-													"type": "boolean",
-													"description": "Whether your follow request has been accepted by the community."
-												}
-											}
-										}
-									}
+									"$ref": "#/components/schemas/CommunityInfo"
 								}
 							}
 						}

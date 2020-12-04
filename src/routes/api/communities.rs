@@ -10,7 +10,7 @@ use std::sync::Arc;
 #[derive(Serialize)]
 struct RespCommunityInfo<'a> {
     #[serde(flatten)]
-    base: &'a RespMinimalCommunityInfo<'a>,
+    base: RespMinimalCommunityInfo<'a>,
 
     description: &'a str,
 
@@ -28,30 +28,59 @@ struct RespYourFollowInfo {
 async fn route_unstable_communities_list(
     _: (),
     ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
+    req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    let db = ctx.db_pool.get().await?;
+    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
-    let rows = db
-        .query("SELECT id, local, ap_id, name FROM community", &[])
-        .await?;
+    let db = ctx.db_pool.get().await?;
+    let rows = if query.include_your {
+        let user = crate::require_login(&req, &db).await?;
+        db.query(
+            "SELECT id, name, local, ap_id, description, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$1), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$1) FROM community",
+            &[&user.raw()],
+        ).await?
+    } else {
+        db.query(
+            "SELECT id, name, local, ap_id, description FROM community",
+            &[],
+        )
+        .await?
+    };
 
     let output: Vec<_> = rows
         .iter()
         .map(|row| {
             let id = CommunityLocalID(row.get(0));
-            let local = row.get(1);
-            let ap_id = row.get(2);
-            let name = row.get(3);
+            let name = row.get(1);
+            let local = row.get(2);
+            let ap_id = row.get(3);
+            let description = row.get(4);
 
             let host = crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname);
 
-            RespMinimalCommunityInfo {
-                id,
-                name,
-                local,
-                host,
-                remote_url: ap_id,
+            RespCommunityInfo {
+                base: RespMinimalCommunityInfo {
+                    id,
+                    name,
+                    local,
+                    host,
+                    remote_url: ap_id,
+                },
+
+                description,
+                you_are_moderator: if query.include_your {
+                    Some(row.get(6))
+                } else {
+                    None
+                },
+                your_follow: if query.include_your {
+                    Some(match row.get(5) {
+                        Some(accepted) => Some(RespYourFollowInfo { accepted }),
+                        None => None,
+                    })
+                } else {
+                    None
+                },
             }
         })
         .collect();
@@ -173,7 +202,7 @@ async fn route_unstable_communities_get(
     let community_ap_id: Option<&str> = row.get(2);
 
     let info = RespCommunityInfo {
-        base: &RespMinimalCommunityInfo {
+        base: RespMinimalCommunityInfo {
             id: community_id,
             name: row.get(0),
             local: community_local,

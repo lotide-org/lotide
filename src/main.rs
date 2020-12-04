@@ -87,6 +87,8 @@ impl Into<activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>
     }
 }
 
+pub type ParamSlice<'a> = &'a [&'a (dyn tokio_postgres::types::ToSql + Sync)];
+
 #[derive(Serialize, Default)]
 pub struct Empty {}
 
@@ -450,7 +452,7 @@ pub fn get_path_and_query(url: &url::Url) -> Result<String, url::ParseError> {
 pub async fn query_stream(
     db: &tokio_postgres::Client,
     statement: &(impl tokio_postgres::ToStatement + ?Sized),
-    params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
+    params: ParamSlice<'_>,
 ) -> Result<tokio_postgres::RowStream, tokio_postgres::Error> {
     let params = params.iter().map(|s| *s as _);
 
