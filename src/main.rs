@@ -144,6 +144,8 @@ pub struct BaseContext {
     pub api_ratelimit: henry::RatelimitBucket<std::net::IpAddr>,
 
     pub local_hostname: String,
+
+    worker_trigger: tokio::sync::mpsc::Sender<()>,
 }
 
 impl BaseContext {
@@ -192,14 +194,7 @@ impl BaseContext {
             href.into()
         }
     }
-}
 
-pub struct RouteContext {
-    base: Arc<BaseContext>,
-    worker_trigger: tokio::sync::mpsc::Sender<()>,
-}
-
-impl RouteContext {
     pub async fn enqueue_task<T: crate::tasks::TaskDef>(
         &self,
         task: &T,
@@ -219,13 +214,7 @@ impl RouteContext {
     }
 }
 
-impl std::ops::Deref for RouteContext {
-    type Target = BaseContext;
-
-    fn deref(&self) -> &BaseContext {
-        &self.base
-    }
-}
+pub type RouteContext = BaseContext;
 
 pub type RouteNode<P> = trout::Node<
     P,
@@ -349,9 +338,13 @@ pub enum ActorLocalRef {
     Community(CommunityLocalID),
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(tag = "type")]
 pub enum ThingLocalRef {
     Post(PostLocalID),
     Comment(CommentLocalID),
+    User(UserLocalID),
+    Community(CommunityLocalID),
 }
 
 #[derive(Debug)]
@@ -994,8 +987,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         panic!("SMTP_URL was provided, but SMTP_FROM was not");
     }
 
+    let (worker_trigger, worker_rx) = tokio::sync::mpsc::channel(1);
+
     let routes = Arc::new(routes::route_root());
-    let base_context = Arc::new(BaseContext {
+    let context = Arc::new(BaseContext {
         local_hostname: get_url_host(&host_url_apub)
             .expect("Couldn't find host in HOST_URL_ACTIVITYPUB"),
 
@@ -1008,14 +1003,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
         apub_proxy_rewrites,
         api_ratelimit: henry::RatelimitBucket::new(300),
-    });
 
-    let worker_trigger = worker::start_worker(base_context.clone());
-
-    let context = Arc::new(RouteContext {
-        base: base_context,
         worker_trigger,
     });
+
+    worker::start_worker(context.clone(), worker_rx);
 
     let server = hyper::Server::bind(&(std::net::Ipv6Addr::UNSPECIFIED, port).into()).serve(
         hyper::service::make_service_fn(|sock: &hyper::server::conn::AddrStream| {

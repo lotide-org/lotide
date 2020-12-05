@@ -227,180 +227,18 @@ async fn inbox_common(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    use crate::apub_util::{KnownObject, Verified};
-
     let db = ctx.db_pool.get().await?;
 
-    let object = crate::apub_util::verify_incoming_object(
-        req,
-        &db,
-        &ctx.http_client,
-        ctx.apub_proxy_rewrites,
+    let object = crate::apub_util::verify_incoming_object(req, &db, &ctx).await?;
+
+    crate::apub_util::ingest::ingest_object(
+        object,
+        crate::apub_util::ingest::FoundFrom::Other,
+        ctx,
     )
     .await?;
 
-    match object.into_inner() {
-        KnownObject::Accept(activity) => {
-            let activity_id = activity
-                .id_unchecked()
-                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
-
-            let actor_ap_id = activity
-                .actor_unchecked()
-                .as_single_id()
-                .ok_or(crate::Error::InternalStrStatic("Missing actor for Accept"))?;
-
-            crate::apub_util::require_containment(activity_id, actor_ap_id)?;
-
-            let actor_ap_id = actor_ap_id.as_str();
-
-            let community_local_id: Option<CommunityLocalID> = {
-                db.query_opt("SELECT id FROM community WHERE ap_id=$1", &[&actor_ap_id])
-                    .await?
-                    .map(|row| CommunityLocalID(row.get(0)))
-            };
-
-            if let Some(community_local_id) = community_local_id {
-                let object_id = activity
-                    .object()
-                    .as_single_id()
-                    .ok_or(crate::Error::InternalStrStatic("Missing object for Accept"))?;
-
-                if let Some(remaining) =
-                    crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
-                {
-                    if remaining.starts_with("/communities/") {
-                        let remaining = &remaining[13..];
-                        let next_expected = format!("{}/followers/", community_local_id);
-                        if remaining.starts_with(&next_expected) {
-                            let remaining = &remaining[next_expected.len()..];
-                            let follower_local_id: UserLocalID = remaining.parse()?;
-
-                            db.execute(
-                                "UPDATE community_follow SET accepted=TRUE WHERE community=$1 AND follower=$2",
-                                &[&community_local_id, &follower_local_id],
-                            ).await?;
-                        }
-                    }
-                }
-            }
-        }
-        KnownObject::Announce(activity) => {
-            let activity_id = activity
-                .id_unchecked()
-                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
-
-            let community_ap_id = activity.actor_unchecked().as_single_id().ok_or(
-                crate::Error::InternalStrStatic("Missing actor for Announce"),
-            )?;
-
-            let community_local_info = db
-                .query_opt(
-                    "SELECT id, local FROM community WHERE ap_id=$1",
-                    &[&community_ap_id.as_str()],
-                )
-                .await?
-                .map(|row| (CommunityLocalID(row.get(0)), row.get(1)));
-
-            if let Some((community_local_id, community_is_local)) = community_local_info {
-                crate::apub_util::require_containment(activity_id, community_ap_id)?;
-
-                let object_id = activity.object().as_single_id();
-
-                if let Some(object_id) = object_id {
-                    if let Some(remaining) =
-                        crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
-                    {
-                        if remaining.starts_with("/posts/") {
-                            let remaining = &remaining[7..];
-                            if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
-                                db.execute(
-                                    "UPDATE post SET approved=TRUE, approved_ap_id=$1 WHERE id=$2 AND community=$3",
-                                    &[&activity_id.as_str(), &local_post_id, &community_local_id],
-                                ).await?;
-                            }
-                        }
-                    } else {
-                        // don't need announces for local objects
-                        let obj =
-                            crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?;
-                        crate::apub_util::handle_recieved_object_for_community(
-                            community_local_id,
-                            community_is_local,
-                            Some(&activity_id),
-                            obj,
-                            ctx,
-                        )
-                        .await?;
-                    }
-                }
-            }
-        }
-        KnownObject::Create(activity) => inbox_common_create(Verified(activity), ctx).await?,
-        KnownObject::Delete(activity) => {
-            crate::apub_util::handle_delete(Verified(activity), ctx).await?
-        }
-        KnownObject::Like(activity) => {
-            crate::apub_util::handle_like(Verified(activity), ctx).await?
-        }
-        KnownObject::Undo(activity) => {
-            crate::apub_util::handle_undo(Verified(activity), ctx).await?
-        }
-        KnownObject::Update(activity) => {
-            let activity_id = activity
-                .id_unchecked()
-                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
-
-            let object_id =
-                activity
-                    .object()
-                    .as_single_id()
-                    .ok_or(crate::Error::InternalStrStatic(
-                        "Missing object ID for Update",
-                    ))?;
-
-            crate::apub_util::require_containment(activity_id, object_id)?;
-
-            let object_id = object_id.clone();
-
-            crate::spawn_task(async move {
-                let row = db
-                    .query_opt(
-                        "SELECT 1 FROM community WHERE ap_id=$1 LIMIT 1",
-                        &[&object_id.as_str()],
-                    )
-                    .await?;
-                if row.is_some() {
-                    ctx.enqueue_task(&crate::tasks::FetchActor {
-                        actor_ap_id: Cow::Owned(object_id),
-                    })
-                    .await?;
-                }
-
-                Ok(())
-            });
-        }
-        _ => {}
-    }
-
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
-}
-
-pub async fn inbox_common_create(
-    activity: crate::apub_util::Verified<activitystreams::activity::Create>,
-    ctx: Arc<crate::RouteContext>,
-) -> Result<(), crate::Error> {
-    for req_obj in activity.object().iter() {
-        let object_id = req_obj.id();
-
-        if let Some(object_id) = object_id {
-            let obj = crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?;
-
-            crate::apub_util::handle_recieved_object_for_local_community(obj, ctx.clone()).await?;
-        }
-    }
-
-    Ok(())
 }
 
 async fn handler_users_inbox_post(
