@@ -1,5 +1,5 @@
 use super::{
-    JustURL, MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    JustURL, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
@@ -158,13 +158,20 @@ async fn route_unstable_posts_list(
 
     let limit: i64 = 30;
 
-    let mut sql = String::from("SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id)");
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&limit];
 
-    if let Some(user) = &include_your_for {
+    let include_your_idx = if let Some(user) = &include_your_for {
         values.push(user);
-        sql.push_str(", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$2)");
-    }
+        Some(values.len())
+    } else {
+        None
+    };
+
+    let mut sql = format!(
+        "SELECT {}",
+        super::common_posts_list_query(include_your_idx)
+    );
+
     sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE");
     if let Some(search) = &query.search {
         values.push(search);
