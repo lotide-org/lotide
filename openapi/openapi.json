@@ -1078,6 +1078,23 @@
 						"in": "query",
 						"required": false,
 						"schema": {"type": "boolean"}
+					},
+					{
+						"name": "sort",
+						"in": "query",
+						"required": false,
+						"schema": {
+							"oneOf": [
+								{"$ref": "#/components/schemas/SortType"},
+								{"type": "string", "enum": ["relevant"]}
+							]
+						}
+					},
+					{
+						"name": "search",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"}
 					}
 				],
 				"responses": {

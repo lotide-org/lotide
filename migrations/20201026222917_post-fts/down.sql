@@ -1,0 +1,3 @@
+BEGIN;
+	DROP INDEX post_fts;
+COMMIT;
