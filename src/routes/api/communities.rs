@@ -30,22 +30,45 @@ async fn route_unstable_communities_list(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    use std::fmt::Write;
+
+    #[derive(Deserialize)]
+    struct CommunitiesListQuery<'a> {
+        #[serde(default)]
+        search: Option<Cow<'a, str>>,
+
+        #[serde(default)]
+        include_your: bool,
+    }
+
+    let query: CommunitiesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
+    let mut sql = String::from("SELECT id, name, local, ap_id, description");
+    let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
 
     let db = ctx.db_pool.get().await?;
-    let rows = if query.include_your {
+
+    let include_your_for = if query.include_your {
         let user = crate::require_login(&req, &db).await?;
-        db.query(
-            "SELECT id, name, local, ap_id, description, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$1), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$1) FROM community",
-            &[&user.raw()],
-        ).await?
+        Some(user)
     } else {
-        db.query(
-            "SELECT id, name, local, ap_id, description FROM community",
-            &[],
-        )
-        .await?
+        None
     };
+
+    if let Some(user) = &include_your_for {
+        values.push(user);
+        sql.push_str(", (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$1), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$1)");
+    }
+
+    sql.push_str(" FROM community");
+
+    if let Some(search) = &query.search {
+        values.push(search);
+        write!(sql, " WHERE community_fts(community) @@ plainto_tsquery('english', ${0}) ORDER BY ts_rank_cd(community_fts(community), plainto_tsquery('english', ${0})) DESC", values.len()).unwrap();
+    }
+
+    let sql: &str = &sql;
+    let rows = db.query(sql, &values).await?;
 
     let output: Vec<_> = rows
         .iter()

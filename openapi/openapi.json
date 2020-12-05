@@ -472,6 +472,12 @@
 						"required": false,
 						"schema": {"type": "boolean"},
 						"description": "If true, will include `you_are_moderator` and `your_follow` in list. Requires login."
+					},
+					{
+						"name": "search",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"}
 					}
 				],
 				"responses": {

@@ -183,7 +183,7 @@ async fn route_unstable_posts_list(
         PostsListSortType::Normal(ty) => sql.push_str(ty.post_sort_sql()),
         PostsListSortType::Extra(PostsListExtraSortType::Relevant) => {
             if let Some(search_value_idx) = search_value_idx {
-                write!(sql, "ts_rank_cd(to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')), plainto_tsquery('english', ${}))", search_value_idx).unwrap();
+                write!(sql, "ts_rank_cd(to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')), plainto_tsquery('english', ${})) DESC", search_value_idx).unwrap();
             } else {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::BAD_REQUEST,
