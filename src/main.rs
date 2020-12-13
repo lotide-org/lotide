@@ -8,6 +8,7 @@ use std::sync::Arc;
 use trout::hyper::RoutingFailureExtHyper;
 
 mod apub_util;
+mod migrate;
 mod routes;
 mod tasks;
 mod worker;
@@ -906,8 +907,20 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
     });
 }
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args();
+    args.next(); // discard first element
+    match args.next().as_deref() {
+        Some("migrate") => Ok(crate::migrate::run(args)),
+        None => run(),
+        _ => {
+            panic!("Unexpected argument");
+        }
+    }
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let host_url_apub =
         std::env::var("HOST_URL_ACTIVITYPUB").expect("Missing HOST_URL_ACTIVITYPUB");
 
