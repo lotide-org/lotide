@@ -664,8 +664,11 @@ pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 's
 
 pub fn render_markdown(src: &str) -> String {
     let parser = pulldown_cmark::Parser::new(src);
+
+    let stream = pdcm_linkify::AutoLinker::new(parser);
+
     let mut output = String::new();
-    pulldown_cmark::html::push_html(&mut output, parser);
+    pulldown_cmark::html::push_html(&mut output, stream);
 
     output
 }
