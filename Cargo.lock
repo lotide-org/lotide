@@ -1489,7 +1489,8 @@ dependencies = [
 [[package]]
 name = "pdcm-linkify"
 version = "0.1.0"
-source = "git+https://git.sr.ht/~vpzom/pdcm-linkify?rev=18c43df5#18c43df5fc1f75341a883f46c07e0b73d3068572"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "859a06e3ad961c38d8c6437e6c7d3768df3dd73ace8f010ff139dbb2220806cb"
 dependencies = [
  "pulldown-cmark",
  "regex",
