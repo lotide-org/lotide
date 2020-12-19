@@ -340,7 +340,8 @@ pub enum ActorLocalRef {
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "id")]
+#[serde(rename_all = "snake_case")]
 pub enum ThingLocalRef {
     Post(PostLocalID),
     Comment(CommentLocalID),
