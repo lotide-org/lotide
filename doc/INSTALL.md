@@ -54,7 +54,8 @@ location / {
 Requirements: rustc, cargo, openssl, and a PostgreSQL database
 
 The following environment variables are required (*An environment variable manager like [direnv](https://direnv.net/) is recommended in order to avoid these variables interfering with other programs.*)
- - DATABASE_URL - Credentials for database connection.
+ - DATABASE_URL - Credentials for database connection. For examples see
+   [the tokio-postgres documentation](https://docs.rs/tokio-postgres/0.6.0/tokio_postgres/config/struct.Config.html#examples-1).
  - HOST_URL_ACTIVITYPUB - Typically `http://localhost:3333/apub` for dev instances
  - HOST_URL_API - Typically `http://localhost:3333/api` for dev instances
 
