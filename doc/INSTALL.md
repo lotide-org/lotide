@@ -1,10 +1,9 @@
 # lotide installation
 ## For production
-Requirements: rustc (>=1.45.0), cargo, openssl, [Migrant](https://github.com/jaemk/migrant), and a PostgreSQL database
+Requirements: rustc (>=1.45.0), cargo, openssl, and a PostgreSQL database
 
 Set these environment variables:
- - PGDATABASE, PGHOST, PGUSER, PGPASSWORD - Credentials for database connection, used by Migrant
- - DATABASE_URL - Same credentials again, should be equivalent to `postgres://$PGUSER:$PGPASSWORD@$PGHOST/$PGDATABASE`. Used by lotide itself.
+ - DATABASE_URL - Credentials for database connection.
  - HOST_URL_ACTIVITYPUB - If using the recommended proxy setup, set this to your root address (`https://example.com`)
  - HOST_URL_API - e.g. `https://example.com/api`
  - APUB_PROXY_REWRITES - Set to `true` to make signatures work with the proxy setup.
@@ -20,7 +19,7 @@ To build lotide, run `cargo build --release` in the lotide directory. A `lotide`
 
 hitide can be built in the same way.
 
-To set up the database, run `migrant setup`, then `migrant apply -a`.
+To set up the database, run `lotide migrate setup`, then `lotide migrate`.
 
 ### Recommended proxy setup:
 This is written for Nginx, but it should be possible to adapt it to other proxy servers. Replace `c_backend_1` and `c_hitide_1` with your actual hostnames.
@@ -52,15 +51,14 @@ location / {
 ```
 
 ## For development
-Requirements: rustc, cargo, openssl, [Migrant](https://github.com/jaemk/migrant), and a PostgreSQL database
+Requirements: rustc, cargo, openssl, and a PostgreSQL database
 
 The following environment variables are required (*An environment variable manager like [direnv](https://direnv.net/) is recommended in order to avoid these variables interfering with other programs.*)
- - PGDATABASE, PGHOST, PGUSER, PGPASSWORD - Credentials for database connection, used by Migrant
- - DATABASE_URL - Same credentials again, should be equivalent to `postgres://$PGUSER:$PGPASSWORD@$PGHOST/$PGDATABASE`. Used by lotide itself.
+ - DATABASE_URL - Credentials for database connection.
  - HOST_URL_ACTIVITYPUB - Typically `http://localhost:3333/apub` for dev instances
  - HOST_URL_API - Typically `http://localhost:3333/api` for dev instances
 
-Run `migrant setup`, then `migrant apply -a` to update the database schema.
+Run `cargo run -- migrate setup`, then `cargo run -- migrate` to update the database schema.
 
 To build and run lotide, run `cargo run` in the lotide directory.
 
