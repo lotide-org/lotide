@@ -63,4 +63,6 @@ Run `cargo run -- migrate setup`, then `cargo run -- migrate` to update the data
 
 To build and run lotide, run `cargo run` in the lotide directory.
 
+To show debug logging, set the environment variable `RUST_LOG=lotide=debug`. See [the env-logger docs](https://docs.rs/env_logger) for more details.
+
 Note that lotide itself does not contain a frontend, so you probably want to also setup [hitide](https://git.sr.ht/~vpzom/hitide).
