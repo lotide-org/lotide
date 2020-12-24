@@ -194,7 +194,7 @@ pub async fn ingest_object(
                                 );
                             }
                         } else {
-                            eprintln!("Warning: recieved follow for unknown community");
+                            log::error!("Warning: recieved follow for unknown community");
                         }
                     }
                 }

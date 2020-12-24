@@ -545,7 +545,7 @@ impl Translator {
             &mut errors,
         );
         if !errors.is_empty() {
-            eprintln!("Errors in translation: {:?}", errors);
+            log::error!("Errors in translation: {:?}", errors);
         }
 
         out
@@ -578,7 +578,7 @@ pub fn get_lang_for_req(req: &impl ReqParts) -> Translator {
                 match err {
                     fluent::FluentError::Overriding { .. } => {}
                     _ => {
-                        eprintln!("Failed to add language resource: {:?}", err);
+                        log::error!("Failed to add language resource: {:?}", err);
                         break;
                     }
                 }
@@ -661,7 +661,7 @@ pub async fn is_local_user(db: &tokio_postgres::Client, user: UserLocalID) -> Re
 pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 'static>(task: F) {
     use futures::future::TryFutureExt;
     tokio::spawn(task.map_err(|err| {
-        eprintln!("Error in task: {:?}", err);
+        log::error!("Error in task: {:?}", err);
     }));
 }
 
@@ -682,7 +682,7 @@ pub fn on_local_community_add_post(
     post_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
-    println!("on_community_add_post");
+    log::debug!("on_community_add_post");
     crate::apub_util::spawn_announce_community_post(community, post_local_id, post_ap_id, ctx);
 }
 
@@ -703,7 +703,7 @@ pub fn on_local_community_add_comment(
 pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteContext>) {
     use futures::future::TryFutureExt;
 
-    println!("on_post_add_comment");
+    log::debug!("on_post_add_comment");
     spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
@@ -910,6 +910,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     let mut args = std::env::args();
     args.next(); // discard first element
     match args.next().as_deref() {
@@ -1100,7 +1101,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             Err(Error::UserError(res)) => res,
                             Err(Error::RoutingError(err)) => err.to_simple_response(),
                             Err(Error::Internal(err)) => {
-                                eprintln!("Error: {:?}", err);
+                                log::error!("Error: {:?}", err);
 
                                 simple_response(
                                     hyper::StatusCode::INTERNAL_SERVER_ERROR,
@@ -1108,7 +1109,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 )
                             }
                             Err(Error::InternalStr(err)) => {
-                                eprintln!("Error: {}", err);
+                                log::error!("Error: {}", err);
 
                                 simple_response(
                                     hyper::StatusCode::INTERNAL_SERVER_ERROR,
@@ -1116,7 +1117,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                                 )
                             }
                             Err(Error::InternalStrStatic(err)) => {
-                                eprintln!("Error: {}", err);
+                                log::error!("Error: {}", err);
 
                                 simple_response(
                                     hyper::StatusCode::INTERNAL_SERVER_ERROR,

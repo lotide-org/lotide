@@ -143,7 +143,7 @@ async fn handler_users_get(
                     .and_then(|bytes| match std::str::from_utf8(bytes) {
                         Ok(key) => Some(key),
                         Err(err) => {
-                            eprintln!("Warning: public_key is not UTF-8: {:?}", err);
+                            log::error!("Warning: public_key is not UTF-8: {:?}", err);
                             None
                         }
                     });

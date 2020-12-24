@@ -726,7 +726,7 @@ pub fn spawn_announce_community_post(
     match local_community_post_announce_ap(community, post_local_id, post_ap_id, &ctx.host_url_apub)
     {
         Err(err) => {
-            eprintln!("Failed to create Announce: {:?}", err);
+            log::error!("Failed to create Announce: {:?}", err);
         }
         Ok(announce) => {
             crate::spawn_task(enqueue_send_to_community_followers(
@@ -879,7 +879,7 @@ pub fn spawn_enqueue_send_community_follow_accept(
         };
 
         let accept = community_follow_accept_to_ap(community_ap_id, follower, follow_ap_id)?;
-        println!("{:?}", accept);
+        log::debug!("{:?}", accept);
 
         let body = serde_json::to_string(&accept)?;
 
@@ -1400,8 +1400,8 @@ pub async fn check_signature_for_actor(
             })
         }).transpose()?;
 
-    println!("signature: {:?}", signature);
-    println!("found_key: {:?}", found_key.is_some());
+    log::debug!("signature: {:?}", signature);
+    log::debug!("found_key: {:?}", found_key.is_some());
 
     let signature = hancock::Signature::parse(signature)?;
 

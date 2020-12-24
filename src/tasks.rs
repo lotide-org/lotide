@@ -82,7 +82,7 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
 
         let res = crate::res_to_error(ctx.http_client.request(req).await?).await?;
 
-        println!("{:?}", res);
+        log::debug!("{:?}", res);
 
         Ok(())
     }

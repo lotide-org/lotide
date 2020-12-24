@@ -74,7 +74,7 @@ pub fn run(mut args: std::env::Args) {
 
         match action {
             "up" => {
-                println!("Applying migrations...");
+                log::debug!("Applying migrations...");
                 migrant_lib::Migrator::with_config(&config)
                     .all(true)
                     .swallow_completion(true)
@@ -82,7 +82,7 @@ pub fn run(mut args: std::env::Args) {
                     .expect("Failed to apply migrations");
             }
             "down" => {
-                println!("Unapplying migration...");
+                log::debug!("Unapplying migration...");
                 migrant_lib::Migrator::with_config(&config)
                     .direction(migrant_lib::Direction::Down)
                     .all(false)

@@ -274,7 +274,7 @@ async fn route_unstable_actors_lookup(
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (query,) = params;
-    println!("lookup {}", query);
+    log::debug!("lookup {}", query);
 
     let lookup = parse_lookup(&query)?;
 
@@ -289,14 +289,14 @@ async fn route_unstable_actors_lookup(
                     rel: Some("self".into()),
                 })?
             );
-            println!("{}", uri);
+            log::debug!("{}", uri);
             let res = ctx
                 .http_client
                 .request(hyper::Request::get(uri).body(Default::default())?)
                 .await?;
 
             if res.status() == hyper::StatusCode::NOT_FOUND {
-                println!("not found");
+                log::debug!("not found");
                 None
             } else {
                 let res = crate::res_to_error(res).await?;
@@ -578,7 +578,7 @@ async fn route_unstable_objects_lookup(
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (query,) = params;
-    println!("lookup {}", query);
+    log::debug!("lookup {}", query);
 
     let lookup = parse_lookup(&query)?;
 
@@ -593,14 +593,14 @@ async fn route_unstable_objects_lookup(
                     rel: Some("self".into()),
                 })?
             );
-            println!("{}", uri);
+            log::debug!("{}", uri);
             let res = ctx
                 .http_client
                 .request(hyper::Request::get(uri).body(Default::default())?)
                 .await?;
 
             if res.status() == hyper::StatusCode::NOT_FOUND {
-                println!("not found");
+                log::debug!("not found");
                 None
             } else {
                 let res = crate::res_to_error(res).await?;
