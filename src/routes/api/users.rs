@@ -143,6 +143,8 @@ struct RespUserInfo<'a> {
     base: RespMinimalAuthorInfo<'a>,
 
     description: &'a str,
+    description_html: Option<&'a str>,
+    description_text: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     suspended: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -252,7 +254,8 @@ async fn route_unstable_users_patch(
 
     #[derive(Deserialize)]
     struct UsersEditBody<'a> {
-        description: Option<Cow<'a, str>>,
+        #[serde(alias = "description")]
+        description_text: Option<Cow<'a, str>>,
         email_address: Option<Cow<'a, str>>,
         password: Option<String>,
         avatar: Option<Cow<'a, str>>,
@@ -266,7 +269,7 @@ async fn route_unstable_users_patch(
 
     let mut changes = Vec::<(&str, &(dyn tokio_postgres::types::ToSql + Sync))>::new();
 
-    if let Some(description) = body.description.as_ref() {
+    if let Some(description) = body.description_text.as_ref() {
         changes.push(("description", description));
     }
     if let Some(email_address) = body.email_address.as_ref() {
@@ -534,7 +537,7 @@ async fn route_unstable_users_get(
 
     let row = db
         .query_opt(
-            "SELECT username, local, ap_id, description, avatar, suspended FROM person WHERE id=$1",
+            "SELECT username, local, ap_id, description, description_html, avatar, suspended FROM person WHERE id=$1",
             &[&user_id],
         )
         .await?;
@@ -548,7 +551,7 @@ async fn route_unstable_users_get(
 
     let local = row.get(1);
     let ap_id = row.get(2);
-    let avatar: Option<&str> = row.get(4);
+    let avatar: Option<&str> = row.get(5);
 
     let info = RespMinimalAuthorInfo {
         id: user_id,
@@ -561,10 +564,24 @@ async fn route_unstable_users_get(
         }),
     };
 
+    let (description, description_text, description_html) = match row.get(4) {
+        Some(description_html) => (
+            description_html,
+            None,
+            Some(ammonia::clean(description_html)),
+        ),
+        None => {
+            let description_text: &str = row.get(3);
+            (description_text, Some(description_text), None)
+        }
+    };
+
     let info = RespUserInfo {
         base: info,
-        description: row.get(3),
-        suspended: if local { Some(row.get(5)) } else { None },
+        description,
+        description_html: description_html.as_deref(),
+        description_text,
+        suspended: if local { Some(row.get(6)) } else { None },
         your_note,
     };
 

@@ -13,6 +13,8 @@ struct RespCommunityInfo<'a> {
     base: RespMinimalCommunityInfo<'a>,
 
     description: &'a str,
+    description_html: Option<String>,
+    description_text: Option<&'a str>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     you_are_moderator: Option<bool>,
@@ -23,6 +25,20 @@ struct RespCommunityInfo<'a> {
 #[derive(Serialize)]
 struct RespYourFollowInfo {
     accepted: bool,
+}
+
+fn get_community_description_fields<'a>(
+    description_text: &'a str,
+    description_html: Option<&'a str>,
+) -> (&'a str, Option<&'a str>, Option<String>) {
+    match description_html {
+        Some(description_html) => (
+            description_html,
+            None,
+            Some(ammonia::clean(description_html)),
+        ),
+        None => (description_text, Some(description_text), None),
+    }
 }
 
 async fn route_unstable_communities_list(
@@ -43,7 +59,7 @@ async fn route_unstable_communities_list(
 
     let query: CommunitiesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
-    let mut sql = String::from("SELECT id, name, local, ap_id, description");
+    let mut sql = String::from("SELECT id, name, local, ap_id, description, description_html");
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
 
     let db = ctx.db_pool.get().await?;
@@ -77,7 +93,9 @@ async fn route_unstable_communities_list(
             let name = row.get(1);
             let local = row.get(2);
             let ap_id = row.get(3);
-            let description = row.get(4);
+
+            let (description, description_text, description_html) =
+                get_community_description_fields(row.get(4), row.get(5));
 
             let host = crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname);
 
@@ -91,13 +109,16 @@ async fn route_unstable_communities_list(
                 },
 
                 description,
+                description_html,
+                description_text,
+
                 you_are_moderator: if query.include_your {
-                    Some(row.get(6))
+                    Some(row.get(7))
                 } else {
                     None
                 },
                 your_follow: if query.include_your {
-                    Some(match row.get(5) {
+                    Some(match row.get(6) {
                         Some(accepted) => Some(RespYourFollowInfo { accepted }),
                         None => None,
                     })
@@ -204,12 +225,12 @@ async fn route_unstable_communities_get(
         (if query.include_your {
             let user = crate::require_login(&req, &db).await?;
             db.query_opt(
-                "SELECT name, local, ap_id, description, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$2) FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, description, description_html, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$2) FROM community WHERE id=$1",
                 &[&community_id.raw(), &user.raw()],
             ).await?
         } else {
             db.query_opt(
-                "SELECT name, local, ap_id, description FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, description, description_html FROM community WHERE id=$1",
                 &[&community_id.raw()],
             ).await?
         })
@@ -223,6 +244,9 @@ async fn route_unstable_communities_get(
 
     let community_local = row.get(1);
     let community_ap_id: Option<&str> = row.get(2);
+
+    let (description, description_text, description_html) =
+        get_community_description_fields(row.get(3), row.get(4));
 
     let info = RespCommunityInfo {
         base: RespMinimalCommunityInfo {
@@ -239,14 +263,16 @@ async fn route_unstable_communities_get(
             },
             remote_url: community_ap_id,
         },
-        description: row.get(3),
+        description,
+        description_html,
+        description_text,
         you_are_moderator: if query.include_your {
-            Some(row.get(5))
+            Some(row.get(6))
         } else {
             None
         },
         your_follow: if query.include_your {
-            Some(match row.get(4) {
+            Some(match row.get(5) {
                 Some(accepted) => Some(RespYourFollowInfo { accepted }),
                 None => None,
             })

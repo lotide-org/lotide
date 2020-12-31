@@ -54,6 +54,7 @@ migrant_lib = { version = "0.30.0", features = ["d-postgres"] }
 pdcm-linkify = "0.1.0"
 log = "0.4"
 env_logger = "0.8"
+v_htmlescape = "0.12.0"
 
 [dev-dependencies]
 rand = "0.7.3"

@@ -88,7 +88,7 @@ async fn handler_communities_get(
 
     match db
         .query_opt(
-            "SELECT name, local, public_key, description FROM community WHERE id=$1",
+            "SELECT name, local, public_key, description, description_html FROM community WHERE id=$1",
             &[&community_id],
         )
         .await?
@@ -116,7 +116,10 @@ async fn handler_communities_get(
                             None
                         }
                     });
-            let description: &str = row.get(3);
+            let description = match row.get(4) {
+                Some(description_html) => description_html,
+                None => v_htmlescape::escape(row.get(3)).to_string(),
+            };
 
             let community_ap_id =
                 crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub);

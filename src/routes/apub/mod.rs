@@ -118,7 +118,7 @@ async fn handler_users_get(
 
     match db
         .query_opt(
-            "SELECT username, local, public_key, description, avatar FROM person WHERE id=$1",
+            "SELECT username, local, public_key, description, description_html, avatar FROM person WHERE id=$1",
             &[&user_id.raw()],
         )
         .await?
@@ -148,9 +148,12 @@ async fn handler_users_get(
                         }
                     });
 
-            let description: &str = row.get(3);
+            let description = match row.get(4) {
+                Some(description_html) => description_html,
+                None => v_htmlescape::escape(row.get(3)).to_string(),
+            };
 
-            let avatar: Option<&str> = row.get(4);
+            let avatar: Option<&str> = row.get(5);
 
             let user_ap_id =
                 crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);

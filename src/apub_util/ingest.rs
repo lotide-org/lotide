@@ -215,10 +215,9 @@ pub async fn ingest_object(
                         .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
                 })
                 .unwrap_or("");
-            let description = group
+            let description_html = group
                 .summary()
-                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
-                .unwrap_or("");
+                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next());
             let inbox = group.inbox_unchecked().as_str();
             let shared_inbox = group
                 .endpoints_unchecked()
@@ -236,8 +235,8 @@ pub async fn ingest_object(
                 .and_then(|key| key.signature_algorithm.as_deref());
 
             let id = CommunityLocalID(db.query_one(
-                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7 RETURNING id",
-                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description],
+                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7 RETURNING id",
+                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html],
             ).await?.get(0));
 
             Ok(Some(IngestResult::Actor(
@@ -291,10 +290,9 @@ pub async fn ingest_object(
                 .public_key
                 .as_ref()
                 .and_then(|key| key.signature_algorithm.as_deref());
-            let description = person
+            let description_html = person
                 .summary()
-                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
-                .unwrap_or("");
+                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next());
 
             let avatar = person.icon().and_then(|icon| {
                 icon.iter()
@@ -316,8 +314,8 @@ pub async fn ingest_object(
                 .map(|x| x.as_str());
 
             let id = UserLocalID(db.query_one(
-                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description, avatar) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description=$7, avatar=$8 RETURNING id",
-                &[&username, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description, &avatar],
+                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html, avatar) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7, avatar=$8 RETURNING id",
+                &[&username, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html, &avatar],
             ).await?.get(0));
 
             Ok(Some(IngestResult::Actor(super::ActorLocalInfo::User {
