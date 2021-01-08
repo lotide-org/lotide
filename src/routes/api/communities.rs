@@ -53,6 +53,9 @@ async fn route_unstable_communities_list(
         #[serde(default)]
         search: Option<Cow<'a, str>>,
 
+        #[serde(rename = "your_follow.accepted")]
+        your_follow_accepted: Option<bool>,
+
         #[serde(default)]
         include_your: bool,
     }
@@ -64,9 +67,14 @@ async fn route_unstable_communities_list(
 
     let db = ctx.db_pool.get().await?;
 
+    let login_user_maybe = if query.include_your || query.your_follow_accepted.is_some() {
+        Some(crate::require_login(&req, &db).await?)
+    } else {
+        None
+    };
+
     let include_your_for = if query.include_your {
-        let user = crate::require_login(&req, &db).await?;
-        Some(user)
+        Some(login_user_maybe.unwrap())
     } else {
         None
     };
@@ -78,9 +86,24 @@ async fn route_unstable_communities_list(
 
     sql.push_str(" FROM community");
 
+    let mut did_where = false;
+
     if let Some(search) = &query.search {
         values.push(search);
         write!(sql, " WHERE community_fts(community) @@ plainto_tsquery('english', ${0}) ORDER BY ts_rank_cd(community_fts(community), plainto_tsquery('english', ${0})) DESC", values.len()).unwrap();
+        did_where = true;
+    }
+    if let Some(req_your_follow_accepted) = &query.your_follow_accepted {
+        values.push(login_user_maybe.as_ref().unwrap());
+        write!(
+            sql,
+            " {} community.id IN (SELECT community FROM community_follow WHERE follower=${}",
+            if did_where { "AND" } else { "WHERE" },
+            values.len()
+        )
+        .unwrap();
+        values.push(req_your_follow_accepted);
+        write!(sql, " AND accepted=${})", values.len()).unwrap();
     }
 
     let sql: &str = &sql;
