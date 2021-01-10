@@ -23,8 +23,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         writeln!(
             out_file,
-            r##"StaticMigration {{ tag: r#"{}"#, up: include_str!(r#"{1}/up.sql"#), down: include_str!(r#"{1}/down.sql"#) }},"##,
-            tag, path
+            r##"StaticMigration {{ tag: r#"{}"#, up: include_str!(r#"{1}{2}up.sql"#), down: include_str!(r#"{1}{2}down.sql"#) }},"##,
+            tag,
+            path,
+            std::path::MAIN_SEPARATOR
         )?;
     }
 
