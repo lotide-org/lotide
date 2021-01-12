@@ -3,6 +3,7 @@ comment_empty = Comment may not be empty
 comment_not_yours = That's not your comment
 community_edit_denied = You are not authorized to modify this community
 community_moderators_not_local = Community moderators can only be listed for local communities
+community_moderators_remove_must_be_older = You can only remove moderators that are newer than you
 community_name_disallowed_chars = Community name contains disallowed characters
 email_content_forgot_password = Hi { $username }, if you requested a password reset from lotide, use this code: { $key }
 email_not_configured = Email is not configured on this server

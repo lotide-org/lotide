@@ -27,6 +27,13 @@ struct RespYourFollowInfo {
     accepted: bool,
 }
 
+#[derive(Serialize)]
+struct RespModeratorInfo<'a> {
+    #[serde(flatten)]
+    base: RespMinimalAuthorInfo<'a>,
+    moderator_since: Option<String>,
+}
+
 fn get_community_description_fields<'a>(
     description_text: &'a str,
     description_html: Option<&'a str>,
@@ -210,7 +217,7 @@ async fn route_unstable_communities_create(
 
         let row = trans
             .query_one(
-                "INSERT INTO community (name, local, private_key, public_key, created_by) VALUES ($1, TRUE, $2, $3, $4) RETURNING id",
+                "INSERT INTO community (name, local, private_key, public_key, created_by, created_local) VALUES ($1, TRUE, $2, $3, $4, current_timestamp) RETURNING id",
                 &[&body.name, &private_key, &public_key, &user.raw()],
             )
             .await?;
@@ -219,7 +226,7 @@ async fn route_unstable_communities_create(
 
         trans
             .execute(
-                "INSERT INTO community_moderator (community, person) VALUES ($1, $2)",
+                "INSERT INTO community_moderator (community, person, created_local) VALUES ($1, $2, current_timestamp)",
                 &[&community_id, &user],
             )
             .await?;
@@ -464,7 +471,7 @@ async fn route_unstable_communities_moderators_list(
     })?;
 
     let rows = db.query(
-        "SELECT id, username, local, ap_id, avatar FROM person WHERE id IN (SELECT person FROM community_moderator WHERE community=$1)",
+        "SELECT person.id, person.username, person.local, person.ap_id, person.avatar, community_moderator.created_local FROM person, community_moderator WHERE person.id = community_moderator.person AND community_moderator.community = $1 ORDER BY community_moderator.created_local ASC NULLS FIRST",
         &[&community_id],
     ).await?;
 
@@ -475,15 +482,21 @@ async fn route_unstable_communities_moderators_list(
             let local = row.get(2);
             let ap_id = row.get(3);
 
-            RespMinimalAuthorInfo {
-                id,
-                username: Cow::Borrowed(row.get(1)),
-                local,
-                host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
-                remote_url: ap_id.map(|x| x.into()),
-                avatar: row.get::<_, Option<&str>>(4).map(|url| RespAvatarInfo {
-                    url: ctx.process_avatar_href(url, id),
-                }),
+            let moderator_since: Option<chrono::DateTime<chrono::offset::Utc>> = row.get(5);
+
+            RespModeratorInfo {
+                base: RespMinimalAuthorInfo {
+                    id,
+                    username: Cow::Borrowed(row.get(1)),
+                    local,
+                    host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
+                    remote_url: ap_id.map(|x| x.into()),
+                    avatar: row.get::<_, Option<&str>>(4).map(|url| RespAvatarInfo {
+                        url: ctx.process_avatar_href(url, id),
+                    }),
+                },
+
+                moderator_since: moderator_since.map(|time| time.to_rfc3339()),
             }
         })
         .collect();
@@ -545,7 +558,7 @@ async fn route_unstable_communities_moderators_add(
     })?;
 
     db.execute(
-        "INSERT INTO community_moderator (community, person) VALUES ($1, $2)",
+        "INSERT INTO community_moderator (community, person, created_local) VALUES ($1, $2, current_timestamp)",
         &[&community_id, &user_id],
     )
     .await?;
@@ -560,34 +573,65 @@ async fn route_unstable_communities_moderators_remove(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community_id, user_id) = params;
 
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let lang = crate::get_lang_for_req(&req);
     let login_user = crate::require_login(&req, &db).await?;
 
-    ({
-        let row = db
-            .query_opt(
-                "SELECT 1 FROM community_moderator WHERE community=$1 AND person=$2",
-                &[&community_id, &login_user],
-            )
-            .await?;
-        match row {
+    let self_moderator_row = db
+        .query_opt(
+            "SELECT created_local FROM community_moderator WHERE community=$1 AND person=$2",
+            &[&community_id, &login_user],
+        )
+        .await?;
+
+    let self_moderator_since: Option<chrono::DateTime<chrono::offset::Utc>> = ({
+        match self_moderator_row {
             None => Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
                 lang.tr("must_be_moderator", None).into_owned(),
             ))),
-            Some(_) => Ok(()),
+            Some(row) => Ok(row.get(0)),
         }
     })?;
 
-    db.execute(
-        "DELETE FROM community_moderator WHERE community=$1 AND person=$2",
-        &[&community_id, &user_id],
-    )
-    .await?;
+    {
+        let trans = db.transaction().await?;
+        let row = trans.query_opt(
+            "DELETE FROM community_moderator WHERE community=$1 AND person=$2 RETURNING (created_local >= $3)",
+            &[&community_id, &user_id, &self_moderator_since],
+        )
+        .await?;
 
-    Ok(crate::empty_response())
+        let is_allowed = match self_moderator_since {
+            None => true, // self was moderator before timestamps existed, can remove anyone
+            Some(_) => {
+                match row {
+                    None => true, // was already removed, ok
+                    Some(row) => {
+                        let res: Option<bool> = row.get(0);
+                        match res {
+                            None => false, // other has no timestamp, must be older
+                            Some(value) => value,
+                        }
+                    }
+                }
+            }
+        };
+
+        if is_allowed {
+            trans.commit().await?;
+            Ok(crate::empty_response())
+        } else {
+            trans.rollback().await?;
+
+            Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::FORBIDDEN,
+                lang.tr("community_moderators_remove_must_be_older", None)
+                    .into_owned(),
+            )))
+        }
+    }
 }
 
 async fn route_unstable_communities_unfollow(

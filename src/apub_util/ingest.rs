@@ -184,7 +184,7 @@ pub async fn ingest_object(
                         if let Some(row) = row {
                             let local: bool = row.get(0);
                             if local {
-                                db.execute("INSERT INTO community_follow (community, follower, local, ap_id, accepted) VALUES ($1, $2, FALSE, $3, TRUE) ON CONFLICT (community, follower) DO NOTHING", &[&community_id, &follower_local_id, &activity_ap_id.as_str()]).await?;
+                                db.execute("INSERT INTO community_follow (community, follower, local, ap_id, accepted, created_local) VALUES ($1, $2, FALSE, $3, TRUE, current_timestamp) ON CONFLICT (community, follower) DO NOTHING", &[&community_id, &follower_local_id, &activity_ap_id.as_str()]).await?;
 
                                 crate::apub_util::spawn_enqueue_send_community_follow_accept(
                                     community_id,
@@ -235,7 +235,7 @@ pub async fn ingest_object(
                 .and_then(|key| key.signature_algorithm.as_deref());
 
             let id = CommunityLocalID(db.query_one(
-                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7 RETURNING id",
+                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html, created_local) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7, current_timestamp) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7 RETURNING id",
                 &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html],
             ).await?.get(0));
 
