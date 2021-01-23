@@ -132,7 +132,7 @@ async fn route_unstable_posts_list(
 
     #[derive(Deserialize)]
     struct PostsListQuery<'a> {
-        #[serde(default)]
+        in_any_local_community: Option<bool>,
         search: Option<Cow<'a, str>>,
 
         #[serde(default)]
@@ -177,6 +177,14 @@ async fn route_unstable_posts_list(
         values.push(search);
         search_value_idx = Some(values.len());
         write!(sql, " AND to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')) @@ plainto_tsquery('english', ${})", values.len()).unwrap();
+    }
+    if let Some(value) = query.in_any_local_community {
+        write!(
+            sql,
+            " AND {}(community.local AND post.approved)",
+            if value { "" } else { "NOT " }
+        )
+        .unwrap();
     }
     sql.push_str(" ORDER BY ");
     match query.sort {
