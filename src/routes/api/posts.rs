@@ -134,6 +134,8 @@ async fn route_unstable_posts_list(
     struct PostsListQuery<'a> {
         in_any_local_community: Option<bool>,
         search: Option<Cow<'a, str>>,
+        #[serde(default)]
+        use_aggregate_filters: bool,
 
         #[serde(default)]
         include_your: bool,
@@ -173,6 +175,9 @@ async fn route_unstable_posts_list(
     );
 
     sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE");
+    if query.use_aggregate_filters {
+        sql.push_str(" AND community.hide_posts_from_aggregates=FALSE");
+    }
     if let Some(search) = &query.search {
         values.push(search);
         search_value_idx = Some(values.len());

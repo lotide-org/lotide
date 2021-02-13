@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE community ADD COLUMN hide_posts_from_aggregates BOOLEAN NOT NULL DEFAULT (FALSE);
+COMMIT;

@@ -1115,6 +1115,13 @@
 						"required": false,
 						"schema": {"type": "string"},
 						"description": "Filter by whether the post is approved in a local community"
+					},
+					{
+						"name": "use_aggregate_filters",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"},
+						"description": "If true, will omit posts from communities marked as hide_posts_from_aggregates"
 					}
 				],
 				"responses": {
