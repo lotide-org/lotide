@@ -872,6 +872,7 @@ fn get_comments_replies_box<'a: 'b, 'b>(
         include_your_for,
         depth,
         limit,
+        None,
         db,
         ctx,
     ))
@@ -882,24 +883,39 @@ async fn get_comments_replies<'a>(
     include_your_for: Option<UserLocalID>,
     depth: u8,
     limit: u8,
+    page: Option<&str>,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> Result<HashMap<CommentLocalID, (Vec<RespPostCommentInfo<'a>>, Option<String>)>, crate::Error> {
     use futures::TryStreamExt;
+    use std::fmt::Write;
+
+    let page = page
+        .map(parse_number_58)
+        .transpose()
+        .map_err(|_| InvalidPage.to_user_error())?;
+    let limit_i = i64::from(limit) + 1;
 
     let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
-    let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
+    let (sql2, mut values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
-                ", EXISTS(SELECT 1 FROM reply_like WHERE reply = reply.id AND person = $2)",
-                vec![&parents, &include_your_for],
+                ", EXISTS(SELECT 1 FROM reply_like WHERE reply = reply.id AND person = $3)",
+                vec![&parents, &limit_i, &include_your_for],
             )
         } else {
-            ("", vec![&parents])
+            ("", vec![&parents, &limit_i])
         };
-    let sql3 = " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = unnest ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC) AS result ON TRUE";
+    let sql3 = " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = unnest ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC) AS result ON TRUE LIMIT $2";
 
-    let sql: &str = &format!("{}{}{}", sql1, sql2, sql3);
+    let mut sql: String = format!("{}{}{}", sql1, sql2, sql3);
+
+    if let Some(page) = &page {
+        values.push(page);
+        write!(sql, " OFFSET ${}", values.len()).unwrap();
+    }
+
+    let sql: &str = &sql;
 
     let stream = crate::query_stream(db, sql, &values).await?;
 
@@ -978,7 +994,7 @@ async fn get_comments_replies<'a>(
         if entry.0.len() < limit.into() {
             entry.0.push(comment);
         } else {
-            entry.1 = Some(limit.to_string());
+            entry.1 = Some(format_number_58(i64::from(limit) + page.unwrap_or(0)));
         }
     }
 

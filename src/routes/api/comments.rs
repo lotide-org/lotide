@@ -521,13 +521,14 @@ async fn route_unstable_comments_replies_list(
     let (comment_id,) = params;
 
     #[derive(Deserialize)]
-    struct RepliesListQuery {
+    struct RepliesListQuery<'a> {
         #[serde(default)]
         include_your: bool,
         #[serde(default = "super::default_replies_depth")]
         depth: u8,
         #[serde(default = "super::default_replies_limit")]
         limit: u8,
+        page: Option<Cow<'a, str>>,
     }
 
     let query: RepliesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -546,6 +547,7 @@ async fn route_unstable_comments_replies_list(
         include_your_for,
         query.depth,
         query.limit,
+        query.page.as_deref(),
         &db,
         &ctx,
     )
