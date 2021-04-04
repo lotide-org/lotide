@@ -168,7 +168,7 @@
 			},
 			"PostCommentInfo": {
 				"type": "object",
-				"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "has_replies", "attachments", "local"],
+				"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "attachments", "local"],
 				"properties": {
 					"id": {"type": "integer"},
 					"content_text": {"type": "string", "nullable": true},
@@ -190,11 +190,21 @@
 					"deleted": {"type": "boolean"},
 					"local": {"type": "boolean"},
 					"replies": {
-						"type": "array",
+						"type": "object",
 						"nullable": true,
-						"items": {"$ref": "#/components/schemas/PostCommentInfo"}
+						"required": ["items", "next_page"],
+						"properties": {
+							"items": {
+								"type": "array",
+								"items": {"$ref": "#/components/schemas/PostCommentInfo"}
+							},
+							"next_page": {
+								"type": "string",
+								"nullable": true
+							}
+						},
+						"description": "If null, there are replies to this comment but are omitted due to depth limits. Otherwise, this contains a list of replies. If next_page is not null, some replies have been omitted and can be accessed with pagination."
 					},
-					"has_replies": {"type": "boolean"},
 					"your_vote": {"$ref": "#/components/schemas/YourVote"}
 				}
 			},
@@ -272,7 +282,7 @@
 							"application/json": {
 								"schema": {
 									"type": "object",
-									"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "has_replies", "parent", "post"],
+									"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "parent", "post"],
 									"properties": {
 										"id": {"type": "integer"},
 										"content_text": {"type": "string", "nullable": true},
@@ -283,11 +293,18 @@
 										"created": {"type": "string", "format": "date-time"},
 										"deleted": {"type": "boolean"},
 										"replies": {
-											"type": "array",
+											"type": "object",
 											"nullable": true,
-											"items": {"$ref": "#/components/schemas/PostCommentInfo"}
+											"properties": {
+												"items": {"type": "array"},
+												"next_page": {
+													"type": "string",
+													"nullable": true,
+													"description": "This is actually always null since it only appears when there are no replies."
+												}
+											},
+											"description": "This endpoint no longer includes replies. However, if there are no replies, this will be non-null and items will be an empty array."
 										},
-										"has_replies": {"type": "boolean"},
 										"your_vote": {"$ref": "#/components/schemas/YourVote"},
 										"parent": {
 											"type": "object",
@@ -325,6 +342,67 @@
 			}
 		},
 		"/api/unstable/comments/{commentID}/replies": {
+			"get": {
+				"summary": "List comment replies",
+				"parameters": [
+					{
+						"name": "commentID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "include_your",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"}
+					},
+					{
+						"name": "depth",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"},
+						"description": "Number of levels to expand replies for. Defaults to 3."
+					},
+					{
+						"name": "limit",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"$ref": "#/components/schemas/PostCommentInfo"
+											}
+										},
+										"next_page": {
+											"type": "string",
+											"nullable": true
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			},
 			"post": {
 				"summary": "Reply to a comment",
 				"parameters": [
@@ -1195,12 +1273,6 @@
 						"in": "query",
 						"required": false,
 						"schema": {"type": "boolean"}
-					},
-					{
-						"name": "replies_sort",
-						"in": "query",
-						"required": false,
-						"schema": {"$ref": "#/components/schemas/SortType"}
 					}
 				],
 				"responses": {
@@ -1211,14 +1283,10 @@
 								"schema": {
 									"allOf": [{"$ref": "#/components/schemas/SomePostInfo"}],
 									"type": "object",
-									"required": ["approved", "local", "replies"],
+									"required": ["approved", "local"],
 									"properties": {
 										"approved": {"type": "boolean"},
-										"local": {"type": "boolean"},
-										"replies": {
-											"type": "array",
-											"items": {"$ref": "#/components/schemas/PostCommentInfo"}
-										}
+										"local": {"type": "boolean"}
 									}
 								}
 							}
@@ -1246,6 +1314,60 @@
 			}
 		},
 		"/api/unstable/posts/{postID}/replies": {
+			"get": {
+				"summary": "List post replies",
+				"parameters": [
+					{
+						"name": "postID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "include_your",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"}
+					},
+					{
+						"name": "limit",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"$ref": "#/components/schemas/PostCommentInfo"
+											}
+										},
+										"next_page": {
+											"type": "string",
+											"nullable": true
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			},
 			"post": {
 				"summary": "Reply to a post",
 				"parameters": [
