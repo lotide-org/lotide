@@ -1,6 +1,6 @@
 use super::{
-    JustURL, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
-    RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost,
+    JustURL, RespAvatarInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost, ValueConsumer,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
@@ -13,24 +13,55 @@ async fn get_post_comments<'a>(
     post_id: PostLocalID,
     include_your_for: Option<UserLocalID>,
     sort: super::SortType,
+    limit: u8,
+    page: Option<&'a str>,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
-) -> Result<Vec<RespPostCommentInfo<'a>>, crate::Error> {
+) -> Result<(Vec<RespPostCommentInfo<'a>>, Option<String>), crate::Error> {
     use futures::TryStreamExt;
 
+    let limit_i = i64::from(limit) + 1;
+
     let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
-    let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
+    let (sql2, mut values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
-                ", EXISTS(SELECT 1 FROM reply_like WHERE reply = reply.id AND person = $2)",
-                vec![&post_id, &include_your_for],
+                ", EXISTS(SELECT 1 FROM reply_like WHERE reply = reply.id AND person = $3)",
+                vec![&post_id, &limit_i, &include_your_for],
             )
         } else {
-            ("", vec![&post_id])
+            ("", vec![&post_id, &limit_i])
         };
-    let sql3 = format!(" FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ORDER BY {}", sort.comment_sort_sql());
+    let mut sql3 = "FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ".to_owned();
+    let mut sql4 = format!("ORDER BY {} LIMIT $2", sort.comment_sort_sql());
 
-    let sql: &str = &format!("{}{}{}", sql1, sql2, sql3);
+    let mut con1 = None;
+    let mut con2 = None;
+    let (page_part1, page_part2) = sort
+        .handle_page(
+            page,
+            ValueConsumer {
+                targets: vec![&mut con1, &mut con2],
+                start_idx: values.len(),
+                used: 0,
+            },
+        )
+        .map_err(super::InvalidPage::to_user_error)?;
+    if let Some(value) = &con1 {
+        values.push(value.as_ref());
+        if let Some(value) = &con2 {
+            values.push(value.as_ref());
+        }
+    }
+
+    if let Some(part) = page_part1 {
+        sql3.push_str(&part);
+    }
+    if let Some(part) = page_part2 {
+        sql4.push_str(&part);
+    }
+
+    let sql: &str = &format!("{}{}{}{}", sql1, sql2, sql3, sql4);
 
     let stream = crate::query_stream(db, sql, &values[..]).await?;
 
@@ -84,8 +115,7 @@ async fn get_post_comments<'a>(
                     created: created.to_rfc3339(),
                     deleted: row.get(8),
                     local: row.get(11),
-                    replies: None,
-                    has_replies: false,
+                    replies: Some(RespList::empty()),
                     score: row.get(12),
                     your_vote: match include_your_for {
                         None => None,
@@ -101,9 +131,18 @@ async fn get_post_comments<'a>(
         .try_collect()
         .await?;
 
-    super::apply_comments_replies(&mut comments, include_your_for, 2, db, &ctx).await?;
+    let next_page = if comments.len() > usize::from(limit) {
+        Some(sort.get_next_comments_page(comments.pop().unwrap().1, limit, page))
+    } else {
+        None
+    };
 
-    Ok(comments.into_iter().map(|(_, comment)| comment).collect())
+    super::apply_comments_replies(&mut comments, include_your_for, 2, limit, db, &ctx).await?;
+
+    Ok((
+        comments.into_iter().map(|(_, comment)| comment).collect(),
+        next_page,
+    ))
 }
 
 async fn route_unstable_posts_list(
@@ -214,6 +253,52 @@ async fn route_unstable_posts_list(
     let posts = super::handle_common_posts_list(stream, &ctx, include_your_for.is_some()).await?;
 
     crate::json_response(&posts)
+}
+
+async fn route_unstable_posts_replies_list(
+    params: (PostLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+
+    #[derive(Deserialize)]
+    struct RepliesListQuery<'a> {
+        #[serde(default)]
+        include_your: bool,
+        #[serde(default = "super::default_replies_limit")]
+        limit: u8,
+        page: Option<Cow<'a, str>>,
+    }
+
+    let query: RepliesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
+    let db = ctx.db_pool.get().await?;
+
+    let include_your_for = if query.include_your {
+        let user = crate::require_login(&req, &db).await?;
+        Some(user)
+    } else {
+        None
+    };
+
+    let (replies, next_page) = get_post_comments(
+        post_id,
+        include_your_for,
+        super::SortType::Hot,
+        query.limit,
+        query.page.as_deref(),
+        &db,
+        &ctx,
+    )
+    .await?;
+
+    let body = RespList {
+        items: (&replies).into(),
+        next_page: next_page.as_deref().map(Cow::Borrowed),
+    };
+
+    crate::json_response(&body)
 }
 
 async fn route_unstable_posts_create(
@@ -337,16 +422,10 @@ async fn route_unstable_posts_get(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     use futures::future::TryFutureExt;
 
-    fn default_sort() -> super::SortType {
-        super::SortType::Hot
-    }
-
     #[derive(Deserialize)]
     struct PostsGetQuery {
         #[serde(default)]
         include_your: bool,
-        #[serde(default = "default_sort")]
-        replies_sort: super::SortType,
     }
 
     let query: PostsGetQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -367,18 +446,16 @@ async fn route_unstable_posts_get(
         post: &'a RespPostListPost<'a>,
         approved: bool,
         local: bool,
-        replies: Vec<RespPostCommentInfo<'a>>,
     }
 
     let (post_id,) = params;
 
-    let (row, comments, your_vote) = futures::future::try_join3(
+    let (row, your_vote) = futures::future::try_join(
         db.query_opt(
             "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
-        get_post_comments(post_id, include_your_for, query.replies_sort, &db, &ctx),
         async {
             if let Some(user) = include_your_for {
                 let row = db.query_opt("SELECT 1 FROM post_like WHERE post=$1 AND person=$2", &[&post_id, &user]).await?;
@@ -462,7 +539,6 @@ async fn route_unstable_posts_get(
             let output = RespPostInfo {
                 post: &post,
                 local: row.get(16),
-                replies: comments,
                 approved: row.get(14),
             };
 
@@ -914,6 +990,7 @@ pub fn route_posts() -> crate::RouteNode<()> {
                 .with_child(
                     "replies",
                     crate::RouteNode::new()
+                        .with_handler_async("GET", route_unstable_posts_replies_list)
                         .with_handler_async("POST", route_unstable_posts_replies_create),
                 )
                 .with_child(

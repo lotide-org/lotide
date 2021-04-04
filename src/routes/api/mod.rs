@@ -22,6 +22,52 @@ lazy_static::lazy_static! {
     };
 }
 
+#[derive(Debug)]
+struct InvalidNumber58;
+
+fn parse_number_58(src: &str) -> Result<i64, InvalidNumber58> {
+    let mut buf = [0; 8];
+    match bs58::decode(src).into(&mut buf) {
+        Err(_) => Err(InvalidNumber58),
+        Ok(count) => {
+            if count == 8 {
+                Ok(i64::from_be_bytes(buf))
+            } else {
+                Err(InvalidNumber58)
+            }
+        }
+    }
+}
+
+fn format_number_58(src: i64) -> String {
+    bs58::encode(src.to_be_bytes()).into_string()
+}
+
+struct ValueConsumer<'a> {
+    targets: Vec<&'a mut Option<Box<dyn tokio_postgres::types::ToSql + Send + Sync>>>,
+    start_idx: usize,
+    used: usize,
+}
+
+impl<'a> ValueConsumer<'a> {
+    fn push(&mut self, value: impl tokio_postgres::types::ToSql + Sync + Send + 'static) -> usize {
+        *self.targets[self.used] = Some(Box::new(value));
+        self.used += 1;
+
+        self.start_idx + self.used
+    }
+}
+
+struct InvalidPage;
+impl InvalidPage {
+    fn to_user_error(self) -> crate::Error {
+        crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "Invalid page",
+        ))
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum SortType {
@@ -43,6 +89,76 @@ impl SortType {
             SortType::New => "reply.created DESC",
         }
     }
+
+    pub fn handle_page(
+        &self,
+        page: Option<&str>,
+        mut value_out: ValueConsumer,
+    ) -> Result<(Option<String>, Option<String>), InvalidPage> {
+        match page {
+            None => Ok((None, None)),
+            Some(page) => match self {
+                SortType::Hot => {
+                    let page: i64 = parse_number_58(page).map_err(|_| InvalidPage)?;
+                    let idx = value_out.push(page);
+                    Ok((None, Some(format!(" OFFSET ${}", idx))))
+                }
+                SortType::New => {
+                    let page: (chrono::DateTime<chrono::offset::FixedOffset>, i64) = {
+                        let mut spl = page.split(',');
+
+                        let ts = spl.next().ok_or(InvalidPage)?;
+                        let u = spl.next().ok_or(InvalidPage)?;
+                        if spl.next().is_some() {
+                            return Err(InvalidPage);
+                        } else {
+                            use chrono::TimeZone;
+
+                            let ts: i64 = ts.parse().map_err(|_| InvalidPage)?;
+                            let u: i64 = u.parse().map_err(|_| InvalidPage)?;
+
+                            let ts = chrono::offset::Utc.timestamp_nanos(ts);
+
+                            (ts.into(), u)
+                        }
+                    };
+
+                    let idx1 = value_out.push(page.0);
+                    let idx2 = value_out.push(page.1);
+
+                    Ok((
+                        Some(format!(
+                            " AND created < ${0} OR (created = ${0} AND id <= ${1})",
+                            idx1, idx2
+                        )),
+                        None,
+                    ))
+                }
+            },
+        }
+    }
+
+    fn get_next_comments_page(
+        &self,
+        comment: RespPostCommentInfo,
+        limit: u8,
+        current_page: Option<&str>,
+    ) -> String {
+        match self {
+            SortType::Hot => format_number_58(
+                i64::from(limit)
+                    + match current_page {
+                        None => 0,
+                        Some(current_page) => parse_number_58(current_page).unwrap(),
+                    },
+            ),
+            SortType::New => {
+                let ts: chrono::DateTime<chrono::offset::FixedOffset> =
+                    comment.created.parse().unwrap();
+                format!("{},{}", ts, comment.base.id)
+            }
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -56,12 +172,27 @@ struct MaybeIncludeYour {
     pub include_your: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
+struct RespList<'a, T: serde::Serialize + ToOwned + Clone> {
+    items: Cow<'a, [T]>,
+    next_page: Option<Cow<'a, str>>,
+}
+
+impl<'a, T: serde::Serialize + ToOwned + Clone> RespList<'a, T> {
+    pub fn empty() -> Self {
+        Self {
+            items: Cow::Borrowed(&[]),
+            next_page: None,
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
 struct RespAvatarInfo<'a> {
     url: Cow<'a, str>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct RespMinimalAuthorInfo<'a> {
     id: UserLocalID,
     username: Cow<'a, str>,
@@ -80,7 +211,7 @@ struct RespLoginUserInfo<'a> {
     has_unread_notifications: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct JustUser<'a> {
     user: RespMinimalAuthorInfo<'a>,
 }
@@ -118,7 +249,7 @@ struct RespPostListPost<'a> {
     your_vote: Option<Option<crate::Empty>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct RespMinimalCommentInfo<'a> {
     id: CommentLocalID,
     content_text: Option<Cow<'a, str>>,
@@ -126,12 +257,12 @@ struct RespMinimalCommentInfo<'a> {
     content_html_safe: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct JustURL<'a> {
     url: Cow<'a, str>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct RespPostCommentInfo<'a> {
     #[serde(flatten)]
     base: RespMinimalCommentInfo<'a>,
@@ -141,11 +272,19 @@ struct RespPostCommentInfo<'a> {
     created: String,
     deleted: bool,
     local: bool,
-    replies: Option<Vec<RespPostCommentInfo<'a>>>,
-    has_replies: bool,
+    replies: Option<RespList<'a, RespPostCommentInfo<'a>>>,
     score: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     your_vote: Option<Option<crate::Empty>>,
+}
+
+impl<'a> RespPostCommentInfo<'a> {
+    fn has_replies(&self) -> Option<bool> {
+        match &self.replies {
+            None => None,
+            Some(list) => Some(!list.items.is_empty()),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -168,6 +307,14 @@ enum RespThingInfo<'a> {
         created: String,
         post: RespMinimalPostInfo<'a>,
     },
+}
+
+pub fn default_replies_depth() -> u8 {
+    3
+}
+
+pub fn default_replies_limit() -> u8 {
+    30
 }
 
 pub fn route_api() -> crate::RouteNode<()> {
@@ -651,6 +798,7 @@ async fn apply_comments_replies<'a, T>(
     comments: &mut Vec<(T, RespPostCommentInfo<'a>)>,
     include_your_for: Option<UserLocalID>,
     depth: u8,
+    limit: u8,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> Result<(), crate::Error> {
@@ -660,12 +808,16 @@ async fn apply_comments_replies<'a, T>(
         .collect::<Vec<_>>();
     if depth > 0 {
         let mut replies =
-            get_comments_replies_box(&ids, include_your_for, depth - 1, db, ctx).await?;
+            get_comments_replies_box(&ids, include_your_for, depth - 1, limit, db, ctx).await?;
 
         for (_, comment) in comments.iter_mut() {
-            let current = replies.remove(&comment.base.id).unwrap_or_else(Vec::new);
-            comment.has_replies = !current.is_empty();
-            comment.replies = Some(current);
+            let (current, next_page) = replies
+                .remove(&comment.base.id)
+                .unwrap_or_else(|| (Vec::new(), None));
+            comment.replies = Some(RespList {
+                items: current.into(),
+                next_page: next_page.map(From::from),
+            });
         }
     } else {
         use futures::stream::TryStreamExt;
@@ -684,11 +836,15 @@ async fn apply_comments_replies<'a, T>(
             .await?;
 
         for (_, comment) in comments.iter_mut() {
-            comment.has_replies = with_replies.contains(&comment.base.id);
+            comment.replies = if with_replies.contains(&comment.base.id) {
+                None
+            } else {
+                Some(RespList::empty())
+            };
         }
     }
 
-    comments.retain(|(_, comment)| !comment.deleted || comment.has_replies);
+    comments.retain(|(_, comment)| !comment.deleted || comment.has_replies() != Some(false));
 
     Ok(())
 }
@@ -697,13 +853,14 @@ fn get_comments_replies_box<'a: 'b, 'b>(
     parents: &'b [CommentLocalID],
     include_your_for: Option<UserLocalID>,
     depth: u8,
+    limit: u8,
     db: &'b tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> std::pin::Pin<
     Box<
         dyn Future<
                 Output = Result<
-                    HashMap<CommentLocalID, Vec<RespPostCommentInfo<'a>>>,
+                    HashMap<CommentLocalID, (Vec<RespPostCommentInfo<'a>>, Option<String>)>,
                     crate::Error,
                 >,
             > + Send
@@ -714,6 +871,7 @@ fn get_comments_replies_box<'a: 'b, 'b>(
         parents,
         include_your_for,
         depth,
+        limit,
         db,
         ctx,
     ))
@@ -723,12 +881,13 @@ async fn get_comments_replies<'a>(
     parents: &[CommentLocalID],
     include_your_for: Option<UserLocalID>,
     depth: u8,
+    limit: u8,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
-) -> Result<HashMap<CommentLocalID, Vec<RespPostCommentInfo<'a>>>, crate::Error> {
+) -> Result<HashMap<CommentLocalID, (Vec<RespPostCommentInfo<'a>>, Option<String>)>, crate::Error> {
     use futures::TryStreamExt;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
+    let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
     let (sql2, values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -738,7 +897,7 @@ async fn get_comments_replies<'a>(
         } else {
             ("", vec![&parents])
         };
-    let sql3 = " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = ANY($1::BIGINT[]) ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC";
+    let sql3 = " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = unnest ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC) AS result ON TRUE";
 
     let sql: &str = &format!("{}{}{}", sql1, sql2, sql3);
 
@@ -795,8 +954,7 @@ async fn get_comments_replies<'a>(
                     created: created.to_rfc3339(),
                     deleted: row.get(9),
                     local: row.get(12),
-                    replies: None,
-                    has_replies: false,
+                    replies: Some(RespList::empty()),
                     score: row.get(13),
                     your_vote: match include_your_for {
                         None => None,
@@ -812,11 +970,16 @@ async fn get_comments_replies<'a>(
         .try_collect()
         .await?;
 
-    apply_comments_replies(&mut comments, include_your_for, depth, db, &ctx).await?;
+    apply_comments_replies(&mut comments, include_your_for, depth, limit, db, &ctx).await?;
 
     let mut result = HashMap::new();
     for (parent, comment) in comments {
-        result.entry(parent).or_insert_with(Vec::new).push(comment);
+        let entry = result.entry(parent).or_insert_with(|| (Vec::new(), None));
+        if entry.0.len() < limit.into() {
+            entry.0.push(comment);
+        } else {
+            entry.1 = Some(limit.to_string());
+        }
     }
 
     Ok(result)
