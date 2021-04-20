@@ -90,7 +90,7 @@ impl Into<activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>
 
 pub type ParamSlice<'a> = &'a [&'a (dyn tokio_postgres::types::ToSql + Sync)];
 
-#[derive(Serialize, Default)]
+#[derive(Serialize, Default, Clone, Copy)]
 pub struct Empty {}
 
 pub struct Pineapple {

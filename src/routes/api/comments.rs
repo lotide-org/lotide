@@ -1,6 +1,6 @@
 use super::{
-    JustURL, MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
-    RespMinimalPostInfo, RespPostCommentInfo,
+    JustURL, MaybeIncludeYour, RespAvatarInfo, RespList, RespMinimalAuthorInfo,
+    RespMinimalCommentInfo, RespMinimalPostInfo, RespPostCommentInfo,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ async fn route_unstable_comments_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id) FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id) FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
             &[&comment_id],
         )
         .map_err(crate::Error::from),
@@ -96,12 +96,6 @@ async fn route_unstable_comments_get(
                 None => None,
             };
 
-            let replies =
-                super::get_comments_replies(&[comment_id], include_your_for, 3, &db, &ctx)
-                    .await?
-                    .remove(&comment_id)
-                    .unwrap_or_else(Vec::new);
-
             let output = RespCommentInfo {
                 base: RespPostCommentInfo {
                     base: RespMinimalCommentInfo {
@@ -123,8 +117,11 @@ async fn route_unstable_comments_get(
                     created: created.to_rfc3339(),
                     deleted: row.get(10),
                     local: row.get(4),
-                    has_replies: !replies.is_empty(),
-                    replies: Some(replies),
+                    replies: if row.get(15) {
+                        None
+                    } else {
+                        Some(RespList::empty())
+                    },
                     score: row.get(14),
                     your_vote,
                 },
@@ -406,10 +403,10 @@ async fn route_unstable_comments_likes_list(
         })
         .collect::<Vec<_>>();
 
-    let body = serde_json::json!({
-        "items": likes,
-        "next_page": next_page,
-    });
+    let body = RespList {
+        items: (&likes).into(),
+        next_page: next_page.as_deref().map(Cow::Borrowed),
+    };
 
     crate::json_response(&body)
 }
@@ -516,6 +513,56 @@ async fn route_unstable_comments_unlike(
     Ok(crate::empty_response())
 }
 
+async fn route_unstable_comments_replies_list(
+    params: (CommentLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (comment_id,) = params;
+
+    #[derive(Deserialize)]
+    struct RepliesListQuery<'a> {
+        #[serde(default)]
+        include_your: bool,
+        #[serde(default = "super::default_replies_depth")]
+        depth: u8,
+        #[serde(default = "super::default_replies_limit")]
+        limit: u8,
+        page: Option<Cow<'a, str>>,
+    }
+
+    let query: RepliesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
+    let db = ctx.db_pool.get().await?;
+
+    let include_your_for = if query.include_your {
+        let user = crate::require_login(&req, &db).await?;
+        Some(user)
+    } else {
+        None
+    };
+
+    let (replies, next_page) = super::get_comments_replies(
+        &[comment_id],
+        include_your_for,
+        query.depth,
+        query.limit,
+        query.page.as_deref(),
+        &db,
+        &ctx,
+    )
+    .await?
+    .remove(&comment_id)
+    .unwrap_or_else(|| (Vec::new(), None));
+
+    let body = RespList {
+        items: (&replies).into(),
+        next_page: next_page.as_deref().map(Cow::Borrowed),
+    };
+
+    crate::json_response(&body)
+}
+
 async fn route_unstable_comments_replies_create(
     params: (CommentLocalID,),
     ctx: Arc<crate::RouteContext>,
@@ -595,6 +642,7 @@ pub fn route_comments() -> crate::RouteNode<()> {
             .with_child(
                 "replies",
                 crate::RouteNode::new()
+                    .with_handler_async("GET", route_unstable_comments_replies_list)
                     .with_handler_async("POST", route_unstable_comments_replies_create),
             )
             .with_child(
