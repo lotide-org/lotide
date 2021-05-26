@@ -685,7 +685,7 @@ async fn route_unstable_communities_posts_list(
 
     fn default_sort() -> super::SortType {
         super::SortType::Hot
-    };
+    }
 
     #[derive(Deserialize)]
     struct Query {

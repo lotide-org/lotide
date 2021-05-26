@@ -925,7 +925,7 @@ pub fn post_to_ap(
         }
 
         Ok(())
-    };
+    }
 
     match post.href {
         Some(href) => {
