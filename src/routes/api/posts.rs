@@ -46,7 +46,7 @@ async fn get_post_comments<'a>(
                 used: 0,
             },
         )
-        .map_err(super::InvalidPage::to_user_error)?;
+        .map_err(super::InvalidPage::into_user_error)?;
     if let Some(value) = &con1 {
         values.push(value.as_ref());
         if let Some(value) = &con2 {

@@ -60,7 +60,7 @@ impl<'a> ValueConsumer<'a> {
 
 struct InvalidPage;
 impl InvalidPage {
-    fn to_user_error(self) -> crate::Error {
+    fn into_user_error(self) -> crate::Error {
         crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
             "Invalid page",
@@ -878,6 +878,8 @@ fn get_comments_replies_box<'a: 'b, 'b>(
     ))
 }
 
+// https://github.com/rust-lang/rust-clippy/issues/7271
+#[allow(clippy::needless_lifetimes)]
 async fn get_comments_replies<'a>(
     parents: &[CommentLocalID],
     include_your_for: Option<UserLocalID>,
@@ -893,7 +895,7 @@ async fn get_comments_replies<'a>(
     let page = page
         .map(parse_number_58)
         .transpose()
-        .map_err(|_| InvalidPage.to_user_error())?;
+        .map_err(|_| InvalidPage.into_user_error())?;
     let limit_i = i64::from(limit) + 1;
 
     let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
@@ -1119,6 +1121,8 @@ async fn handle_common_posts_list(
     Ok(posts)
 }
 
+// https://github.com/rust-lang/rust-clippy/issues/7271
+#[allow(clippy::needless_lifetimes)]
 pub async fn process_comment_content<'a>(
     lang: &crate::Translator,
     content_text: Option<Cow<'a, str>>,

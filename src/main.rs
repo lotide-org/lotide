@@ -76,15 +76,17 @@ impl From<BaseURL> for url::Url {
     }
 }
 
-impl Into<activitystreams::base::AnyBase> for BaseURL {
-    fn into(self) -> activitystreams::base::AnyBase {
-        self.0.into()
+impl From<BaseURL> for activitystreams::base::AnyBase {
+    fn from(src: BaseURL) -> activitystreams::base::AnyBase {
+        src.0.into()
     }
 }
 
-impl Into<activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>> for BaseURL {
-    fn into(self) -> activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase> {
-        self.0.into()
+impl From<BaseURL> for activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase> {
+    fn from(
+        src: BaseURL,
+    ) -> activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase> {
+        src.0.into()
     }
 }
 
@@ -376,18 +378,18 @@ pub struct PostInfoOwned {
     community: CommunityLocalID,
 }
 
-impl<'a> Into<PostInfo<'a>> for &'a PostInfoOwned {
-    fn into(self) -> PostInfo<'a> {
+impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
+    fn from(src: &'a PostInfoOwned) -> PostInfo<'a> {
         PostInfo {
-            id: self.id,
-            author: self.author,
-            href: self.href.as_deref(),
-            content_text: self.content_text.as_deref(),
-            content_markdown: self.content_markdown.as_deref(),
-            content_html: self.content_html.as_deref(),
-            title: &self.title,
-            created: &self.created,
-            community: self.community,
+            id: src.id,
+            author: src.author,
+            href: src.href.as_deref(),
+            content_text: src.content_text.as_deref(),
+            content_markdown: src.content_markdown.as_deref(),
+            content_html: src.content_html.as_deref(),
+            title: &src.title,
+            created: &src.created,
+            community: src.community,
         }
     }
 }
@@ -914,7 +916,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args();
     args.next(); // discard first element
     match args.next().as_deref() {
-        Some("migrate") => Ok(crate::migrate::run(args)),
+        Some("migrate") => {
+            crate::migrate::run(args);
+            Ok(())
+        }
         None => run(),
         _ => {
             panic!("Unexpected argument");

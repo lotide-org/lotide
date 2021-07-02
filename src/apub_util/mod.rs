@@ -260,7 +260,7 @@ pub fn do_sign(
 ) -> Result<Vec<u8>, openssl::error::ErrorStack> {
     let mut signer = openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &key)?;
     signer.update(&src)?;
-    Ok(signer.sign_to_vec()?)
+    signer.sign_to_vec()
 }
 
 pub fn do_verify(
@@ -271,7 +271,7 @@ pub fn do_verify(
 ) -> Result<bool, openssl::error::ErrorStack> {
     let mut verifier = openssl::sign::Verifier::new(alg, &key)?;
     verifier.update(&src)?;
-    Ok(verifier.verify(sig)?)
+    verifier.verify(sig)
 }
 
 pub struct PubKeyInfo {
@@ -1452,9 +1452,9 @@ pub async fn verify_incoming_object(
     match req.headers().get("signature") {
         None => {
             let obj: JustMaybeAPID = serde_json::from_slice(&req_body)?;
-            let ap_id = obj.id.ok_or_else(|| {
-                crate::Error::InternalStrStatic("Missing id in received activity")
-            })?;
+            let ap_id = obj.id.ok_or(crate::Error::InternalStrStatic(
+                "Missing id in received activity",
+            ))?;
 
             let res_body = fetch_ap_object(&ap_id, &ctx.http_client).await?;
 
