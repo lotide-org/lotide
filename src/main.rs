@@ -976,11 +976,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mail_from: Option<lettre::Mailbox> = match std::env::var("SMTP_FROM") {
-        Ok(value) => Some(value.parse().expect("Failed to parse SMTP_FROM")),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(other) => Err(other).expect("Failed to parse SMTP_FROM"),
-    };
+    let mail_from: Option<lettre::Mailbox> = config
+        .smtp_from
+        .as_ref()
+        .map(|value| value.parse().expect("Failed to parse SMTP_FROM"));
 
     if mailer.is_some() && mail_from.is_none() {
         panic!("SMTP_URL was provided, but SMTP_FROM was not");

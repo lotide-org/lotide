@@ -32,7 +32,7 @@ impl Config {
             .with_merged(config::Environment::with_prefix("LOTIDE"))?;
 
         {
-            let mut args = std::env::args_os();
+            let mut args = std::env::args();
             while let Some(arg) = args.next() {
                 if arg == "-c" {
                     let path = args.next().expect("Missing parameter for config argument");

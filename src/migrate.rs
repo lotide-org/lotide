@@ -7,12 +7,26 @@ pub struct StaticMigration {
 }
 
 pub fn run(mut args: std::env::Args) {
-    let action = args.next();
+    let config = crate::config::Config::load().expect("Failed to load config");
+
+    let mut action = None;
+    while let Some(arg) = args.next() {
+        if arg == "-c" {
+            args.next(); // skip parameter
+        } else {
+            if action == None {
+                action = Some(arg);
+            } else {
+                panic!("Unexpected parameter");
+            }
+        }
+    }
     let action = action.as_deref().unwrap_or("up");
 
-    let database_url = std::env::var("DATABASE_URL").expect("Missing DATABASE_URL");
-    let db_cfg: tokio_postgres::Config =
-        database_url.parse().expect("Failed to parse DATABASE_URL");
+    let db_cfg: tokio_postgres::Config = config
+        .database_url
+        .parse()
+        .expect("Failed to parse DATABASE_URL");
 
     let mut settings = migrant_lib::Settings::configure_postgres();
     settings
