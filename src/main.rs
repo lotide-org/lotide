@@ -8,10 +8,13 @@ use std::sync::Arc;
 use trout::hyper::RoutingFailureExtHyper;
 
 mod apub_util;
+mod config;
 mod migrate;
 mod routes;
 mod tasks;
 mod worker;
+
+use self::config::Config;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(try_from = "url::Url")]
@@ -920,62 +923,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             crate::migrate::run(args);
             Ok(())
         }
-        None => run(),
-        _ => {
-            panic!("Unexpected argument");
-        }
+        _ => run(),
     }
 }
 
 #[tokio::main]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let host_url_apub =
-        std::env::var("HOST_URL_ACTIVITYPUB").expect("Missing HOST_URL_ACTIVITYPUB");
-
-    let host_url_api = std::env::var("HOST_URL_API").expect("Missing HOST_URL_API");
-
-    let apub_proxy_rewrites = match std::env::var("APUB_PROXY_REWRITES") {
-        Ok(value) => value.parse().expect("Failed to parse APUB_PROXY_REWRITES"),
-        Err(std::env::VarError::NotPresent) => false,
-        Err(other) => Err(other).expect("Failed to parse APUB_PROXY_REWRITES"),
-    };
-
-    let allow_forwarded = match std::env::var("ALLOW_FORWARDED") {
-        Ok(value) => value.parse().expect("Failed to parse ALLOW_FORWARDED"),
-        Err(std::env::VarError::NotPresent) => false,
-        Err(other) => Err(other).expect("Failed to parse ALLOW_FORWARDED"),
-    };
+    let config = Config::load().expect("Failed to load config");
 
     let db_pool = deadpool_postgres::Pool::new(
         deadpool_postgres::Manager::new(
-            std::env::var("DATABASE_URL")
-                .expect("Missing DATABASE_URL")
-                .parse()
-                .unwrap(),
+            config.database_url.parse().unwrap(),
             tokio_postgres::NoTls,
         ),
         16,
     );
 
-    let port = match std::env::var("PORT") {
-        Ok(port_str) => port_str.parse().expect("Failed to parse port"),
-        _ => 3333,
-    };
-
-    let host_url_apub: url::Url = host_url_apub
+    let host_url_apub: url::Url = config
+        .host_url_activitypub
         .parse()
         .expect("Failed to parse HOST_URL_ACTIVITYPUB");
     let host_url_apub: BaseURL = host_url_apub
         .try_into()
         .expect("HOST_URL_ACTIVITYPUB is not a valid base URL");
 
-    let media_location = std::env::var_os("MEDIA_LOCATION").map(std::path::PathBuf::from);
-
-    let smtp_url: Option<url::Url> = match std::env::var("SMTP_URL") {
-        Ok(value) => Some(value.parse().expect("Failed to parse SMTP_URL")),
-        Err(std::env::VarError::NotPresent) => None,
-        Err(other) => Err(other).expect("Failed to parse SMTP_URL"),
-    };
+    let smtp_url: Option<url::Url> = config
+        .smtp_url
+        .as_ref()
+        .map(|url| url.parse().expect("Failed to parse SMTP_URL"));
     let mailer = match smtp_url {
         None => None,
         Some(url) => {
@@ -1011,6 +986,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         panic!("SMTP_URL was provided, but SMTP_FROM was not");
     }
 
+    let allow_forwarded = config.allow_forwarded;
+
     let (worker_trigger, worker_rx) = tokio::sync::mpsc::channel(1);
 
     let routes = Arc::new(routes::route_root());
@@ -1021,11 +998,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         db_pool,
         mailer,
         mail_from,
-        media_location,
-        host_url_api,
+        media_location: config.media_location.clone(),
+        host_url_api: config.host_url_api.clone(),
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
-        apub_proxy_rewrites,
+        apub_proxy_rewrites: config.apub_proxy_rewrites,
         api_ratelimit: henry::RatelimitBucket::new(300),
 
         worker_trigger,
@@ -1033,7 +1010,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     worker::start_worker(context.clone(), worker_rx);
 
-    let server = hyper::Server::bind(&(std::net::Ipv6Addr::UNSPECIFIED, port).into()).serve(
+    let server = hyper::Server::bind(&(std::net::Ipv6Addr::UNSPECIFIED, config.port).into()).serve(
         hyper::service::make_service_fn(|sock: &hyper::server::conn::AddrStream| {
             let addr_direct = sock.remote_addr().ip();
             let routes = routes.clone();

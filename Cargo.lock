@@ -305,6 +305,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "config"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b1b9d958c2b1368a663f05538fc1b5975adce1e19f435acceae987aceeeb369"
+dependencies = [
+ "lazy_static",
+ "nom 5.1.2",
+ "rust-ini",
+ "serde",
+]
+
+[[package]]
 name = "const-random"
 version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -396,7 +408,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38ce52b0b1ad88ed0b2be2bc3c65ad39dd1a5d9633b1a8a314fc017fbe0027d2"
 dependencies = [
  "async-trait",
- "config",
+ "config 0.10.1",
  "crossbeam-queue",
  "num_cpus",
  "serde",
@@ -410,7 +422,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45575d9acf1535dddcfc5841fd8f1776287bdc328f8d9e76531f4dfd2eb9788f"
 dependencies = [
  "async-trait",
- "config",
+ "config 0.10.1",
  "deadpool",
  "futures",
  "log",
@@ -1147,6 +1159,7 @@ dependencies = [
  "bumpalo",
  "bytes",
  "chrono",
+ "config 0.11.0",
  "deadpool-postgres",
  "either",
  "env_logger",
@@ -1888,6 +1901,12 @@ dependencies = [
  "web-sys",
  "winreg",
 ]
+
+[[package]]
+name = "rust-ini"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e52c148ef37f8c375d49d5a73aa70713125b7f19095948a923f80afdeb22ec2"
 
 [[package]]
 name = "rustc-demangle"
