@@ -916,21 +916,37 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    let mut args = std::env::args();
-    args.next(); // discard first element
-    match args.next().as_deref() {
-        Some("migrate") => {
-            crate::migrate::run(args);
-            Ok(())
-        }
-        _ => run(),
+
+    let matches = clap::App::new("lotide")
+        .arg(
+            clap::Arg::with_name("config")
+                .short("c")
+                .value_name("FILE")
+                .help("Sets a path to a config file")
+                .takes_value(true),
+        )
+        .subcommand(
+            clap::SubCommand::with_name("migrate").arg(
+                clap::Arg::with_name("ACTION")
+                    .required(true)
+                    .default_value("up")
+                    .possible_values(&["up", "down", "setup"]),
+            ),
+        )
+        .get_matches();
+
+    let config = Config::load(matches.value_of_os("config")).expect("Failed to load config");
+
+    if let Some(matches) = matches.subcommand_matches("migrate") {
+        crate::migrate::run(config, matches);
+        Ok(())
+    } else {
+        run(config)
     }
 }
 
 #[tokio::main]
-async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::load().expect("Failed to load config");
-
+async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let db_pool = deadpool_postgres::Pool::new(
         deadpool_postgres::Manager::new(
             config.database_url.parse().unwrap(),

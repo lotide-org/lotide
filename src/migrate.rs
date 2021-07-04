@@ -6,22 +6,8 @@ pub struct StaticMigration {
     down: &'static str,
 }
 
-pub fn run(mut args: std::env::Args) {
-    let config = crate::config::Config::load().expect("Failed to load config");
-
-    let mut action = None;
-    while let Some(arg) = args.next() {
-        if arg == "-c" {
-            args.next(); // skip parameter
-        } else {
-            if action == None {
-                action = Some(arg);
-            } else {
-                panic!("Unexpected parameter");
-            }
-        }
-    }
-    let action = action.as_deref().unwrap_or("up");
+pub fn run(config: crate::Config, matches: &clap::ArgMatches) {
+    let action = matches.value_of("ACTION").unwrap_or("up");
 
     let db_cfg: tokio_postgres::Config = config
         .database_url
