@@ -651,7 +651,8 @@ async fn ingest_postlike(
             .await?
             .map(|id| IngestResult::Other(crate::ThingLocalRef::Post(id)))),
             KnownObject::Note(obj) => {
-                let content = obj.content().and_then(|x| x.as_single_xsd_string());
+                let content = obj.content();
+                let content = content.as_ref().and_then(|x| x.as_single_xsd_string());
                 let media_type = obj.media_type();
                 let created = obj.published();
                 let author = obj.attributed_to().and_then(|x| x.as_single_id());
@@ -698,8 +699,10 @@ async fn ingest_postlike(
                         .map(|id| IngestResult::Other(crate::ThingLocalRef::Comment(id))))
                     } else {
                         // not a reply, must be a top-level post
-                        let title = obj
-                            .summary()
+                        let summary = obj.summary();
+
+                        let title = summary
+                            .as_ref()
                             .and_then(|x| x.as_single_xsd_string())
                             .unwrap_or("");
 
@@ -761,7 +764,8 @@ async fn ingest_postlike(
                 if let KnownObject::Note(obj) = obj.deref() {
                     // TODO deduplicate this?
 
-                    let content = obj.content().and_then(|x| x.as_single_xsd_string());
+                    let content = obj.content();
+                    let content = content.as_ref().and_then(|x| x.as_single_xsd_string());
                     let media_type = obj.media_type();
                     let created = obj.published();
                     let author = obj.attributed_to().and_then(|x| x.as_single_id());
@@ -986,7 +990,8 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
                 .or_else(|| maybe.as_xsd_string())
         })
         .next();
-    let content = obj.content().and_then(|x| x.as_single_xsd_string());
+    let content = obj.content();
+    let content = content.as_ref().and_then(|x| x.as_single_xsd_string());
     let media_type = obj.media_type();
     let created = obj.published();
     let author = obj.attributed_to().and_then(|x| x.as_single_id());
