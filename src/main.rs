@@ -538,17 +538,19 @@ pub struct Translator {
     bundle: fluent::concurrent::FluentBundle<&'static fluent::FluentResource>,
 }
 impl Translator {
-    pub fn tr<'a>(&'a self, key: &str, args: Option<&'a fluent::FluentArgs>) -> Cow<'a, str> {
+    pub fn tr<'a>(&'a self, key: &'a str, args: Option<&'a fluent::FluentArgs>) -> Cow<'a, str> {
         let mut errors = Vec::with_capacity(0);
-        let out = self.bundle.format_pattern(
-            self.bundle
-                .get_message(key)
-                .expect("Missing message in translation")
-                .value
-                .expect("Missing value for translation key"),
-            args,
-            &mut errors,
-        );
+        let out = match self.bundle.get_message(key) {
+            Some(msg) => self.bundle.format_pattern(
+                msg.value.expect("Missing value for translation key"),
+                args,
+                &mut errors,
+            ),
+            None => {
+                log::error!("Missing translation for {}", key);
+                Cow::Borrowed(key)
+            }
+        };
         if !errors.is_empty() {
             log::error!("Errors in translation: {:?}", errors);
         }
