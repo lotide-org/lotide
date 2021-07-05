@@ -959,7 +959,7 @@ async fn get_comments_replies<'a>(
                     base: RespMinimalCommentInfo {
                         id,
                         content_text: content_text.map(From::from),
-                        content_html_safe: content_html.map(|html| ammonia::clean(&html)),
+                        content_html_safe: content_html.map(|html| crate::clean_html(&html)),
                     },
 
                     attachments: match ctx
@@ -1096,7 +1096,7 @@ async fn handle_common_posts_list(
                 title,
                 href: ctx.process_href_opt(href, id),
                 content_text,
-                content_html_safe: content_html.map(|html| ammonia::clean(&html)),
+                content_html_safe: content_html.map(|html| crate::clean_html(&html)),
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,

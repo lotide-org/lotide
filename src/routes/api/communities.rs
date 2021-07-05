@@ -42,7 +42,7 @@ fn get_community_description_fields<'a>(
         Some(description_html) => (
             description_html,
             None,
-            Some(ammonia::clean(description_html)),
+            Some(crate::clean_html(description_html)),
         ),
         None => (description_text, Some(description_text), None),
     }
@@ -799,7 +799,7 @@ async fn route_unstable_communities_posts_list(
                 title,
                 href: ctx.process_href_opt(href, id),
                 content_text,
-                content_html_safe: content_html.map(|html| ammonia::clean(&html)),
+                content_html_safe: content_html.map(|html| crate::clean_html(&html)),
                 author: author.as_ref(),
                 created: &created.to_rfc3339(),
                 community: &community,

@@ -103,7 +103,7 @@ async fn route_unstable_comments_get(
                         content_text: row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
                         content_html_safe: row
                             .get::<_, Option<&str>>(5)
-                            .map(|html| ammonia::clean(&html)),
+                            .map(|html| crate::clean_html(&html)),
                     },
 
                     attachments: match ctx.process_attachments_inner(

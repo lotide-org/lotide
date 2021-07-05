@@ -438,7 +438,7 @@ async fn route_unstable_users_notifications_list(
                                 content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
                                 content_html_safe: row
                                     .get::<_, Option<&str>>(4)
-                                    .map(|html| ammonia::clean(&html)),
+                                    .map(|html| crate::clean_html(&html)),
                             };
                             let post = RespMinimalPostInfo {
                                 id: PostLocalID(post_id),
@@ -464,7 +464,7 @@ async fn route_unstable_users_notifications_list(
                                 content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
                                 content_html_safe: row
                                     .get::<_, Option<&str>>(4)
-                                    .map(|html| ammonia::clean(&html)),
+                                    .map(|html| crate::clean_html(&html)),
                             };
                             let parent_id = CommentLocalID(parent_id);
                             let post =
@@ -568,7 +568,7 @@ async fn route_unstable_users_get(
         Some(description_html) => (
             description_html,
             None,
-            Some(ammonia::clean(description_html)),
+            Some(crate::clean_html(description_html)),
         ),
         None => {
             let description_text: &str = row.get(3);
@@ -668,7 +668,7 @@ async fn route_unstable_users_things_list(
                         content_text: row.get::<_, Option<_>>(2).map(Cow::Borrowed),
                         content_html_safe: row
                             .get::<_, Option<&str>>(3)
-                            .map(|html| ammonia::clean(&html)),
+                            .map(|html| crate::clean_html(&html)),
                     },
                     created,
                     post: RespMinimalPostInfo {

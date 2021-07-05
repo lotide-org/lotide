@@ -681,6 +681,19 @@ pub fn render_markdown(src: &str) -> String {
     output
 }
 
+lazy_static::lazy_static! {
+    static ref SANITIZER: ammonia::Builder<'static> = {
+        let mut builder = ammonia::Builder::default();
+        builder.link_rel(Some("ugc noopener noreferrer"));
+
+        builder
+    };
+}
+
+pub fn clean_html(src: &str) -> String {
+    SANITIZER.clean(src).to_string()
+}
+
 pub fn on_local_community_add_post(
     community: CommunityLocalID,
     post_local_id: PostLocalID,

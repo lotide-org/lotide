@@ -910,7 +910,7 @@ pub fn post_to_ap(
     ) -> Result<(), crate::Error> {
         if let Some(html) = post.content_html {
             props
-                .set_content(ammonia::clean(&html))
+                .set_content(crate::clean_html(&html))
                 .set_media_type(mime::TEXT_HTML);
 
             if let Some(md) = post.content_markdown {
@@ -1052,7 +1052,7 @@ pub fn local_comment_to_ap(
     let mut obj = activitystreams::object::ApObject::new(obj);
 
     if let Some(html) = &comment.content_html {
-        obj.set_content(ammonia::clean(&html))
+        obj.set_content(crate::clean_html(&html))
             .set_media_type(mime::TEXT_HTML);
 
         if let Some(md) = &comment.content_markdown {
