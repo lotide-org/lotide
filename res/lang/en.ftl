@@ -7,6 +7,7 @@ community_moderators_remove_must_be_older = You can only remove moderators that 
 community_name_disallowed_chars = Community name contains disallowed characters
 email_content_forgot_password = Hi { $username }, if you requested a password reset from lotide, use this code: { $key }
 email_not_configured = Email is not configured on this server
+media_upload_missing = Uploaded media has gone missing
 media_upload_not_configured = Media Upload is not configured on this server
 media_upload_not_image = Media upload is only available for images
 missing_content_type = Missing Content-Type
