@@ -1,4 +1,4 @@
-image: alpine/3.12
+image: alpine/3.13
 packages:
   - cargo
   - openssl-dev
