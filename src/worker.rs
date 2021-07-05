@@ -50,7 +50,7 @@ async fn run_worker(
             }
         } else {
             match tokio::time::timeout(std::time::Duration::from_secs(60), recv.recv()).await {
-                Err(tokio::time::Elapsed { .. }) => {}
+                Err(tokio::time::error::Elapsed { .. }) => {}
                 Ok(recv_res) => recv_res.ok_or(crate::Error::InternalStrStatic(
                     "Worker trigger senders lost",
                 ))?,

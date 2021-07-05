@@ -406,7 +406,7 @@ async fn route_unstable_communities_follow(
                 crate::apub_util::spawn_enqueue_send_community_follow(community, user, ctx);
 
                 if body.try_wait_for_accept {
-                    tokio::time::delay_for(std::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
                     let row = db.query_one(
                     "SELECT accepted FROM community_follow WHERE community=$1 AND follower=$2",
@@ -757,7 +757,7 @@ async fn route_unstable_communities_posts_list(
         query.sort.post_sort_sql(),
     );
 
-    let stream = db.query_raw(sql, values.iter().map(|s| *s as _)).await?;
+    let stream = crate::query_stream(&db, sql, &values).await?;
 
     let posts: Vec<serde_json::Value> = stream
         .map_err(crate::Error::from)

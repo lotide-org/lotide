@@ -1,5 +1,4 @@
 use crate::UserLocalID;
-use lettre::Tokio02Transport;
 use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -42,7 +41,7 @@ async fn route_unstable_forgot_password_keys_create(
     let username: &str = user_row.get(1);
     let user_email: &str = user_row.get(2);
 
-    let user_email = lettre::Mailbox::new(None, user_email.parse()?);
+    let user_email = lettre::message::Mailbox::new(None, user_email.parse()?);
 
     let key = ForgotPasswordKey::generate();
     db.execute(
@@ -63,13 +62,11 @@ async fn route_unstable_forgot_password_keys_create(
         .subject("Forgot Password Request")
         .from(ctx.mail_from.as_ref().unwrap().clone())
         .to(user_email)
-        .singlepart(
-            lettre::message::SinglePart::binary()
-                .header(lettre::message::header::ContentType::text_utf8())
-                .body(msg_body),
-        )?;
+        .singlepart(lettre::message::SinglePart::plain(msg_body))?;
 
     crate::spawn_task(async move {
+        use lettre::AsyncTransport;
+
         ctx.mailer.as_ref().unwrap().send(msg).await?;
 
         Ok(())

@@ -140,8 +140,8 @@ pub type HttpClient = hyper::Client<hyper_tls::HttpsConnector<hyper::client::Htt
 
 pub struct BaseContext {
     pub db_pool: DbPool,
-    pub mailer: Option<lettre::AsyncSmtpTransport<lettre::Tokio02Connector>>,
-    pub mail_from: Option<lettre::Mailbox>,
+    pub mailer: Option<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>>,
+    pub mail_from: Option<lettre::message::Mailbox>,
     pub host_url_api: String,
     pub host_url_apub: BaseURL,
     pub http_client: HttpClient,
@@ -449,14 +449,18 @@ pub fn get_path_and_query(url: &url::Url) -> Result<String, url::ParseError> {
     Ok(format!("{}{}", url.path(), url.query().unwrap_or("")))
 }
 
+fn slice_iter<'a>(
+    s: &'a [&'a (dyn postgres_types::ToSql + Sync)],
+) -> impl ExactSizeIterator<Item = &'a dyn postgres_types::ToSql> + 'a {
+    s.iter().map(|s| *s as _)
+}
+
 pub async fn query_stream(
     db: &tokio_postgres::Client,
     statement: &(impl tokio_postgres::ToStatement + ?Sized),
     params: ParamSlice<'_>,
 ) -> Result<tokio_postgres::RowStream, tokio_postgres::Error> {
-    let params = params.iter().map(|s| *s as _);
-
-    db.query_raw(statement, params).await
+    db.query_raw(statement, slice_iter(params)).await
 }
 
 pub fn common_response_builder() -> http::response::Builder {
@@ -988,9 +992,9 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
             let host = url.host_str().expect("Missing host in SMTP_URL");
             let mut builder = match url.scheme() {
                 "smtp" => {
-                    lettre::AsyncSmtpTransport::<lettre::Tokio02Connector>::builder_dangerous(host)
+                    lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous(host)
                 }
-                "smtps" => lettre::AsyncSmtpTransport::<lettre::Tokio02Connector>::relay(host)
+                "smtps" => lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(host)
                     .expect("Failed to initialize SMTP transport"),
                 _ => panic!("Unrecognized scheme for SMTP_URL"),
             };
@@ -1007,7 +1011,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let mail_from: Option<lettre::Mailbox> = config
+    let mail_from: Option<lettre::message::Mailbox> = config
         .smtp_from
         .as_ref()
         .map(|value| value.parse().expect("Failed to parse SMTP_FROM"));

@@ -8,12 +8,12 @@ license = "AGPL-3.0-or-later"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-hyper = "0.13.5"
-hyper-tls = "0.4.1"
-tokio-postgres = { version = "0.5.3", features = ["with-uuid-0_8", "with-chrono-0_4", "with-serde_json-1"] }
-tokio = { version = "0.2.18", features = ["macros"] }
+hyper = { version = "0.14.9", features = ["stream", "client", "tcp", "http1", "server"] }
+hyper-tls = "0.5.0"
+tokio-postgres = { version = "0.7.2", features = ["with-uuid-0_8", "with-chrono-0_4", "with-serde_json-1"] }
+tokio = { version = "1.8.0", features = ["macros", "sync", "fs", "time", "rt-multi-thread"] }
 trout = "0.2.0"
-deadpool-postgres = "0.5.5"
+deadpool-postgres = "0.9.0"
 serde_json = "1.0.53"
 futures = "0.3.5"
 bcrypt = "0.8.0"
@@ -23,7 +23,6 @@ uuid = { version = "0.8.1", features = ["v4"] }
 headers = "0.3.2"
 chrono = "0.4.11"
 url = { version = "2.1.1", features = ["serde"] }
-bytes = "0.5.4"
 either = "1.5.3"
 openssl = "0.10.29"
 hancock = "0.1.0"
@@ -31,7 +30,7 @@ serde_urlencoded = "0.6.1"
 mime = "0.3.16"
 thiserror = "1.0.20"
 async-trait = "0.1.36"
-postgres-types = "0.1.2"
+postgres-types = "0.2.1"
 lazy_static = "1.4.0"
 unic-char-range = "0.9.0"
 http = "0.2.1"
@@ -41,11 +40,11 @@ unic-langid = { version = "0.9.0", features = ["macros"] }
 activitystreams = "0.7.0-alpha.11"
 activitystreams-ext = "0.1.0-alpha.2"
 fast_chemail = "0.9.6"
-lettre = { version = "0.10.0-alpha.2", features = ["tokio02", "tokio02-native-tls"] }
+lettre = { version = "0.10.0-rc.3", features = ["tokio1", "tokio1-native-tls"] }
 rand = "0.7.3"
 bs58 = "0.3.1"
 bumpalo = "3.4.0"
-tokio-util = "0.3.1"
+tokio-util = "0.6.7"
 henry = "0.1.0"
 ammonia = "3.1.0"
 base64 = "0.13.0"
@@ -57,6 +56,7 @@ env_logger = "0.8"
 v_htmlescape = "0.12.0"
 config = { version = "0.11.0", default-features = false, features = ["ini"] }
 clap = "2.33.3"
+bytes = "1.0.1"
 
 [dev-dependencies]
 rand = "0.7.3"

@@ -359,9 +359,10 @@ async fn route_unstable_users_following_posts_list(
 
     let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&user, &limit];
 
-    let stream = db.query_raw(
+    let stream = crate::query_stream(
+        &db,
         format!("SELECT {} FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.approved AND post.deleted=FALSE AND community.id IN (SELECT community FROM community_follow WHERE follower=$1 AND accepted) ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $2", super::common_posts_list_query(Some(1))).deref(),
-        values.iter().map(|s| *s as _)
+        values,
     ).await?;
 
     let posts = super::handle_common_posts_list(stream, &ctx, true).await?;
