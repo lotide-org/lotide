@@ -79,6 +79,10 @@ async fn perform_task(
             let def: crate::tasks::FetchActor = serde_json::from_value(params)?;
             def.perform(ctx).await?;
         }
+        crate::tasks::FetchCommunityFeatured::KIND => {
+            let def: crate::tasks::FetchCommunityFeatured = serde_json::from_value(params)?;
+            def.perform(ctx).await?;
+        }
         _ => {
             return Err(crate::Error::InternalStr(format!(
                 "Unrecognized task type: {}",

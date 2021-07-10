@@ -239,6 +239,10 @@ pub async fn ingest_object(
                 &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html],
             ).await?.get(0));
 
+            if let Some(featured_url) = group.ext_two.featured {
+                crate::apub_util::spawn_enqueue_fetch_community_featured(id, featured_url, ctx);
+            }
+
             Ok(Some(IngestResult::Actor(
                 super::ActorLocalInfo::Community {
                     id,

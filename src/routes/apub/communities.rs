@@ -1,6 +1,5 @@
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
-use serde_derive::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -12,12 +11,6 @@ lazy_static::lazy_static! {
             "@type": "@id"
         }
     })).unwrap();
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FeaturedExtension {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    featured: Option<url::Url>,
 }
 
 pub fn route_communities() -> crate::RouteNode<()> {
@@ -178,7 +171,7 @@ async fn handler_communities_get(
             })
             .set_preferred_username(name);
 
-            let featured_ext = FeaturedExtension {
+            let featured_ext = crate::apub_util::FeaturedExtension {
                 featured: Some(crate::apub_util::get_local_community_featured_apub_id(community_id, &ctx.host_url_apub).into()),
             };
 
@@ -295,9 +288,11 @@ async fn handler_communities_featured_list(
         .collect();
     let items = items?;
 
-    let mut body = activitystreams::collection::Collection::<
-        activitystreams::collection::kind::CollectionType,
-    >::new();
+    let mut body = activitystreams::collection::UnorderedCollection::new();
+    body.set_id(
+        crate::apub_util::get_local_community_featured_apub_id(community_id, &ctx.host_url_apub)
+            .into(),
+    );
     body.set_context(activitystreams::context());
     body.set_total_items(items.len() as u64);
     body.set_many_items(items);

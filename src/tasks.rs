@@ -1,3 +1,5 @@
+use crate::{CommunityLocalID, PostLocalID};
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -127,6 +129,61 @@ impl<'a> TaskDef for FetchActor<'a> {
 
     async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
         crate::apub_util::fetch_actor(&self.actor_ap_id, ctx).await?;
+
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct FetchCommunityFeatured {
+    pub community_id: CommunityLocalID,
+    pub featured_url: url::Url,
+}
+
+#[async_trait]
+impl TaskDef for FetchCommunityFeatured {
+    const KIND: &'static str = "fetch_community_featured";
+
+    async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
+        use activitystreams::prelude::*;
+
+        let obj =
+            crate::apub_util::fetch_ap_object_raw(&self.featured_url, &ctx.http_client).await?;
+        let obj: crate::apub_util::AnyCollection = serde_json::from_value(obj)?;
+
+        let items = match &obj {
+            crate::apub_util::AnyCollection::Unordered(obj) => obj.items(),
+            crate::apub_util::AnyCollection::Ordered(obj) => obj.ordered_items(),
+        };
+
+        let (local_items, remote_items) = match items {
+            None => (Vec::new(), Vec::new()),
+            Some(items) => items
+                .iter()
+                .map(|item| item.as_xsd_any_uri())
+                .filter_map(|x| x)
+                .map(|x| x.as_str())
+                .partition(|x| x.starts_with(ctx.host_url_apub.as_str())),
+        };
+
+        let local_items: Vec<PostLocalID> = local_items
+            .into_iter()
+            .filter_map(|ap_id| {
+                let rest = crate::apub_util::try_strip_host(&ap_id, &ctx.host_url_apub).unwrap();
+                if let Some(rest) = rest.strip_prefix("/posts/") {
+                    rest.parse().ok()
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let db = ctx.db_pool.get().await?;
+
+        db.execute(
+            "UPDATE post SET sticky=COALESCE((ap_id = ANY($1)) OR (id = ANY($2)), FALSE) WHERE community=$3",
+            &[&remote_items, &local_items, &self.community_id],
+        ).await?;
 
         Ok(())
     }
