@@ -694,6 +694,8 @@ async fn route_unstable_communities_posts_list(
         sort: super::SortType,
         #[serde(default)]
         include_your: bool,
+        #[serde(default)]
+        sort_sticky: bool,
     }
 
     let query: Query = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -748,10 +750,15 @@ async fn route_unstable_communities_posts_list(
 
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&community_id, &limit];
     let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky{} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {} LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky{} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {}{} LIMIT $2",
         if let Some(user) = &include_your_for {
             values.push(user);
             ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$3)"
+        } else {
+            ""
+        },
+        if query.sort_sticky {
+            "sticky DESC, "
         } else {
             ""
         },
