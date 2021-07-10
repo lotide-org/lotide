@@ -122,7 +122,7 @@
 			},
 			"SomePostInfo": {
 				"type": "object",
-				"required": ["id", "title", "created", "community", "score"],
+				"required": ["id", "title", "created", "community", "score", "sticky"],
 				"properties": {
 					"id": {"type": "integer"},
 					"title": {"type": "string"},
@@ -151,6 +151,7 @@
 						}
 					},
 					"score": {"type": "integer"},
+					"sticky": {"type": "boolean"},
 					"your_vote": {"$ref": "#/components/schemas/YourVote"}
 				}
 			},
@@ -822,6 +823,13 @@
 						"schema": {"$ref": "#/components/schemas/SortType"}
 					},
 					{
+						"name": "sort_sticky",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"},
+						"description": "If true, will sort sticky posts before everything else"
+					},
+					{
 						"name": "include_your",
 						"in": "query",
 						"required": false,
@@ -867,7 +875,8 @@
 							"schema": {
 								"type": "object",
 								"properties": {
-									"approved": {"type": "boolean"}
+									"approved": {"type": "boolean"},
+									"sticky": {"type": "boolean"}
 								}
 							}
 						}

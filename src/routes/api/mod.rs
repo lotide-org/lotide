@@ -245,6 +245,7 @@ struct RespPostListPost<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     replies_count_total: Option<i64>,
     score: i64,
+    sticky: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     your_vote: Option<Option<crate::Empty>>,
 }
@@ -1024,7 +1025,7 @@ async fn route_unstable_misc_render_markdown(
 }
 
 fn common_posts_list_query(include_your_idx: Option<usize>) -> Cow<'static, str> {
-    const BASE: &str = "post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id)";
+    const BASE: &str = "post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky";
     match include_your_idx {
         None => BASE.into(),
         Some(idx) => format!(
@@ -1101,9 +1102,10 @@ async fn handle_common_posts_list(
                 created: &created.to_rfc3339(),
                 community: &community,
                 score: row.get(15),
+                sticky: row.get(17),
                 replies_count_total: Some(row.get(16)),
                 your_vote: if include_your {
-                    Some(if row.get(17) {
+                    Some(if row.get(18) {
                         Some(crate::Empty {})
                     } else {
                         None

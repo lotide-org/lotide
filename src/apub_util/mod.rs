@@ -65,9 +65,10 @@ pub enum KnownObject {
         >,
     ),
     Group(
-        activitystreams_ext::Ext1<
+        activitystreams_ext::Ext2<
             activitystreams::actor::ApActor<activitystreams::actor::Group>,
             PublicKeyExtension<'static>,
+            FeaturedExtension,
         >,
     ),
     Article(activitystreams::object::Article),
@@ -100,6 +101,19 @@ pub struct PublicKey<'a> {
 pub struct PublicKeyExtension<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_key: Option<PublicKey<'a>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeaturedExtension {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub featured: Option<url::Url>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum AnyCollection {
+    Unordered(activitystreams::collection::UnorderedCollection),
+    Ordered(activitystreams::collection::OrderedCollection),
 }
 
 pub fn try_strip_host<'a>(url: &'a impl AsRef<str>, host_url: &url::Url) -> Option<&'a str> {
@@ -187,6 +201,15 @@ pub fn get_local_community_apub_id(
     let mut res = host_url_apub.clone();
     res.path_segments_mut()
         .extend(&["communities", &community.to_string()]);
+    res
+}
+
+pub fn get_local_community_featured_apub_id(
+    community: CommunityLocalID,
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_community_apub_id(community, host_url_apub);
+    res.path_segments_mut().push("featured");
     res
 }
 
@@ -499,6 +522,20 @@ pub async fn fetch_or_create_local_actor_privkey(
             get_local_community_pubkey_apub_id(id, &host_url_apub),
         ),
     })
+}
+
+pub fn spawn_enqueue_fetch_community_featured(
+    community: CommunityLocalID,
+    featured_url: url::Url,
+    ctx: Arc<crate::RouteContext>,
+) {
+    crate::spawn_task(async move {
+        ctx.enqueue_task(&crate::tasks::FetchCommunityFeatured {
+            community_id: community,
+            featured_url,
+        })
+        .await
+    });
 }
 
 pub fn spawn_enqueue_send_new_community_update(
