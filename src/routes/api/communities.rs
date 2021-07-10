@@ -5,6 +5,7 @@ use crate::routes::api::{
 use crate::{CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::ops::Deref;
 use std::sync::Arc;
 
 #[derive(Serialize)]
@@ -747,7 +748,7 @@ async fn route_unstable_communities_posts_list(
 
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&community_id, &limit];
     let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id){} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {} LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky{} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {} LIMIT $2",
         if let Some(user) = &include_your_for {
             values.push(user);
             ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$3)"
@@ -805,8 +806,9 @@ async fn route_unstable_communities_posts_list(
                 community: &community,
                 replies_count_total: Some(row.get(12)),
                 score: row.get(11),
+                sticky: row.get(13),
                 your_vote: if include_your_for.is_some() {
-                    Some(if row.get(13) {
+                    Some(if row.get(14) {
                         Some(crate::Empty {})
                     } else {
                         None
@@ -829,6 +831,8 @@ async fn route_unstable_communities_posts_patch(
     ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    use std::fmt::Write;
+
     let (community_id, post_id) = params;
 
     let lang = crate::get_lang_for_req(&req);
@@ -839,6 +843,7 @@ async fn route_unstable_communities_posts_patch(
     #[derive(Deserialize)]
     struct CommunityPostEditBody {
         approved: Option<bool>,
+        sticky: Option<bool>,
     }
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
@@ -862,7 +867,7 @@ async fn route_unstable_communities_posts_patch(
 
     let old_row = db
         .query_opt(
-            "SELECT community, approved, local, ap_id FROM post WHERE id=$1",
+            "SELECT community, approved, local, ap_id, sticky FROM post WHERE id=$1",
             &[&post_id],
         )
         .await?
@@ -881,6 +886,7 @@ async fn route_unstable_communities_posts_patch(
     }
 
     let old_approved: bool = old_row.get(1);
+    let old_sticky: bool = old_row.get(4);
 
     let post_ap_id = if old_row.get(2) {
         crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into()
@@ -888,28 +894,59 @@ async fn route_unstable_communities_posts_patch(
         std::str::FromStr::from_str(old_row.get(3))?
     };
 
-    if let Some(approved) = body.approved {
-        db.execute(
-            "UPDATE post SET approved=$1 WHERE id=$2",
-            &[&approved, &post_id],
-        )
-        .await?;
+    let mut sql = "UPDATE post SET ".to_owned();
+    let mut values: Vec<&(dyn postgres_types::ToSql + Sync)> = vec![&post_id];
+    let mut any_changes = false;
 
-        if approved != old_approved {
-            if approved {
-                crate::apub_util::spawn_announce_community_post(
-                    community_id,
-                    post_id,
-                    post_ap_id,
-                    ctx,
-                );
-            } else {
-                crate::apub_util::spawn_enqueue_send_community_post_announce_undo(
-                    community_id,
-                    post_id,
-                    post_ap_id,
-                    ctx,
-                );
+    if let Some(approved) = &body.approved {
+        if !any_changes {
+            any_changes = true;
+        } else {
+            sql.push(',');
+        }
+        values.push(approved);
+        write!(sql, "approved=${}", values.len()).unwrap();
+    }
+    if let Some(sticky) = &body.sticky {
+        if !any_changes {
+            any_changes = true;
+        } else {
+            sql.push(',');
+        }
+        values.push(sticky);
+        write!(sql, "sticky=${}", values.len()).unwrap();
+    }
+
+    if any_changes {
+        sql.push_str(" WHERE id=$1");
+
+        log::debug!("sql = {}", sql);
+
+        db.execute(sql.deref(), &values).await?;
+
+        if let Some(approved) = body.approved {
+            if approved != old_approved {
+                if approved {
+                    crate::apub_util::spawn_announce_community_post(
+                        community_id,
+                        post_id,
+                        post_ap_id,
+                        ctx.clone(),
+                    );
+                } else {
+                    crate::apub_util::spawn_enqueue_send_community_post_announce_undo(
+                        community_id,
+                        post_id,
+                        post_ap_id,
+                        ctx.clone(),
+                    );
+                }
+            }
+        }
+
+        if let Some(sticky) = body.sticky {
+            if sticky != old_sticky {
+                crate::apub_util::spawn_enqueue_send_new_community_update(community_id, ctx);
             }
         }
     }

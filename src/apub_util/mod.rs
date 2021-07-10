@@ -190,6 +190,15 @@ pub fn get_local_community_apub_id(
     res
 }
 
+pub fn get_local_community_featured_apub_id(
+    community: CommunityLocalID,
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_community_apub_id(community, host_url_apub);
+    res.path_segments_mut().push("featured");
+    res
+}
+
 pub fn get_local_community_outbox_apub_id(
     community: CommunityLocalID,
     host_url_apub: &BaseURL,

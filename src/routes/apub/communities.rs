@@ -1,7 +1,24 @@
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
+use serde_derive::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::sync::Arc;
+
+lazy_static::lazy_static! {
+    static ref FEATURED_CONTEXT: activitystreams::base::AnyBase = activitystreams::base::AnyBase::from_arbitrary_json(serde_json::json!({
+        "toot": "http://joinmastodon.org/ns#",
+        "featured": {
+            "@id": "toot:featured",
+            "@type": "@id"
+        }
+    })).unwrap();
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FeaturedExtension {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    featured: Option<url::Url>,
+}
 
 pub fn route_communities() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child_parse::<CommunityLocalID, _>(
@@ -16,6 +33,11 @@ pub fn route_communities() -> crate::RouteNode<()> {
                             .with_handler_async("GET", handler_communities_comments_announce_get),
                     ),
                 ),
+            )
+            .with_child(
+                "featured",
+                crate::RouteNode::new()
+                    .with_handler_async("GET", handler_communities_featured_list),
             )
             .with_child(
                 "followers",
@@ -129,6 +151,7 @@ async fn handler_communities_get(
                 activitystreams::context(),
                 activitystreams::security(),
             ])
+            .add_context(FEATURED_CONTEXT.clone())
             .set_id(community_ap_id.deref().clone())
             .set_name(name.as_ref())
             .set_summary(description);
@@ -154,6 +177,12 @@ async fn handler_communities_get(
                 res.into()
             })
             .set_preferred_username(name);
+
+            let featured_ext = FeaturedExtension {
+                featured: Some(crate::apub_util::get_local_community_featured_apub_id(community_id, &ctx.host_url_apub).into()),
+            };
+
+            let info = activitystreams_ext::Ext1::new(info, featured_ext);
 
             let key_id = format!(
                 "{}/communities/{}#main-key",
@@ -231,6 +260,53 @@ async fn handler_communities_comments_announce_get(
                .body(body.into())?)
         }
     }
+}
+
+async fn handler_communities_featured_list(
+    params: (CommunityLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id,) = params;
+    let db = ctx.db_pool.get().await?;
+
+    let rows = db
+        .query(
+            "SELECT id, local, ap_id FROM post WHERE community=$1 AND sticky",
+            &[&community_id],
+        )
+        .await?;
+
+    let items: Result<Vec<_>, _> = rows
+        .into_iter()
+        .map(|row| {
+            use std::str::FromStr;
+
+            if row.get(1) {
+                Ok(crate::apub_util::get_local_post_apub_id(
+                    PostLocalID(row.get(0)),
+                    &ctx.host_url_apub,
+                )
+                .into())
+            } else {
+                url::Url::from_str(row.get(2))
+            }
+        })
+        .collect();
+    let items = items?;
+
+    let mut body = activitystreams::collection::Collection::<
+        activitystreams::collection::kind::CollectionType,
+    >::new();
+    body.set_context(activitystreams::context());
+    body.set_total_items(items.len() as u64);
+    body.set_many_items(items);
+
+    let body = serde_json::to_vec(&body)?;
+
+    Ok(hyper::Response::builder()
+        .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+        .body(body.into())?)
 }
 
 async fn handler_communities_followers_list(
