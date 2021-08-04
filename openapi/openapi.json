@@ -1628,18 +1628,7 @@
 													"post": {"$ref": "#/components/schemas/MinimalPostInfo"}
 												}
 											},
-											{
-												"type": "object",
-												"required": ["type", "id", "href", "title", "created", "community"],
-												"properties": {
-													"type": {"type": "string", "enum": ["post"]},
-													"id": {"type": "integer"},
-													"href": {"type": "string", "nullable": true},
-													"title": {"type": "string"},
-													"created": {"type": "string", "format": "date-time"},
-													"community": {"$ref": "#/components/schemas/MinimalCommunityInfo"}
-												}
-											}
+											{"$ref": "#/components/schemas/SomePostInfo"}
 										]
 									}
 								}
