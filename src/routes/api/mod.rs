@@ -216,7 +216,7 @@ struct JustUser<'a> {
     user: RespMinimalAuthorInfo<'a>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct RespMinimalCommunityInfo<'a> {
     id: CommunityLocalID,
     name: &'a str,
@@ -240,8 +240,8 @@ struct RespPostListPost<'a> {
     #[serde(rename = "content_html")]
     content_html_safe: Option<String>,
     author: Option<&'a RespMinimalAuthorInfo<'a>>,
-    created: &'a str,
-    community: &'a RespMinimalCommunityInfo<'a>,
+    created: Cow<'a, str>,
+    community: Cow<'a, RespMinimalCommunityInfo<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     replies_count_total: Option<i64>,
     score: i64,
@@ -292,15 +292,7 @@ impl<'a> RespPostCommentInfo<'a> {
 #[serde(tag = "type")]
 enum RespThingInfo<'a> {
     #[serde(rename = "post")]
-    Post {
-        id: PostLocalID,
-        href: Option<Cow<'a, str>>,
-        title: &'a str,
-        created: String,
-        community: RespMinimalCommunityInfo<'a>,
-        replies_count_total: i64,
-        score: i64,
-    },
+    Post(RespPostListPost<'a>),
     #[serde(rename = "comment")]
     Comment {
         #[serde(flatten)]
@@ -1099,8 +1091,8 @@ async fn handle_common_posts_list(
                 content_text,
                 content_html_safe: content_html.map(|html| crate::clean_html(&html)),
                 author: author.as_ref(),
-                created: &created.to_rfc3339(),
-                community: &community,
+                created: Cow::Owned(created.to_rfc3339()),
+                community: Cow::Owned(community),
                 score: row.get(15),
                 sticky: row.get(17),
                 replies_count_total: Some(row.get(16)),

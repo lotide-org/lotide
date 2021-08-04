@@ -1,6 +1,7 @@
 use super::{
     MaybeIncludeYour, RespAvatarInfo, RespLoginUserInfo, RespMinimalAuthorInfo,
-    RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo, RespThingInfo,
+    RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo, RespPostListPost,
+    RespThingInfo,
 };
 use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use serde_derive::{Deserialize, Serialize};
@@ -626,7 +627,7 @@ async fn route_unstable_users_things_list(
     let limit: i64 = 30;
 
     let rows = db.query(
-        "(SELECT TRUE, post.id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id) FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, NULL, NULL, NULL FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted) ORDER BY created DESC LIMIT $2",
+        "(SELECT TRUE, post.id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, NULL, NULL, NULL, NULL FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted) ORDER BY created DESC LIMIT $2",
         &[&user_id, &limit],
     )
         .await?;
@@ -643,12 +644,12 @@ async fn route_unstable_users_things_list(
 
                 let post_id = PostLocalID(row.get(1));
 
-                RespThingInfo::Post {
+                RespThingInfo::Post(RespPostListPost {
                     id: post_id,
                     href: ctx.process_href_opt(row.get(2), post_id),
                     title: row.get(3),
-                    created,
-                    community: RespMinimalCommunityInfo {
+                    created: Cow::Owned(created),
+                    community: Cow::Owned(RespMinimalCommunityInfo {
                         id: CommunityLocalID(row.get(5)),
                         name: row.get(6),
                         local: community_local,
@@ -658,10 +659,15 @@ async fn route_unstable_users_things_list(
                             &ctx.local_hostname,
                         ),
                         remote_url: community_ap_id,
-                    },
+                    }),
                     replies_count_total: row.get(10),
+                    sticky: row.get(11),
                     score: row.get(9),
-                }
+                    content_html_safe: None,
+                    content_text: None,
+                    author: None,
+                    your_vote: None,
+                })
             } else {
                 RespThingInfo::Comment {
                     base: RespMinimalCommentInfo {
