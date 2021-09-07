@@ -1,10 +1,10 @@
-use super::{
-    MaybeIncludeYour, RespAvatarInfo, RespLoginUserInfo, RespMinimalAuthorInfo,
-    RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo, RespPostListPost,
-    RespThingInfo,
+use crate::types::{
+    CommentLocalID, CommunityLocalID, JustContentText, MaybeIncludeYour, PostLocalID,
+    RespAvatarInfo, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    RespMinimalCommunityInfo, RespMinimalPostInfo, RespNotification, RespNotificationInfo,
+    RespPostListPost, RespThingInfo, RespUserInfo, UserLocalID,
 };
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
-use serde_derive::{Deserialize, Serialize};
+use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -131,25 +131,6 @@ impl std::str::FromStr for UserIDOrMe {
             src.parse().map(UserIDOrMe::User)
         }
     }
-}
-
-#[derive(Deserialize, Serialize)]
-struct JustContentText<'a> {
-    content_text: Cow<'a, str>,
-}
-
-#[derive(Serialize)]
-struct RespUserInfo<'a> {
-    #[serde(flatten)]
-    base: RespMinimalAuthorInfo<'a>,
-
-    description: &'a str,
-    description_html: Option<&'a str>,
-    description_text: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    suspended: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    your_note: Option<Option<JustContentText<'a>>>,
 }
 
 async fn route_unstable_users_create(
@@ -402,29 +383,6 @@ async fn route_unstable_users_notifications_list(
 
         rows
     };
-
-    #[derive(Serialize)]
-    #[serde(tag = "type")]
-    #[serde(rename_all = "snake_case")]
-    enum RespNotificationInfo<'a> {
-        PostReply {
-            reply: RespMinimalCommentInfo<'a>,
-            post: RespMinimalPostInfo<'a>,
-        },
-        CommentReply {
-            reply: RespMinimalCommentInfo<'a>,
-            comment: CommentLocalID,
-            post: Option<RespMinimalPostInfo<'a>>,
-        },
-    }
-
-    #[derive(Serialize)]
-    struct RespNotification<'a> {
-        #[serde(flatten)]
-        info: RespNotificationInfo<'a>,
-
-        unseen: bool,
-    }
 
     let notifications: Vec<_> = rows
         .iter()

@@ -2,8 +2,11 @@ use super::{
     JustURL, RespAvatarInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost, ValueConsumer,
 };
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
-use serde_derive::{Deserialize, Serialize};
+use crate::types::{
+    ActorLocalRef, CommentLocalID, CommunityLocalID, JustUser, PostLocalID, RespPostInfo,
+    UserLocalID,
+};
+use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt::Write;
@@ -120,7 +123,7 @@ async fn get_post_comments<'a>(
                     your_vote: match include_your_for {
                         None => None,
                         Some(_) => Some(if row.get(13) {
-                            Some(crate::Empty {})
+                            Some(crate::types::Empty {})
                         } else {
                             None
                         }),
@@ -440,14 +443,6 @@ async fn route_unstable_posts_get(
         None
     };
 
-    #[derive(Serialize)]
-    struct RespPostInfo<'a> {
-        #[serde(flatten)]
-        post: &'a RespPostListPost<'a>,
-        approved: bool,
-        local: bool,
-    }
-
     let (post_id,) = params;
 
     let (row, your_vote) = futures::future::try_join(
@@ -460,7 +455,7 @@ async fn route_unstable_posts_get(
             if let Some(user) = include_your_for {
                 let row = db.query_opt("SELECT 1 FROM post_like WHERE post=$1 AND person=$2", &[&post_id, &user]).await?;
                 if row.is_some() {
-                    Ok(Some(Some(crate::Empty {})))
+                    Ok(Some(Some(crate::types::Empty {})))
                 } else {
                     Ok(Some(None))
                 }
@@ -611,7 +606,7 @@ async fn route_unstable_posts_delete(
                             crate::spawn_task(async move {
                                 ctx.enqueue_task(&crate::tasks::DeliverToInbox {
                                     inbox: Cow::Owned(community_inbox.parse()?),
-                                    sign_as: Some(crate::ActorLocalRef::Person(actor)),
+                                    sign_as: Some(ActorLocalRef::Person(actor)),
                                     object: serde_json::to_string(&delete_ap)?,
                                 })
                                 .await
@@ -687,7 +682,7 @@ async fn route_unstable_posts_like(
                 for inbox in inboxes {
                     ctx.enqueue_task(&crate::tasks::DeliverToInbox {
                         inbox: Cow::Owned(inbox.parse()?),
-                        sign_as: Some(crate::ActorLocalRef::Person(user)),
+                        sign_as: Some(ActorLocalRef::Person(user)),
                         object: (&body).into(),
                     })
                     .await?;
@@ -795,7 +790,7 @@ async fn route_unstable_posts_likes_list(
             let ap_id: Option<&str> = row.get(3);
             let avatar: Option<&str> = row.get(5);
 
-            super::JustUser {
+            JustUser {
                 user: RespMinimalAuthorInfo {
                     id,
                     username: Cow::Borrowed(username),
@@ -895,7 +890,7 @@ async fn route_unstable_posts_unlike(
                 for inbox in inboxes {
                     ctx.enqueue_task(&crate::tasks::DeliverToInbox {
                         inbox: Cow::Owned(inbox.parse()?),
-                        sign_as: Some(crate::ActorLocalRef::Person(user)),
+                        sign_as: Some(ActorLocalRef::Person(user)),
                         object: (&body).into(),
                     })
                     .await?;

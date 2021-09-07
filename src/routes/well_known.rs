@@ -1,5 +1,6 @@
-use crate::{ActorLocalRef, CommunityLocalID, UserLocalID};
-use serde_derive::{Deserialize, Serialize};
+use crate::types::{
+    ActorLocalRef, CommunityLocalID, FingerLink, FingerRequestQuery, FingerResponse, UserLocalID,
+};
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -33,29 +34,6 @@ async fn handler_nodeinfo_get(
     Ok(hyper::Response::builder()
         .header(hyper::header::CONTENT_TYPE, "application/jrd+json")
         .body(body)?)
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct FingerRequestQuery<'a> {
-    pub resource: Cow<'a, str>,
-    pub rel: Option<Cow<'a, str>>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct FingerLink<'a> {
-    pub rel: Cow<'a, str>,
-    #[serde(rename = "type")]
-    pub type_: Option<Cow<'a, str>>,
-    pub href: Option<Cow<'a, str>>,
-}
-
-#[derive(Deserialize, Serialize, Debug)]
-pub struct FingerResponse<'a> {
-    pub subject: Cow<'a, str>,
-    #[serde(default)]
-    pub aliases: Vec<Cow<'a, str>>,
-    #[serde(default)]
-    pub links: Vec<FingerLink<'a>>,
 }
 
 async fn handler_webfinger_get(

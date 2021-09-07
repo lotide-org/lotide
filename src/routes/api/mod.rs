@@ -1,6 +1,9 @@
-use crate::routes::well_known::{FingerRequestQuery, FingerResponse};
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
-use serde_derive::{Deserialize, Serialize};
+use crate::types::{
+    CommentLocalID, CommunityLocalID, FingerRequestQuery, FingerResponse, JustURL, PostLocalID,
+    RespAvatarInfo, RespList, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost, UserLocalID,
+};
+use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -159,147 +162,6 @@ impl SortType {
             }
         }
     }
-}
-
-#[derive(Serialize)]
-struct JustID<T: serde::Serialize> {
-    pub id: T,
-}
-
-#[derive(Deserialize)]
-struct MaybeIncludeYour {
-    #[serde(default)]
-    pub include_your: bool,
-}
-
-#[derive(Serialize, Clone)]
-struct RespList<'a, T: serde::Serialize + ToOwned + Clone> {
-    items: Cow<'a, [T]>,
-    next_page: Option<Cow<'a, str>>,
-}
-
-impl<'a, T: serde::Serialize + ToOwned + Clone> RespList<'a, T> {
-    pub fn empty() -> Self {
-        Self {
-            items: Cow::Borrowed(&[]),
-            next_page: None,
-        }
-    }
-}
-
-#[derive(Serialize, Clone)]
-struct RespAvatarInfo<'a> {
-    url: Cow<'a, str>,
-}
-
-#[derive(Serialize, Clone)]
-struct RespMinimalAuthorInfo<'a> {
-    id: UserLocalID,
-    username: Cow<'a, str>,
-    local: bool,
-    host: Cow<'a, str>,
-    remote_url: Option<Cow<'a, str>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    avatar: Option<RespAvatarInfo<'a>>,
-}
-
-#[derive(Serialize)]
-struct RespLoginUserInfo<'a> {
-    id: UserLocalID,
-    username: &'a str,
-    is_site_admin: bool,
-    has_unread_notifications: bool,
-}
-
-#[derive(Serialize, Clone)]
-struct JustUser<'a> {
-    user: RespMinimalAuthorInfo<'a>,
-}
-
-#[derive(Serialize, Clone)]
-struct RespMinimalCommunityInfo<'a> {
-    id: CommunityLocalID,
-    name: &'a str,
-    local: bool,
-    host: Cow<'a, str>,
-    remote_url: Option<&'a str>,
-}
-
-#[derive(Serialize)]
-struct RespMinimalPostInfo<'a> {
-    id: PostLocalID,
-    title: &'a str,
-}
-
-#[derive(Serialize)]
-struct RespPostListPost<'a> {
-    id: PostLocalID,
-    title: &'a str,
-    href: Option<Cow<'a, str>>,
-    content_text: Option<&'a str>,
-    #[serde(rename = "content_html")]
-    content_html_safe: Option<String>,
-    author: Option<&'a RespMinimalAuthorInfo<'a>>,
-    created: Cow<'a, str>,
-    community: Cow<'a, RespMinimalCommunityInfo<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    replies_count_total: Option<i64>,
-    score: i64,
-    sticky: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    your_vote: Option<Option<crate::Empty>>,
-}
-
-#[derive(Serialize, Clone)]
-struct RespMinimalCommentInfo<'a> {
-    id: CommentLocalID,
-    content_text: Option<Cow<'a, str>>,
-    #[serde(rename = "content_html")]
-    content_html_safe: Option<String>,
-}
-
-#[derive(Serialize, Clone)]
-struct JustURL<'a> {
-    url: Cow<'a, str>,
-}
-
-#[derive(Serialize, Clone)]
-struct RespPostCommentInfo<'a> {
-    #[serde(flatten)]
-    base: RespMinimalCommentInfo<'a>,
-
-    attachments: Vec<JustURL<'a>>,
-    author: Option<RespMinimalAuthorInfo<'a>>,
-    created: String,
-    deleted: bool,
-    local: bool,
-    replies: Option<RespList<'a, RespPostCommentInfo<'a>>>,
-    score: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    your_vote: Option<Option<crate::Empty>>,
-}
-
-impl<'a> RespPostCommentInfo<'a> {
-    fn has_replies(&self) -> Option<bool> {
-        match &self.replies {
-            None => None,
-            Some(list) => Some(!list.items.is_empty()),
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type")]
-enum RespThingInfo<'a> {
-    #[serde(rename = "post")]
-    Post(RespPostListPost<'a>),
-    #[serde(rename = "comment")]
-    Comment {
-        #[serde(flatten)]
-        base: RespMinimalCommentInfo<'a>,
-        created: String,
-        post: RespMinimalPostInfo<'a>,
-    },
 }
 
 pub fn default_replies_depth() -> u8 {
@@ -970,7 +832,7 @@ async fn get_comments_replies<'a>(
                     your_vote: match include_your_for {
                         None => None,
                         Some(_) => Some(if row.get(14) {
-                            Some(crate::Empty {})
+                            Some(crate::types::Empty {})
                         } else {
                             None
                         }),
@@ -1098,7 +960,7 @@ async fn handle_common_posts_list(
                 replies_count_total: Some(row.get(16)),
                 your_vote: if include_your {
                     Some(if row.get(18) {
-                        Some(crate::Empty {})
+                        Some(crate::types::Empty {})
                     } else {
                         None
                     })

@@ -1,5 +1,5 @@
 use super::{KnownObject, Verified};
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID};
+use crate::types::{CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID};
 use activitystreams::prelude::*;
 use std::borrow::Cow;
 use std::future::Future;
@@ -26,11 +26,11 @@ impl FoundFrom {
 
 pub enum IngestResult {
     Actor(super::ActorLocalInfo),
-    Other(crate::ThingLocalRef),
+    Other(ThingLocalRef),
 }
 
 impl IngestResult {
-    pub fn into_ref(self) -> crate::ThingLocalRef {
+    pub fn into_ref(self) -> ThingLocalRef {
         match self {
             IngestResult::Actor(info) => info.as_ref(),
             IngestResult::Other(x) => x,
@@ -635,7 +635,7 @@ async fn ingest_postlike(
                 ctx,
             )
             .await?
-            .map(|id| IngestResult::Other(crate::ThingLocalRef::Post(id)))),
+            .map(|id| IngestResult::Other(ThingLocalRef::Post(id)))),
             KnownObject::Image(obj) => Ok(handle_received_page_for_community(
                 community_local_id,
                 community_is_local,
@@ -644,7 +644,7 @@ async fn ingest_postlike(
                 ctx,
             )
             .await?
-            .map(|id| IngestResult::Other(crate::ThingLocalRef::Post(id)))),
+            .map(|id| IngestResult::Other(ThingLocalRef::Post(id)))),
             KnownObject::Article(obj) => Ok(handle_received_page_for_community(
                 community_local_id,
                 community_is_local,
@@ -653,7 +653,7 @@ async fn ingest_postlike(
                 ctx,
             )
             .await?
-            .map(|id| IngestResult::Other(crate::ThingLocalRef::Post(id)))),
+            .map(|id| IngestResult::Other(ThingLocalRef::Post(id)))),
             KnownObject::Note(obj) => {
                 let content = obj.content();
                 let content = content.as_ref().and_then(|x| x.as_single_xsd_string());
@@ -700,7 +700,7 @@ async fn ingest_postlike(
                             ctx,
                         )
                         .await?
-                        .map(|id| IngestResult::Other(crate::ThingLocalRef::Comment(id))))
+                        .map(|id| IngestResult::Other(ThingLocalRef::Comment(id))))
                     } else {
                         // not a reply, must be a top-level post
                         let summary = obj.summary();
@@ -736,7 +736,7 @@ async fn ingest_postlike(
                             .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
                             .map(|href| href.as_str());
 
-                        Ok(Some(IngestResult::Other(crate::ThingLocalRef::Post(
+                        Ok(Some(IngestResult::Other(ThingLocalRef::Post(
                             handle_recieved_post(
                                 object_id.clone(),
                                 title,
@@ -814,7 +814,7 @@ async fn ingest_postlike(
                     )
                     .await?;
 
-                    Ok(id.map(|id| IngestResult::Other(crate::ThingLocalRef::Comment(id))))
+                    Ok(id.map(|id| IngestResult::Other(ThingLocalRef::Comment(id))))
                 } else {
                     Ok(None)
                 }

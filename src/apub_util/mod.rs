@@ -1,4 +1,7 @@
-use crate::{BaseURL, CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
+use crate::types::{
+    ActorLocalRef, CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID,
+};
+use crate::BaseURL;
 use activitystreams::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -321,10 +324,10 @@ impl ActorLocalInfo {
         }
     }
 
-    pub fn as_ref(&self) -> crate::ThingLocalRef {
+    pub fn as_ref(&self) -> ThingLocalRef {
         match self {
-            ActorLocalInfo::User { id, .. } => crate::ThingLocalRef::User(*id),
-            ActorLocalInfo::Community { id, .. } => crate::ThingLocalRef::Community(*id),
+            ActorLocalInfo::User { id, .. } => ThingLocalRef::User(*id),
+            ActorLocalInfo::Community { id, .. } => ThingLocalRef::Community(*id),
         }
     }
 }
@@ -508,16 +511,16 @@ pub async fn fetch_or_create_local_community_privkey(
 }
 
 pub async fn fetch_or_create_local_actor_privkey(
-    actor_ref: crate::ActorLocalRef,
+    actor_ref: ActorLocalRef,
     db: &tokio_postgres::Client,
     host_url_apub: &BaseURL,
 ) -> Result<(openssl::pkey::PKey<openssl::pkey::Private>, BaseURL), crate::Error> {
     Ok(match actor_ref {
-        crate::ActorLocalRef::Person(id) => (
+        ActorLocalRef::Person(id) => (
             fetch_or_create_local_user_privkey(id, db).await?,
             get_local_person_pubkey_apub_id(id, &host_url_apub),
         ),
-        crate::ActorLocalRef::Community(id) => (
+        ActorLocalRef::Community(id) => (
             fetch_or_create_local_community_privkey(id, db).await?,
             get_local_community_pubkey_apub_id(id, &host_url_apub),
         ),
@@ -606,7 +609,7 @@ pub fn spawn_enqueue_send_community_follow(
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: Cow::Owned(community_inbox),
-            sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
+            sign_as: Some(ActorLocalRef::Person(local_follower)),
             object: serde_json::to_string(&follow)?,
         })
         .await?;
@@ -658,7 +661,7 @@ pub fn spawn_enqueue_send_community_follow_undo(
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: Cow::Owned(community_inbox),
-            sign_as: Some(crate::ActorLocalRef::Person(local_follower)),
+            sign_as: Some(ActorLocalRef::Person(local_follower)),
             object: serde_json::to_string(&undo)?,
         })
         .await?;
@@ -924,7 +927,7 @@ pub fn spawn_enqueue_send_community_follow_accept(
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: Cow::Owned(follower_inbox),
-            sign_as: Some(crate::ActorLocalRef::Community(local_community)),
+            sign_as: Some(ActorLocalRef::Community(local_community)),
             object: body,
         })
         .await?;
@@ -1159,7 +1162,7 @@ pub fn spawn_enqueue_send_local_post_to_community(
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: Cow::Owned(community_inbox),
-            sign_as: Some(crate::ActorLocalRef::Person(post.author.unwrap())),
+            sign_as: Some(ActorLocalRef::Person(post.author.unwrap())),
             object: serde_json::to_string(&create)?,
         })
         .await?;
@@ -1357,7 +1360,7 @@ pub fn spawn_enqueue_send_comment(
         for inbox in inboxes {
             ctx.enqueue_task(&crate::tasks::DeliverToInbox {
                 inbox: Cow::Owned(inbox),
-                sign_as: Some(crate::ActorLocalRef::Person(author)),
+                sign_as: Some(ActorLocalRef::Person(author)),
                 object: serde_json::to_string(&create)?,
             })
             .await?;
@@ -1373,7 +1376,7 @@ pub async fn enqueue_forward_to_community_followers(
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     ctx.enqueue_task(&crate::tasks::DeliverToFollowers {
-        actor: crate::ActorLocalRef::Community(community_id),
+        actor: ActorLocalRef::Community(community_id),
         sign: false,
         object: body,
     })
@@ -1386,7 +1389,7 @@ async fn enqueue_send_to_community_followers(
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
     ctx.enqueue_task(&crate::tasks::DeliverToFollowers {
-        actor: crate::ActorLocalRef::Community(community_id),
+        actor: ActorLocalRef::Community(community_id),
         sign: true,
         object: serde_json::to_string(&activity)?,
     })

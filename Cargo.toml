@@ -7,6 +7,9 @@ license = "AGPL-3.0-or-later"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[workspace]
+members = ["types"]
+
 [dependencies]
 hyper = { version = "0.14.9", features = ["stream", "client", "tcp", "http1", "server"] }
 hyper-tls = "0.5.0"
@@ -58,6 +61,7 @@ config = { version = "0.11.0", default-features = false, features = ["ini"] }
 clap = "2.33.3"
 bytes = "1.0.1"
 atom_syndication = "0.10.0"
+lotide_types = { path = "./types" }
 
 [dev-dependencies]
 rand = "0.7.3"

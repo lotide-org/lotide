@@ -1,39 +1,12 @@
-use crate::routes::api::{
-    MaybeIncludeYour, RespAvatarInfo, RespMinimalAuthorInfo, RespMinimalCommunityInfo,
-    RespPostListPost,
+use crate::types::{
+    CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityInfo,
+    RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespModeratorInfo, RespPostListPost,
+    RespYourFollowInfo, UserLocalID,
 };
-use crate::{CommunityLocalID, PostLocalID, UserLocalID};
-use serde_derive::{Deserialize, Serialize};
+use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::ops::Deref;
 use std::sync::Arc;
-
-#[derive(Serialize)]
-struct RespCommunityInfo<'a> {
-    #[serde(flatten)]
-    base: RespMinimalCommunityInfo<'a>,
-
-    description: &'a str,
-    description_html: Option<String>,
-    description_text: Option<&'a str>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    you_are_moderator: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    your_follow: Option<Option<RespYourFollowInfo>>,
-}
-
-#[derive(Serialize)]
-struct RespYourFollowInfo {
-    accepted: bool,
-}
-
-#[derive(Serialize)]
-struct RespModeratorInfo<'a> {
-    #[serde(flatten)]
-    base: RespMinimalAuthorInfo<'a>,
-    moderator_since: Option<String>,
-}
 
 fn get_community_description_fields<'a>(
     description_text: &'a str,
@@ -816,7 +789,7 @@ async fn route_unstable_communities_posts_list(
                 sticky: row.get(13),
                 your_vote: if include_your_for.is_some() {
                     Some(if row.get(14) {
-                        Some(crate::Empty {})
+                        Some(crate::types::Empty {})
                     } else {
                         None
                     })

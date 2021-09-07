@@ -1370,6 +1370,7 @@ dependencies = [
  "lazy_static",
  "lettre",
  "log",
+ "lotide_types",
  "migrant_lib",
  "mime",
  "openssl",
@@ -1393,6 +1394,17 @@ dependencies = [
  "url",
  "uuid",
  "v_htmlescape",
+]
+
+[[package]]
+name = "lotide_types"
+version = "0.0.0-pre"
+dependencies = [
+ "bytes 1.0.1",
+ "postgres-types 0.2.1",
+ "serde",
+ "serde_derive",
+ "serde_json",
 ]
 
 [[package]]

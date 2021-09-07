@@ -1,9 +1,12 @@
 use super::{
-    JustURL, MaybeIncludeYour, RespAvatarInfo, RespList, RespMinimalAuthorInfo,
-    RespMinimalCommentInfo, RespMinimalPostInfo, RespPostCommentInfo,
+    JustURL, RespAvatarInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    RespPostCommentInfo,
 };
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
-use serde_derive::{Deserialize, Serialize};
+use crate::types::{
+    ActorLocalRef, CommentLocalID, CommunityLocalID, JustID, JustUser, MaybeIncludeYour,
+    PostLocalID, RespCommentInfo, RespMinimalPostInfo, UserLocalID,
+};
+use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -16,14 +19,6 @@ async fn route_unstable_comments_get(
     use futures::future::TryFutureExt;
 
     let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
-
-    #[derive(Serialize)]
-    struct RespCommentInfo<'a> {
-        #[serde(flatten)]
-        base: RespPostCommentInfo<'a>,
-        parent: Option<super::JustID<CommentLocalID>>,
-        post: Option<RespMinimalPostInfo<'a>>,
-    }
 
     let (comment_id,) = params;
 
@@ -50,7 +45,7 @@ async fn route_unstable_comments_get(
                     &[&comment_id, &user],
                 ).await?;
 
-                Some(row.map(|_| crate::Empty {}))
+                Some(row.map(|_| crate::types::Empty {}))
             } else {
                 None
             })
@@ -125,7 +120,7 @@ async fn route_unstable_comments_get(
                     score: row.get(14),
                     your_vote,
                 },
-                parent: row.get::<_, Option<_>>(11).map(|id| super::JustID {
+                parent: row.get::<_, Option<_>>(11).map(|id| JustID {
                     id: CommentLocalID(id),
                 }),
                 post,
@@ -203,7 +198,7 @@ async fn route_unstable_comments_delete(
                             crate::spawn_task(async move {
                                 ctx.enqueue_task(&crate::tasks::DeliverToInbox {
                                     inbox: Cow::Owned(community_inbox.parse()?),
-                                    sign_as: Some(crate::ActorLocalRef::Person(actor)),
+                                    sign_as: Some(ActorLocalRef::Person(actor)),
                                     object: body,
                                 })
                                 .await
@@ -280,7 +275,7 @@ async fn route_unstable_comments_like(
                 for inbox in inboxes {
                     ctx.enqueue_task(&crate::tasks::DeliverToInbox {
                         inbox: Cow::Owned(inbox.parse()?),
-                        sign_as: Some(crate::ActorLocalRef::Person(user)),
+                        sign_as: Some(ActorLocalRef::Person(user)),
                         object: (&body).into(),
                     })
                     .await?;
@@ -388,7 +383,7 @@ async fn route_unstable_comments_likes_list(
             let ap_id: Option<&str> = row.get(3);
             let avatar: Option<&str> = row.get(5);
 
-            super::JustUser {
+            JustUser {
                 user: RespMinimalAuthorInfo {
                     id,
                     username: Cow::Borrowed(username),
@@ -489,7 +484,7 @@ async fn route_unstable_comments_unlike(
                 for inbox in inboxes {
                     ctx.enqueue_task(&crate::tasks::DeliverToInbox {
                         inbox: Cow::Owned(inbox.parse()?),
-                        sign_as: Some(crate::ActorLocalRef::Person(user)),
+                        sign_as: Some(ActorLocalRef::Person(user)),
                         object: (&body).into(),
                     })
                     .await?;

@@ -1,4 +1,4 @@
-use crate::{CommunityLocalID, PostLocalID};
+use crate::types::{ActorLocalRef, CommunityLocalID, PostLocalID};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,7 @@ pub trait TaskDef: Serialize + std::fmt::Debug + Sync {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct DeliverToInbox<'a> {
     pub inbox: Cow<'a, url::Url>,
-    pub sign_as: Option<crate::ActorLocalRef>,
+    pub sign_as: Option<ActorLocalRef>,
     pub object: String,
 }
 
@@ -92,7 +92,7 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct DeliverToFollowers {
-    pub actor: crate::ActorLocalRef,
+    pub actor: ActorLocalRef,
     pub sign: bool,
     pub object: String,
 }
@@ -103,8 +103,8 @@ impl TaskDef for DeliverToFollowers {
 
     async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
         let community_id = match self.actor {
-            crate::ActorLocalRef::Community(id) => id,
-            crate::ActorLocalRef::Person(_) => return Ok(()), // We don't have user followers at this point
+            ActorLocalRef::Community(id) => id,
+            ActorLocalRef::Person(_) => return Ok(()), // We don't have user followers at this point
         };
 
         let db = ctx.db_pool.get().await?;

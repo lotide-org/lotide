@@ -1,3 +1,4 @@
+pub use lotide_types as types;
 use rand::Rng;
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -15,6 +16,7 @@ mod tasks;
 mod worker;
 
 use self::config::Config;
+use self::types::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(try_from = "url::Url")]
@@ -94,9 +96,6 @@ impl From<BaseURL> for activitystreams::primitives::OneOrMany<activitystreams::b
 }
 
 pub type ParamSlice<'a> = &'a [&'a (dyn tokio_postgres::types::ToSql + Sync)];
-
-#[derive(Serialize, Default, Clone, Copy)]
-pub struct Empty {}
 
 pub struct Pineapple {
     value: i32,
@@ -288,70 +287,6 @@ impl std::str::FromStr for TimestampOrLatest {
             Ok(TimestampOrLatest::Timestamp(ts.into()))
         }
     }
-}
-
-macro_rules! id_wrapper {
-    ($ty:ident) => {
-        #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-        #[serde(transparent)]
-        pub struct $ty(pub i64);
-        impl $ty {
-            pub fn raw(&self) -> i64 {
-                self.0
-            }
-        }
-        impl std::fmt::Display for $ty {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-        impl std::str::FromStr for $ty {
-            type Err = std::num::ParseIntError;
-            fn from_str(src: &str) -> Result<Self, Self::Err> {
-                Ok(Self(src.parse()?))
-            }
-        }
-        impl postgres_types::ToSql for $ty {
-            fn to_sql(
-                &self,
-                ty: &postgres_types::Type,
-                out: &mut bytes::BytesMut,
-            ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
-                self.0.to_sql(ty, out)
-            }
-            fn accepts(ty: &postgres_types::Type) -> bool {
-                i64::accepts(ty)
-            }
-            fn to_sql_checked(
-                &self,
-                ty: &postgres_types::Type,
-                out: &mut bytes::BytesMut,
-            ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
-                self.0.to_sql_checked(ty, out)
-            }
-        }
-    };
-}
-
-id_wrapper!(CommentLocalID);
-id_wrapper!(CommunityLocalID);
-id_wrapper!(PostLocalID);
-id_wrapper!(UserLocalID);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ActorLocalRef {
-    Person(UserLocalID),
-    Community(CommunityLocalID),
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(tag = "type", content = "id")]
-#[serde(rename_all = "snake_case")]
-pub enum ThingLocalRef {
-    Post(PostLocalID),
-    Comment(CommentLocalID),
-    User(UserLocalID),
-    Community(CommunityLocalID),
 }
 
 #[derive(Debug)]
