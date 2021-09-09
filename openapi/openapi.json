@@ -169,10 +169,11 @@
 			},
 			"PostCommentInfo": {
 				"type": "object",
-				"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "attachments", "local"],
+				"required": ["id", "content_text", "content_markdown", "content_html", "author", "created", "deleted", "replies", "attachments", "local"],
 				"properties": {
 					"id": {"type": "integer"},
 					"content_text": {"type": "string", "nullable": true},
+					"content_markdown": {"type": "string", "nullable": true},
 					"content_html": {"type": "string", "nullable": true},
 					"attachments": {
 						"type": "array",

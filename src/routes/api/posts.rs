@@ -25,7 +25,7 @@ async fn get_post_comments<'a>(
 
     let limit_i = i64::from(limit) + 1;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown";
     let (sql2, mut values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -35,7 +35,7 @@ async fn get_post_comments<'a>(
         } else {
             ("", vec![&post_id, &limit_i])
         };
-    let mut sql3 = "FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ".to_owned();
+    let mut sql3 = " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE post=$1 AND parent IS NULL ".to_owned();
     let mut sql4 = format!("ORDER BY {} LIMIT $2", sort.comment_sort_sql());
 
     let mut con1 = None;
@@ -115,6 +115,7 @@ async fn get_post_comments<'a>(
                         Some(href) => vec![JustURL { url: href }],
                     },
                     author,
+                    content_markdown: row.get::<_, Option<String>>(13).map(Cow::Owned),
                     created: created.to_rfc3339(),
                     deleted: row.get(8),
                     local: row.get(11),
@@ -122,7 +123,7 @@ async fn get_post_comments<'a>(
                     score: row.get(12),
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(13) {
+                        Some(_) => Some(if row.get(14) {
                             Some(crate::types::Empty {})
                         } else {
                             None

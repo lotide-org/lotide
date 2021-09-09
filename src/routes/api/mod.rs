@@ -753,7 +753,7 @@ async fn get_comments_replies<'a>(
         .map_err(|_| InvalidPage.into_user_error())?;
     let limit_i = i64::from(limit) + 1;
 
-    let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id)";
+    let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown";
     let (sql2, mut values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -824,6 +824,7 @@ async fn get_comments_replies<'a>(
                         Some(href) => vec![JustURL { url: href }],
                     },
                     author,
+                    content_markdown: row.get::<_, Option<String>>(14).map(Cow::Owned),
                     created: created.to_rfc3339(),
                     deleted: row.get(9),
                     local: row.get(12),
@@ -831,7 +832,7 @@ async fn get_comments_replies<'a>(
                     score: row.get(13),
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(14) {
+                        Some(_) => Some(if row.get(15) {
                             Some(crate::types::Empty {})
                         } else {
                             None

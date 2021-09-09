@@ -226,6 +226,7 @@ pub struct RespPostCommentInfo<'a> {
 
     pub attachments: Vec<JustURL<'a>>,
     pub author: Option<RespMinimalAuthorInfo<'a>>,
+    pub content_markdown: Option<Cow<'a, str>>,
     pub created: String,
     pub deleted: bool,
     pub local: bool,
