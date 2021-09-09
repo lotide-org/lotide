@@ -262,6 +262,7 @@ pub enum RespThingInfo<'a> {
 pub struct RespPostInfo<'a> {
     #[serde(flatten)]
     pub post: &'a RespPostListPost<'a>,
+    pub content_markdown: Option<&'a str>,
     pub approved: bool,
     pub local: bool,
 }

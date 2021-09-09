@@ -1292,10 +1292,11 @@
 								"schema": {
 									"allOf": [{"$ref": "#/components/schemas/SomePostInfo"}],
 									"type": "object",
-									"required": ["approved", "local"],
+									"required": ["approved", "local", "content_markdown"],
 									"properties": {
 										"approved": {"type": "boolean"},
-										"local": {"type": "boolean"}
+										"local": {"type": "boolean"},
+										"content_markdown": {"type": "string", "nullable": true}
 									}
 								}
 							}
