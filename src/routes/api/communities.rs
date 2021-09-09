@@ -1,7 +1,7 @@
 use crate::types::{
-    CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityInfo,
-    RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespModeratorInfo, RespPostListPost,
-    RespYourFollowInfo, UserLocalID,
+    CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityFeeds,
+    RespCommunityFeedsType, RespCommunityInfo, RespMinimalAuthorInfo, RespMinimalCommunityInfo,
+    RespModeratorInfo, RespPostListPost, RespYourFollowInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -115,6 +115,12 @@ async fn route_unstable_communities_list(
                 description,
                 description_html,
                 description_text,
+
+                feeds: RespCommunityFeeds {
+                    atom: RespCommunityFeedsType {
+                        new: format!("{}/stable/communities/{}/feed", ctx.host_url_api, id),
+                    },
+                },
 
                 you_are_moderator: if query.include_your {
                     Some(row.get(7))
@@ -270,6 +276,14 @@ async fn route_unstable_communities_get(
         description,
         description_html,
         description_text,
+        feeds: RespCommunityFeeds {
+            atom: RespCommunityFeedsType {
+                new: format!(
+                    "{}/stable/communities/{}/feed",
+                    ctx.host_url_api, community_id
+                ),
+            },
+        },
         you_are_moderator: if query.include_your {
             Some(row.get(6))
         } else {

@@ -103,9 +103,24 @@
 			"CommunityInfo": {
 				"allOf": [{"$ref": "#/components/schemas/MinimalCommunityInfo"}],
 				"type": "object",
-				"required": ["description"],
+				"required": ["description", "feeds"],
 				"properties": {
 					"description": {"type": "string"},
+					"feeds": {
+						"type": "object",
+						"required": ["atom"],
+						"properties": {
+							"atom": {
+								"type": "object",
+								"required": ["new"],
+								"properties": {
+									"new": {
+										"type": "string"
+									}
+								}
+							}
+						}
+					},
 					"you_are_moderator": {"type": "boolean"},
 					"your_follow": {
 						"type": "object",

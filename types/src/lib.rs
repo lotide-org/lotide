@@ -269,6 +269,16 @@ pub struct RespPostInfo<'a> {
 }
 
 #[derive(Serialize)]
+pub struct RespCommunityFeedsType {
+    pub new: String,
+}
+
+#[derive(Serialize)]
+pub struct RespCommunityFeeds {
+    pub atom: RespCommunityFeedsType,
+}
+
+#[derive(Serialize)]
 pub struct RespCommunityInfo<'a> {
     #[serde(flatten)]
     pub base: RespMinimalCommunityInfo<'a>,
@@ -276,6 +286,7 @@ pub struct RespCommunityInfo<'a> {
     pub description: &'a str,
     pub description_html: Option<String>,
     pub description_text: Option<&'a str>,
+    pub feeds: RespCommunityFeeds,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub you_are_moderator: Option<bool>,
