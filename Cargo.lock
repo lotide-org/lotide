@@ -110,8 +110,7 @@ dependencies = [
 [[package]]
 name = "atom_syndication"
 version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55ef55438c44fce2215bcd0539964a98ab4bcd77007487a0e72a88ffef2286de"
+source = "git+https://github.com/rust-syndication/atom?rev=927ea48#927ea4876f7fa2e14f78b32c71e8d2cf51a1e86e"
 dependencies = [
  "chrono",
  "derive_builder",
