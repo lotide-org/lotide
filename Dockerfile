@@ -1,6 +1,7 @@
 FROM alpine:3.13 AS builder
 RUN apk add --no-cache cargo openssl-dev
 WORKDIR /usr/src/lotide
+COPY types ./types
 COPY Cargo.* ./
 COPY build.rs ./
 COPY src ./src
