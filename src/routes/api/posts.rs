@@ -179,12 +179,16 @@ async fn route_unstable_posts_list(
         search: Option<Cow<'a, str>>,
         #[serde(default)]
         use_aggregate_filters: bool,
+        community: Option<CommunityLocalID>,
 
         #[serde(default)]
         include_your: bool,
 
         #[serde(default)]
         sort: PostsListSortType,
+
+        #[serde(default)]
+        sort_sticky: bool,
     }
 
     let query: PostsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -234,7 +238,14 @@ async fn route_unstable_posts_list(
         )
         .unwrap();
     }
+    if let Some(value) = &query.community {
+        values.push(value);
+        write!(sql, " AND community.id=${} AND post.approved", values.len(),).unwrap();
+    }
     sql.push_str(" ORDER BY ");
+    if query.sort_sticky {
+        sql.push_str("sticky DESC, ");
+    }
     match query.sort {
         PostsListSortType::Normal(ty) => sql.push_str(ty.post_sort_sql()),
         PostsListSortType::Extra(PostsListExtraSortType::Relevant) => {
