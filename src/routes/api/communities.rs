@@ -38,6 +38,8 @@ async fn route_unstable_communities_list(
     struct CommunitiesListQuery<'a> {
         search: Option<Cow<'a, str>>,
 
+        local: Option<bool>,
+
         #[serde(rename = "your_follow.accepted")]
         your_follow_accepted: Option<bool>,
 
@@ -95,6 +97,17 @@ async fn route_unstable_communities_list(
         did_where = true;
         values.push(req_your_follow_accepted);
         write!(sql, " AND accepted=${})", values.len()).unwrap();
+    }
+    if let Some(req_local) = &query.local {
+        values.push(req_local);
+        write!(
+            sql,
+            " {} community.local=${}",
+            if did_where { "AND" } else { "WHERE" },
+            values.len()
+        )
+        .unwrap();
+        did_where = true;
     }
 
     let page = query
