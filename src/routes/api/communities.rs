@@ -1,10 +1,11 @@
 use crate::types::{
     CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityFeeds,
-    RespCommunityFeedsType, RespCommunityInfo, RespMinimalAuthorInfo, RespMinimalCommunityInfo,
-    RespModeratorInfo, RespPostListPost, RespYourFollowInfo, UserLocalID,
+    RespCommunityFeedsType, RespCommunityInfo, RespList, RespMinimalAuthorInfo,
+    RespMinimalCommunityInfo, RespModeratorInfo, RespPostListPost, RespYourFollowInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
+use std::convert::TryInto;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -29,9 +30,12 @@ async fn route_unstable_communities_list(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     use std::fmt::Write;
 
+    fn default_limit() -> i64 {
+        30
+    }
+
     #[derive(Deserialize)]
     struct CommunitiesListQuery<'a> {
-        #[serde(default)]
         search: Option<Cow<'a, str>>,
 
         #[serde(rename = "your_follow.accepted")]
@@ -39,6 +43,11 @@ async fn route_unstable_communities_list(
 
         #[serde(default)]
         include_your: bool,
+
+        #[serde(default = "default_limit")]
+        limit: i64,
+
+        page: Option<Cow<'a, str>>,
     }
 
     let query: CommunitiesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -83,61 +92,103 @@ async fn route_unstable_communities_list(
             values.len()
         )
         .unwrap();
+        did_where = true;
         values.push(req_your_follow_accepted);
         write!(sql, " AND accepted=${})", values.len()).unwrap();
     }
 
+    let page = query
+        .page
+        .as_deref()
+        .map(super::parse_number_58)
+        .transpose()
+        .map_err(|_| super::InvalidPage.into_user_error())?;
+
+    if let Some(page) = &page {
+        values.push(page);
+        write!(
+            sql,
+            " {} id >= ${}",
+            if did_where { "AND" } else { "WHERE" },
+            values.len()
+        )
+        .unwrap();
+    }
+
+    write!(sql, " ORDER BY id").unwrap();
+
+    let limit_plus_1 = query.limit + 1;
+
+    values.push(&limit_plus_1);
+    write!(sql, " LIMIT ${}", values.len()).unwrap();
+
     let sql: &str = &sql;
-    let rows = db.query(sql, &values).await?;
+    let mut rows = db.query(sql, &values).await?;
 
-    let output: Vec<_> = rows
-        .iter()
-        .map(|row| {
-            let id = CommunityLocalID(row.get(0));
-            let name = row.get(1);
-            let local = row.get(2);
-            let ap_id = row.get(3);
+    let next_page = if rows.len() > query.limit.try_into().unwrap() {
+        let row = rows.pop().unwrap();
 
-            let (description, description_text, description_html) =
-                get_community_description_fields(row.get(4), row.get(5));
+        let id: i64 = row.get(0);
 
-            let host = crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname);
+        Some(super::format_number_58(id))
+    } else {
+        None
+    };
 
-            RespCommunityInfo {
-                base: RespMinimalCommunityInfo {
-                    id,
-                    name,
-                    local,
-                    host,
-                    remote_url: ap_id,
-                },
+    let rows = rows;
 
-                description,
-                description_html,
-                description_text,
+    let output = RespList {
+        items: rows
+            .iter()
+            .map(|row| {
+                let id = CommunityLocalID(row.get(0));
+                let name = row.get(1);
+                let local = row.get(2);
+                let ap_id = row.get(3);
 
-                feeds: RespCommunityFeeds {
-                    atom: RespCommunityFeedsType {
-                        new: format!("{}/stable/communities/{}/feed", ctx.host_url_api, id),
+                let (description, description_text, description_html) =
+                    get_community_description_fields(row.get(4), row.get(5));
+
+                let host = crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname);
+
+                RespCommunityInfo {
+                    base: RespMinimalCommunityInfo {
+                        id,
+                        name,
+                        local,
+                        host,
+                        remote_url: ap_id,
                     },
-                },
 
-                you_are_moderator: if query.include_your {
-                    Some(row.get(7))
-                } else {
-                    None
-                },
-                your_follow: if query.include_your {
-                    Some(match row.get(6) {
-                        Some(accepted) => Some(RespYourFollowInfo { accepted }),
-                        None => None,
-                    })
-                } else {
-                    None
-                },
-            }
-        })
-        .collect();
+                    description,
+                    description_html,
+                    description_text,
+
+                    feeds: RespCommunityFeeds {
+                        atom: RespCommunityFeedsType {
+                            new: format!("{}/stable/communities/{}/feed", ctx.host_url_api, id),
+                        },
+                    },
+
+                    you_are_moderator: if query.include_your {
+                        Some(row.get(7))
+                    } else {
+                        None
+                    },
+                    your_follow: if query.include_your {
+                        Some(match row.get(6) {
+                            Some(accepted) => Some(RespYourFollowInfo { accepted }),
+                            None => None,
+                        })
+                    } else {
+                        None
+                    },
+                }
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        next_page: next_page.map(Cow::Owned),
+    };
 
     crate::json_response(&output)
 }

@@ -268,17 +268,17 @@ pub struct RespPostInfo<'a> {
     pub local: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespCommunityFeedsType {
     pub new: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespCommunityFeeds {
     pub atom: RespCommunityFeedsType,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespCommunityInfo<'a> {
     #[serde(flatten)]
     pub base: RespMinimalCommunityInfo<'a>,
@@ -294,7 +294,7 @@ pub struct RespCommunityInfo<'a> {
     pub your_follow: Option<Option<RespYourFollowInfo>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespYourFollowInfo {
     pub accepted: bool,
 }
