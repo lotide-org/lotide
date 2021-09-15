@@ -3,6 +3,8 @@ A federated forum / link aggregator using ActivityPub.
 
 To track progress and report issues, visit the [issue tracker](https://todo.sr.ht/~vpzom/lotide).
 
+Submit patches on the [mailing list](https://lists.sr.ht/~vpzom/lotide) or as a pull request on the [GitHub mirror](https://github.com/lotide-org/lotide).
+
 See [hitide](https://git.sr.ht/~vpzom/hitide) for the frontend code.
 
 ## Installation
