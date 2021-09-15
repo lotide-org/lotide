@@ -347,7 +347,7 @@ async fn route_unstable_users_following_posts_list(
         values,
     ).await?;
 
-    let posts = super::handle_common_posts_list(stream, &ctx, true).await?;
+    let posts = super::handle_common_posts_list(stream, &ctx, true, false).await?;
 
     crate::json_response(&posts)
 }
@@ -604,20 +604,24 @@ async fn route_unstable_users_things_list(
 
                 RespThingInfo::Post(RespPostListPost {
                     id: post_id,
-                    href: ctx.process_href_opt(row.get(2), post_id),
-                    title: row.get(3),
+                    href: ctx.process_href_opt(
+                        row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
+                        post_id,
+                    ),
+                    title: Cow::Borrowed(row.get(3)),
                     created: Cow::Owned(created),
                     community: Cow::Owned(RespMinimalCommunityInfo {
                         id: CommunityLocalID(row.get(5)),
-                        name: row.get(6),
+                        name: Cow::Borrowed(row.get(6)),
                         local: community_local,
                         host: crate::get_actor_host_or_unknown(
                             community_local,
                             community_ap_id,
                             &ctx.local_hostname,
                         ),
-                        remote_url: community_ap_id,
+                        remote_url: community_ap_id.map(Cow::Borrowed),
                     }),
+                    relevance: None,
                     replies_count_total: row.get(10),
                     sticky: row.get(11),
                     score: row.get(9),

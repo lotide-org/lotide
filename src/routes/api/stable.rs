@@ -155,7 +155,7 @@ async fn route_stable_communities_feed_get(
             let title: String = row.get(4);
 
             let href_raw: Option<&str> = row.get(2);
-            let href = ctx.process_href_opt(href_raw, post_id);
+            let href = ctx.process_href_opt(href_raw.map(Cow::Borrowed), post_id);
 
             let post_ap_id = if row.get(8) {
                 crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).to_string()

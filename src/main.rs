@@ -154,17 +154,22 @@ pub struct BaseContext {
 }
 
 impl BaseContext {
-    pub fn process_href<'a>(&self, href: &'a str, post_id: PostLocalID) -> Cow<'a, str> {
+    pub fn process_href<'a>(
+        &self,
+        href: impl Into<Cow<'a, str>>,
+        post_id: PostLocalID,
+    ) -> Cow<'a, str> {
+        let href = href.into();
         if href.starts_with("local-media://") {
             format!("{}/stable/posts/{}/href", self.host_url_api, post_id).into()
         } else {
-            href.into()
+            href
         }
     }
 
     pub fn process_href_opt<'a>(
         &self,
-        href: Option<&'a str>,
+        href: Option<Cow<'a, str>>,
         post_id: PostLocalID,
     ) -> Option<Cow<'a, str>> {
         match href {
@@ -192,11 +197,16 @@ impl BaseContext {
         }
     }
 
-    pub fn process_avatar_href<'a>(&self, href: &'a str, user_id: UserLocalID) -> Cow<'a, str> {
+    pub fn process_avatar_href<'a>(
+        &self,
+        href: impl Into<Cow<'a, str>>,
+        user_id: UserLocalID,
+    ) -> Cow<'a, str> {
+        let href = href.into();
         if href.starts_with("local-media://") {
             format!("{}/stable/users/{}/avatar/href", self.host_url_api, user_id,).into()
         } else {
-            href.into()
+            href
         }
     }
 

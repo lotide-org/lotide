@@ -96,6 +96,7 @@ impl SortType {
     pub fn handle_page(
         &self,
         page: Option<&str>,
+        table: &str,
         mut value_out: ValueConsumer,
     ) -> Result<(Option<String>, Option<String>), InvalidPage> {
         match page {
@@ -131,8 +132,8 @@ impl SortType {
 
                     Ok((
                         Some(format!(
-                            " AND created < ${0} OR (created = ${0} AND id <= ${1})",
-                            idx1, idx2
+                            " AND ({2}.created < ${0} OR ({2}.created = ${0} AND {2}.id <= ${1}))",
+                            idx1, idx2, table,
                         )),
                         None,
                     ))
@@ -158,7 +159,37 @@ impl SortType {
             SortType::New => {
                 let ts: chrono::DateTime<chrono::offset::FixedOffset> =
                     comment.created.parse().unwrap();
-                format!("{},{}", ts, comment.base.id)
+                format!("{},{}", ts.timestamp_nanos(), comment.base.id)
+            }
+        }
+    }
+
+    fn get_next_posts_page(
+        &self,
+        post: &RespPostListPost<'_>,
+        sort_sticky: bool,
+        limit: u8,
+        current_page: Option<&str>,
+    ) -> String {
+        match self {
+            SortType::Hot => format_number_58(
+                i64::from(limit)
+                    + match current_page {
+                        None => 0,
+                        Some(current_page) => parse_number_58(current_page).unwrap(),
+                    },
+            ),
+            SortType::New => {
+                let ts: chrono::DateTime<chrono::offset::FixedOffset> =
+                    post.created.parse().unwrap();
+
+                let ts = ts.timestamp_nanos();
+
+                if sort_sticky {
+                    format!("{},{},{}", post.sticky, ts, post.id)
+                } else {
+                    format!("{},{}", ts, post.id)
+                }
             }
         }
     }
@@ -896,39 +927,42 @@ async fn handle_common_posts_list(
         + Send,
     ctx: &crate::RouteContext,
     include_your: bool,
-) -> Result<Vec<serde_json::Value>, crate::Error> {
+    relevance: bool,
+) -> Result<Vec<RespPostListPost<'static>>, crate::Error> {
     use futures::stream::TryStreamExt;
 
-    let posts: Vec<serde_json::Value> = stream
+    let posts: Vec<_> = stream
         .map_err(crate::Error::from)
-        .and_then(|row| {
+        .map_ok(|row| {
             let id = PostLocalID(row.get(0));
             let author_id = row.get::<_, Option<_>>(1).map(UserLocalID);
-            let href: Option<&str> = row.get(2);
-            let content_text: Option<&str> = row.get(3);
-            let content_html: Option<&str> = row.get(6);
-            let title: &str = row.get(4);
+            let href: Option<String> = row.get(2);
+            let content_text: Option<String> = row.get(3);
+            let content_html: Option<String> = row.get(6);
+            let title: String = row.get(4);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
             let community_id = CommunityLocalID(row.get(7));
-            let community_name: &str = row.get(8);
+            let community_name: String = row.get(8);
             let community_local: bool = row.get(9);
-            let community_ap_id: Option<&str> = row.get(10);
+            let community_ap_id: Option<String> = row.get(10);
 
             let author = author_id.map(|id| {
-                let author_name: &str = row.get(11);
+                let author_name: String = row.get(11);
                 let author_local: bool = row.get(12);
-                let author_ap_id: Option<&str> = row.get(13);
-                let author_avatar: Option<&str> = row.get(14);
+                let author_ap_id: Option<String> = row.get(13);
+                let author_avatar: Option<String> = row.get(14);
                 RespMinimalAuthorInfo {
                     id,
                     username: author_name.into(),
                     local: author_local,
                     host: crate::get_actor_host_or_unknown(
                         author_local,
-                        author_ap_id,
+                        author_ap_id.as_deref(),
                         &ctx.local_hostname,
-                    ),
-                    remote_url: author_ap_id.map(|x| x.to_owned().into()),
+                    )
+                    .into_owned()
+                    .into(),
+                    remote_url: author_ap_id.map(Cow::Owned),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id).into_owned().into(),
                     }),
@@ -937,27 +971,34 @@ async fn handle_common_posts_list(
 
             let community = RespMinimalCommunityInfo {
                 id: community_id,
-                name: community_name,
+                name: Cow::Owned(community_name),
                 local: community_local,
                 host: crate::get_actor_host_or_unknown(
                     community_local,
-                    community_ap_id,
+                    community_ap_id.as_deref(),
                     &ctx.local_hostname,
-                ),
-                remote_url: community_ap_id,
+                )
+                .into_owned()
+                .into(),
+                remote_url: community_ap_id.map(Cow::Owned),
             };
 
             let post = RespPostListPost {
                 id,
-                title,
-                href: ctx.process_href_opt(href, id),
-                content_text,
+                title: Cow::Owned(title),
+                href: ctx.process_href_opt(href.map(Cow::Owned), id),
+                content_text: content_text.map(Cow::Owned),
                 content_html_safe: content_html.map(|html| crate::clean_html(&html)),
-                author: author.as_ref(),
+                author: author.map(Cow::Owned),
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Owned(community),
                 score: row.get(15),
                 sticky: row.get(17),
+                relevance: if relevance {
+                    row.get(if include_your { 19 } else { 18 })
+                } else {
+                    None
+                },
                 replies_count_total: Some(row.get(16)),
                 your_vote: if include_your {
                     Some(if row.get(18) {
@@ -970,7 +1011,7 @@ async fn handle_common_posts_list(
                 },
             };
 
-            futures::future::ready(serde_json::to_value(&post).map_err(Into::into))
+            post
         })
         .try_collect()
         .await?;

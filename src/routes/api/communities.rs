@@ -155,7 +155,7 @@ async fn route_unstable_communities_list(
             .iter()
             .map(|row| {
                 let id = CommunityLocalID(row.get(0));
-                let name = row.get(1);
+                let name: &str = row.get(1);
                 let local = row.get(2);
                 let ap_id = row.get(3);
 
@@ -167,10 +167,10 @@ async fn route_unstable_communities_list(
                 RespCommunityInfo {
                     base: RespMinimalCommunityInfo {
                         id,
-                        name,
+                        name: Cow::Borrowed(name),
                         local,
                         host,
-                        remote_url: ap_id,
+                        remote_url: ap_id.map(Cow::Borrowed),
                     },
 
                     description,
@@ -325,7 +325,7 @@ async fn route_unstable_communities_get(
     let info = RespCommunityInfo {
         base: RespMinimalCommunityInfo {
             id: community_id,
-            name: row.get(0),
+            name: Cow::Borrowed(row.get(0)),
             local: community_local,
             host: if community_local {
                 (&ctx.local_hostname).into()
@@ -335,7 +335,7 @@ async fn route_unstable_communities_get(
                     None => "[unknown]".into(),
                 }
             },
-            remote_url: community_ap_id,
+            remote_url: community_ap_id.map(Cow::Borrowed),
         },
         description,
         description_html,
@@ -783,7 +783,7 @@ async fn route_unstable_communities_posts_list(
 
         RespMinimalCommunityInfo {
             id: community_id,
-            name: row.get(0),
+            name: Cow::Borrowed(row.get(0)),
             local: community_local,
             host: if community_local {
                 (&ctx.local_hostname).into()
@@ -793,7 +793,7 @@ async fn route_unstable_communities_posts_list(
                     None => "[unknown]".into(),
                 }
             },
-            remote_url: community_ap_id,
+            remote_url: community_ap_id.map(Cow::Borrowed),
         }
     };
 
@@ -855,13 +855,14 @@ async fn route_unstable_communities_posts_list(
 
             let post = RespPostListPost {
                 id,
-                title,
-                href: ctx.process_href_opt(href, id),
-                content_text,
+                title: Cow::Borrowed(title),
+                href: ctx.process_href_opt(href.map(Cow::Borrowed), id),
+                content_text: content_text.map(Cow::Borrowed),
                 content_html_safe: content_html.map(|html| crate::clean_html(&html)),
-                author: author.as_ref(),
+                author: author.map(Cow::Owned),
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Borrowed(&community),
+                relevance: None,
                 replies_count_total: Some(row.get(12)),
                 score: row.get(11),
                 sticky: row.get(13),
