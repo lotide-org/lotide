@@ -1246,14 +1246,14 @@
 						"name": "in_any_local_community",
 						"in": "query",
 						"required": false,
-						"schema": {"type": "string"},
+						"schema": {"type": "boolean"},
 						"description": "Filter by whether the post is approved in a local community"
 					},
 					{
 						"name": "use_aggregate_filters",
 						"in": "query",
 						"required": false,
-						"schema": {"type": "string"},
+						"schema": {"type": "boolean"},
 						"description": "If true, will omit posts from communities marked as hide_posts_from_aggregates"
 					},
 					{
