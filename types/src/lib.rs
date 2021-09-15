@@ -181,7 +181,7 @@ pub struct RespMinimalCommunityInfo<'a> {
     pub remote_url: Option<Cow<'a, str>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespMinimalPostInfo<'a> {
     pub id: PostLocalID,
     pub title: &'a str,
@@ -247,7 +247,7 @@ impl<'a> RespPostCommentInfo<'a> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(tag = "type")]
 pub enum RespThingInfo<'a> {
     #[serde(rename = "post")]

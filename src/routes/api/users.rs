@@ -1,6 +1,7 @@
+use super::InvalidPage;
 use crate::types::{
     CommentLocalID, CommunityLocalID, JustContentText, MaybeIncludeYour, PostLocalID,
-    RespAvatarInfo, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    RespAvatarInfo, RespList, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespMinimalCommunityInfo, RespMinimalPostInfo, RespNotification, RespNotificationInfo,
     RespPostListPost, RespThingInfo, RespUserInfo, UserLocalID,
 };
@@ -582,13 +583,87 @@ async fn route_unstable_users_things_list(
 
     let user_id = user_id.try_resolve(&req, &db).await?;
 
-    let limit: i64 = 30;
+    fn default_limit() -> u8 {
+        30
+    }
 
-    let rows = db.query(
-        "(SELECT TRUE, post.id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, NULL, NULL, NULL, NULL FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted) ORDER BY created DESC LIMIT $2",
-        &[&user_id, &limit],
-    )
-        .await?;
+    #[derive(Deserialize)]
+    struct UserThingsListQuery<'a> {
+        #[serde(default = "default_limit")]
+        limit: u8,
+
+        page: Option<Cow<'a, str>>,
+    }
+    let query: UserThingsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
+    let limit_plus_1: i64 = (query.limit + 1).into();
+
+    let page: Option<(chrono::DateTime<chrono::offset::FixedOffset>, bool, i64)> = query
+        .page
+        .map(|src| {
+            let mut spl = src.split(',');
+
+            let ts = spl.next().ok_or(InvalidPage)?;
+            let is_post = spl.next().ok_or(InvalidPage)?;
+            let id = spl.next().ok_or(InvalidPage)?;
+            if spl.next().is_some() {
+                Err(InvalidPage)
+            } else {
+                use chrono::TimeZone;
+
+                let ts: i64 = ts.parse().map_err(|_| InvalidPage)?;
+                let is_post: bool = is_post.parse().map_err(|_| InvalidPage)?;
+                let id: i64 = id.parse().map_err(|_| InvalidPage)?;
+
+                let ts = chrono::offset::Utc.timestamp_nanos(ts);
+
+                Ok((ts.into(), is_post, id))
+            }
+        })
+        .transpose()
+        .map_err(|err| err.into_user_error())?;
+
+    let mut values: Vec<&(dyn postgres_types::ToSql + Sync)> = vec![&user_id, &limit_plus_1];
+
+    let page_conditions = match &page {
+        Some((ts, is_post, id)) => {
+            values.push(ts);
+            values.push(id);
+
+            Cow::Owned(format!(
+                " AND (created < $3 OR (created = $3 AND {}))",
+                if *is_post {
+                    "is_post AND id > $4"
+                } else {
+                    "is_post OR id > $4"
+                }
+            ))
+        }
+        None => Cow::Borrowed(""),
+    };
+
+    let sql: &str = &format!(
+        "(SELECT TRUE AS is_post, post.id AS thing_id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE AS is_post, reply.id AS thing_id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, NULL, NULL, NULL, NULL FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted){} ORDER BY created DESC, is_post ASC, thing_id DESC LIMIT $2",
+        page_conditions,
+    );
+
+    let mut rows = db.query(sql, &values).await?;
+
+    let next_page = if rows.len() > query.limit as usize {
+        let row = rows.pop().unwrap();
+
+        let ts: chrono::DateTime<chrono::offset::FixedOffset> = row.get(4);
+        let ts = ts.timestamp_nanos();
+
+        let is_post: bool = row.get(0);
+        let id: i64 = row.get(1);
+
+        Some(format!("{},{},{}", ts, is_post, id))
+    } else {
+        None
+    };
+
+    let rows = rows;
 
     let things: Vec<RespThingInfo> = rows
         .iter()
@@ -649,7 +724,10 @@ async fn route_unstable_users_things_list(
         })
         .collect();
 
-    crate::json_response(&things)
+    crate::json_response(&RespList {
+        next_page: next_page.map(Cow::Owned),
+        items: Cow::Owned(things),
+    })
 }
 
 pub fn route_users() -> crate::RouteNode<()> {

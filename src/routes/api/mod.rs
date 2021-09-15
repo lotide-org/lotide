@@ -1021,8 +1021,8 @@ async fn handle_common_posts_list(
 
 // https://github.com/rust-lang/rust-clippy/issues/7271
 #[allow(clippy::needless_lifetimes)]
-pub async fn process_comment_content<'a>(
-    lang: &crate::Translator,
+pub async fn process_comment_content<'a, 'b>(
+    lang: &'b crate::Translator,
     content_text: Option<Cow<'a, str>>,
     content_markdown: Option<String>,
 ) -> Result<(Option<Cow<'a, str>>, Option<String>, Option<String>), crate::Error> {
