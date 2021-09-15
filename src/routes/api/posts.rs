@@ -228,6 +228,7 @@ async fn route_unstable_posts_list(
     #[derive(Deserialize)]
     struct PostsListQuery<'a> {
         in_any_local_community: Option<bool>,
+        in_your_follows: Option<bool>,
         search: Option<Cow<'a, str>>,
         #[serde(default)]
         use_aggregate_filters: bool,
@@ -308,6 +309,20 @@ async fn route_unstable_posts_list(
             if value { "" } else { "NOT " }
         )
         .unwrap();
+    }
+    if let Some(value) = query.in_your_follows {
+        if let Some(include_your_idx) = include_your_idx {
+            write!(
+                sql,
+                " AND {}(community.id IN (SELECT community FROM community_follow WHERE accepted AND follower=${}) AND post.approved)",
+                if value { "" } else { "NOT " },
+                include_your_idx,
+            ).unwrap();
+        } else {
+            return Err(crate::Error::InternalStrStatic(
+                "in_your_follows can only be used with include_your=true",
+            ));
+        }
     }
     if let Some(value) = &query.community {
         values.push(value);
