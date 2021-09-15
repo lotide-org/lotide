@@ -2,7 +2,7 @@
 	"openapi": "3.0.1",
 	"info": {
 		"title": "lotide API",
-		"version": "0.7.0-pre"
+		"version": "0.9.0-pre"
 	},
 	"components": {
 		"schemas": {
@@ -580,6 +580,25 @@
 						"required": false,
 						"schema": {"type": "boolean"},
 						"description": "Filter to either communities you are following or waiting to follow. Requires login."
+					},
+					{
+						"name": "local",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"},
+						"description": "Filter to either local or remote communities."
+					},
+					{
+						"name": "limit",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"}
 					}
 				],
 				"responses": {
@@ -588,9 +607,19 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "array",
-									"items": {
-										"$ref": "#/components/schemas/CommunityInfo"
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"$ref": "#/components/schemas/CommunityInfo"
+											}
+										},
+										"next_page": {
+											"type": "string",
+											"nullable": true
+										}
 									}
 								}
 							}
@@ -824,6 +853,7 @@
 		},
 		"/api/unstable/communities/{communityID}/posts": {
 			"get": {
+				"deprecated": true,
 				"summary": "List posts published to a community",
 				"parameters": [
 					{
@@ -1225,6 +1255,39 @@
 						"required": false,
 						"schema": {"type": "string"},
 						"description": "If true, will omit posts from communities marked as hide_posts_from_aggregates"
+					},
+					{
+						"name": "community",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"},
+						"description": "If present, will filter to posts approved in the specified community"
+					},
+					{
+						"name": "in_your_follows",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"},
+						"description": "Filter by whether the post is approved in one of the communities you follow"
+					},
+					{
+						"name": "sort_sticky",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"},
+						"description": "If true, will sort sticky posts to the top"
+					},
+					{
+						"name": "limit",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"}
 					}
 				],
 				"responses": {
@@ -1233,8 +1296,20 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "array",
-									"items": {"$ref": "#/components/schemas/PostListPost"}
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"$ref": "#/components/schemas/PostListPost"
+											}
+										},
+										"next_page": {
+											"type": "string",
+											"nullable": true
+										}
+									}
 								}
 							}
 						}
@@ -1622,6 +1697,18 @@
 						"in": "path",
 						"required": true,
 						"schema": {"$ref": "#/components/schemas/PathUserID"}
+					},
+					{
+						"name": "limit",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"}
 					}
 				],
 				"responses": {
@@ -1630,23 +1717,33 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "array",
-									"items": {
-										"oneOf": [
-											{
-												"type": "object",
-												"required": ["type", "id", "content_text", "content_html", "created", "post"],
-												"properties": {
-													"type": {"type": "string", "enum": ["comment"]},
-													"id": {"type": "integer"},
-													"content_text": {"type": "string", "nullable": true},
-													"content_html": {"type": "string", "nullable": true},
-													"created": {"type": "string", "format": "date-time"},
-													"post": {"$ref": "#/components/schemas/MinimalPostInfo"}
-												}
-											},
-											{"$ref": "#/components/schemas/SomePostInfo"}
-										]
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"oneOf": [
+													{
+														"type": "object",
+														"required": ["type", "id", "content_text", "content_html", "created", "post"],
+														"properties": {
+															"type": {"type": "string", "enum": ["comment"]},
+															"id": {"type": "integer"},
+															"content_text": {"type": "string", "nullable": true},
+															"content_html": {"type": "string", "nullable": true},
+															"created": {"type": "string", "format": "date-time"},
+															"post": {"$ref": "#/components/schemas/MinimalPostInfo"}
+														}
+													},
+													{"$ref": "#/components/schemas/SomePostInfo"}
+												]
+											}
+										},
+										"next_page": {
+											"type": "string",
+											"nullable": true
+										}
 									}
 								}
 							}
@@ -1717,6 +1814,7 @@
 		},
 		"/api/unstable/users/~me/following:posts": {
 			"get": {
+				"deprecated": true,
 				"summary": "Fetch posts from all the communities you follow",
 				"responses": {
 					"200": {

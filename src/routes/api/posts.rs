@@ -1,5 +1,5 @@
 use super::{
-    JustURL, RespAvatarInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    InvalidPage, JustURL, RespAvatarInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost, ValueConsumer,
 };
 use crate::types::{
@@ -43,6 +43,8 @@ async fn get_post_comments<'a>(
     let (page_part1, page_part2) = sort
         .handle_page(
             page,
+            "reply",
+            false,
             ValueConsumer {
                 targets: vec![&mut con1, &mut con2],
                 start_idx: values.len(),
@@ -167,24 +169,86 @@ async fn route_unstable_posts_list(
         Extra(PostsListExtraSortType),
     }
 
+    impl PostsListSortType {
+        fn get_next_posts_page(
+            &self,
+            post: &RespPostListPost<'_>,
+            sort_sticky: bool,
+            limit: u8,
+            current_page: Option<&str>,
+        ) -> String {
+            match self {
+                Self::Normal(inner) => {
+                    inner.get_next_posts_page(post, sort_sticky, limit, current_page)
+                }
+                Self::Extra(PostsListExtraSortType::Relevant) => super::format_number_58(
+                    i64::from(limit)
+                        + match current_page {
+                            None => 0,
+                            Some(current_page) => super::parse_number_58(current_page).unwrap(),
+                        },
+                ),
+            }
+        }
+
+        pub fn handle_page(
+            &self,
+            page: Option<&str>,
+            sort_sticky: bool,
+            mut value_out: ValueConsumer,
+        ) -> Result<(Option<String>, Option<String>), InvalidPage> {
+            match self {
+                Self::Extra(sort) => {
+                    match page {
+                        None => Ok((None, None)),
+                        Some(page) => match sort {
+                            PostsListExtraSortType::Relevant => {
+                                // TODO maybe
+                                let page: i64 =
+                                    super::parse_number_58(page).map_err(|_| InvalidPage)?;
+                                let idx = value_out.push(page);
+                                Ok((None, Some(format!(" OFFSET ${}", idx))))
+                            }
+                        },
+                    }
+                }
+                Self::Normal(sort) => sort.handle_page(page, "post", sort_sticky, value_out),
+            }
+        }
+    }
+
     impl Default for PostsListSortType {
         fn default() -> Self {
             Self::Normal(super::SortType::Hot)
         }
     }
 
+    fn default_limit() -> u8 {
+        30
+    }
+
     #[derive(Deserialize)]
     struct PostsListQuery<'a> {
         in_any_local_community: Option<bool>,
+        in_your_follows: Option<bool>,
         search: Option<Cow<'a, str>>,
         #[serde(default)]
         use_aggregate_filters: bool,
+        community: Option<CommunityLocalID>,
+
+        #[serde(default = "default_limit")]
+        limit: u8,
+
+        page: Option<Cow<'a, str>>,
 
         #[serde(default)]
         include_your: bool,
 
         #[serde(default)]
         sort: PostsListSortType,
+
+        #[serde(default)]
+        sort_sticky: bool,
     }
 
     let query: PostsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -199,11 +263,16 @@ async fn route_unstable_posts_list(
         None
     };
 
-    let mut search_value_idx = None;
+    let limit_plus_1: i64 = (query.limit + 1).into();
 
-    let limit: i64 = 30;
+    let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&limit_plus_1];
 
-    let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&limit];
+    let search_value_idx = if let Some(search) = &query.search {
+        values.push(search);
+        Some(values.len())
+    } else {
+        None
+    };
 
     let include_your_idx = if let Some(user) = &include_your_for {
         values.push(user);
@@ -217,14 +286,23 @@ async fn route_unstable_posts_list(
         super::common_posts_list_query(include_your_idx)
     );
 
+    let relevance_sql = if let Some(search_value_idx) = search_value_idx {
+        Some(format!("ts_rank_cd(to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')), plainto_tsquery('english', ${}))", search_value_idx))
+    } else {
+        None
+    };
+
+    if let Some(relevance_sql) = &relevance_sql {
+        sql.push_str(", ");
+        sql.push_str(relevance_sql);
+    }
+
     sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE");
     if query.use_aggregate_filters {
         sql.push_str(" AND community.hide_posts_from_aggregates=FALSE");
     }
-    if let Some(search) = &query.search {
-        values.push(search);
-        search_value_idx = Some(values.len());
-        write!(sql, " AND to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')) @@ plainto_tsquery('english', ${})", values.len()).unwrap();
+    if let Some(search_value_idx) = &search_value_idx {
+        write!(sql, " AND to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')) @@ plainto_tsquery('english', ${})", search_value_idx).unwrap();
     }
     if let Some(value) = query.in_any_local_community {
         write!(
@@ -234,12 +312,59 @@ async fn route_unstable_posts_list(
         )
         .unwrap();
     }
+    if let Some(value) = query.in_your_follows {
+        if let Some(include_your_idx) = include_your_idx {
+            write!(
+                sql,
+                " AND {}(community.id IN (SELECT community FROM community_follow WHERE accepted AND follower=${}) AND post.approved)",
+                if value { "" } else { "NOT " },
+                include_your_idx,
+            ).unwrap();
+        } else {
+            return Err(crate::Error::InternalStrStatic(
+                "in_your_follows can only be used with include_your=true",
+            ));
+        }
+    }
+    if let Some(value) = &query.community {
+        values.push(value);
+        write!(sql, " AND community.id=${} AND post.approved", values.len(),).unwrap();
+    }
+
+    let mut con1 = None;
+    let mut con2 = None;
+    let (page_part1, page_part2) = query
+        .sort
+        .handle_page(
+            query.page.as_deref(),
+            query.sort_sticky,
+            ValueConsumer {
+                targets: vec![&mut con1, &mut con2],
+                start_idx: values.len(),
+                used: 0,
+            },
+        )
+        .map_err(super::InvalidPage::into_user_error)?;
+    if let Some(value) = &con1 {
+        values.push(value.as_ref());
+        if let Some(value) = &con2 {
+            values.push(value.as_ref());
+        }
+    }
+
+    if let Some(part) = page_part1 {
+        sql.push_str(&part);
+    }
+
     sql.push_str(" ORDER BY ");
-    match query.sort {
+    if query.sort_sticky {
+        sql.push_str("sticky DESC, ");
+    }
+    match &query.sort {
         PostsListSortType::Normal(ty) => sql.push_str(ty.post_sort_sql()),
         PostsListSortType::Extra(PostsListExtraSortType::Relevant) => {
-            if let Some(search_value_idx) = search_value_idx {
-                write!(sql, "ts_rank_cd(to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')), plainto_tsquery('english', ${})) DESC", search_value_idx).unwrap();
+            if let Some(relevance_sql) = relevance_sql {
+                write!(sql, "{} DESC, post.id DESC", relevance_sql).unwrap();
             } else {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::BAD_REQUEST,
@@ -250,13 +375,41 @@ async fn route_unstable_posts_list(
     }
     sql.push_str(" LIMIT $1");
 
+    if let Some(part) = page_part2 {
+        sql.push_str(&part);
+    }
+
     let sql: &str = &sql;
 
     let stream = crate::query_stream(&db, sql, &values).await?;
 
-    let posts = super::handle_common_posts_list(stream, &ctx, include_your_for.is_some()).await?;
+    let posts = super::handle_common_posts_list(
+        stream,
+        &ctx,
+        include_your_for.is_some(),
+        search_value_idx.is_some(),
+    )
+    .await?;
+    let output = if posts.len() > query.limit as usize {
+        let last_post = &posts[posts.len() - 1];
 
-    crate::json_response(&posts)
+        RespList {
+            next_page: Some(Cow::Owned(query.sort.get_next_posts_page(
+                last_post,
+                query.sort_sticky,
+                query.limit,
+                query.page.as_deref(),
+            ))),
+            items: Cow::Borrowed(&posts[0..(posts.len() - 1)]),
+        }
+    } else {
+        RespList {
+            items: posts.into(),
+            next_page: None,
+        }
+    };
+
+    crate::json_response(&output)
 }
 
 async fn route_unstable_posts_replies_list(
@@ -472,15 +625,15 @@ async fn route_unstable_posts_get(
             lang.tr("no_such_post", None).into_owned(),
         )),
         Some(row) => {
-            let href = row.get(1);
-            let content_text = row.get(2);
+            let href: Option<&str> = row.get(1);
+            let content_text: Option<&str> = row.get(2);
             let content_html: Option<&str> = row.get(5);
-            let title = row.get(3);
+            let title: &str = row.get(3);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
             let community_id = CommunityLocalID(row.get(6));
-            let community_name = row.get(7);
+            let community_name: &str = row.get(7);
             let community_local = row.get(8);
-            let community_ap_id = row.get(9);
+            let community_ap_id: Option<&str> = row.get(9);
 
             let author = match row.get(10) {
                 Some(author_username) => {
@@ -508,25 +661,26 @@ async fn route_unstable_posts_get(
 
             let community = RespMinimalCommunityInfo {
                 id: community_id,
-                name: community_name,
+                name: Cow::Borrowed(community_name),
                 local: community_local,
                 host: crate::get_actor_host_or_unknown(
                     community_local,
                     community_ap_id,
                     &ctx.local_hostname,
                 ),
-                remote_url: community_ap_id,
+                remote_url: community_ap_id.map(Cow::Borrowed),
             };
 
             let post = RespPostListPost {
                 id: post_id,
-                title,
-                href: ctx.process_href_opt(href, post_id),
-                content_text,
+                title: Cow::Borrowed(title),
+                href: ctx.process_href_opt(href.map(Cow::Borrowed), post_id),
+                content_text: content_text.map(Cow::Borrowed),
                 content_html_safe: content_html.map(|html| crate::clean_html(&html)),
-                author: author.as_ref(),
+                author: author.map(Cow::Owned),
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Owned(community),
+                relevance: None,
                 replies_count_total: None,
                 score: row.get(13),
                 sticky: row.get(17),

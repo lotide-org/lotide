@@ -175,31 +175,33 @@ pub struct JustUser<'a> {
 #[derive(Serialize, Clone)]
 pub struct RespMinimalCommunityInfo<'a> {
     pub id: CommunityLocalID,
-    pub name: &'a str,
+    pub name: Cow<'a, str>,
     pub local: bool,
     pub host: Cow<'a, str>,
-    pub remote_url: Option<&'a str>,
+    pub remote_url: Option<Cow<'a, str>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespMinimalPostInfo<'a> {
     pub id: PostLocalID,
     pub title: &'a str,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespPostListPost<'a> {
     pub id: PostLocalID,
-    pub title: &'a str,
+    pub title: Cow<'a, str>,
     pub href: Option<Cow<'a, str>>,
-    pub content_text: Option<&'a str>,
+    pub content_text: Option<Cow<'a, str>>,
     #[serde(rename = "content_html")]
     pub content_html_safe: Option<String>,
-    pub author: Option<&'a RespMinimalAuthorInfo<'a>>,
+    pub author: Option<Cow<'a, RespMinimalAuthorInfo<'a>>>,
     pub created: Cow<'a, str>,
     pub community: Cow<'a, RespMinimalCommunityInfo<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replies_count_total: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relevance: Option<f32>,
     pub score: i64,
     pub sticky: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -245,7 +247,7 @@ impl<'a> RespPostCommentInfo<'a> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(tag = "type")]
 pub enum RespThingInfo<'a> {
     #[serde(rename = "post")]
@@ -268,17 +270,17 @@ pub struct RespPostInfo<'a> {
     pub local: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespCommunityFeedsType {
     pub new: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespCommunityFeeds {
     pub atom: RespCommunityFeedsType,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespCommunityInfo<'a> {
     #[serde(flatten)]
     pub base: RespMinimalCommunityInfo<'a>,
@@ -294,7 +296,7 @@ pub struct RespCommunityInfo<'a> {
     pub your_follow: Option<Option<RespYourFollowInfo>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespYourFollowInfo {
     pub accepted: bool,
 }
