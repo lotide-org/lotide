@@ -97,6 +97,7 @@ impl SortType {
         &self,
         page: Option<&str>,
         table: &str,
+        sort_sticky: bool,
         mut value_out: ValueConsumer,
     ) -> Result<(Option<String>, Option<String>), InvalidPage> {
         match page {
@@ -108,9 +109,18 @@ impl SortType {
                     Ok((None, Some(format!(" OFFSET ${}", idx))))
                 }
                 SortType::New => {
-                    let page: (chrono::DateTime<chrono::offset::FixedOffset>, i64) = {
+                    let page: (
+                        Option<bool>,
+                        chrono::DateTime<chrono::offset::FixedOffset>,
+                        i64,
+                    ) = {
                         let mut spl = page.split(',');
 
+                        let sticky = if sort_sticky {
+                            Some(spl.next().ok_or(InvalidPage)?)
+                        } else {
+                            None
+                        };
                         let ts = spl.next().ok_or(InvalidPage)?;
                         let u = spl.next().ok_or(InvalidPage)?;
                         if spl.next().is_some() {
@@ -118,23 +128,32 @@ impl SortType {
                         } else {
                             use chrono::TimeZone;
 
+                            let sticky: Option<bool> = sticky
+                                .map(|x| x.parse().map_err(|_| InvalidPage))
+                                .transpose()?;
                             let ts: i64 = ts.parse().map_err(|_| InvalidPage)?;
                             let u: i64 = u.parse().map_err(|_| InvalidPage)?;
 
                             let ts = chrono::offset::Utc.timestamp_nanos(ts);
 
-                            (ts.into(), u)
+                            (sticky, ts.into(), u)
                         }
                     };
 
-                    let idx1 = value_out.push(page.0);
-                    let idx2 = value_out.push(page.1);
+                    let idx1 = value_out.push(page.1);
+                    let idx2 = value_out.push(page.2);
+
+                    let base = format!(
+                        "({2}.created < ${0} OR ({2}.created = ${0} AND {2}.id <= ${1}))",
+                        idx1, idx2, table,
+                    );
 
                     Ok((
-                        Some(format!(
-                            " AND ({2}.created < ${0} OR ({2}.created = ${0} AND {2}.id <= ${1}))",
-                            idx1, idx2, table,
-                        )),
+                        Some(match page.0 {
+                            None => format!(" AND {}", base),
+                            Some(true) => format!(" AND ((NOT {}.sticky) OR {})", table, base),
+                            Some(false) => format!(" AND ((NOT {}.sticky) AND {})", table, base),
+                        }),
                         None,
                     ))
                 }

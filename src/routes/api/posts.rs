@@ -44,6 +44,7 @@ async fn get_post_comments<'a>(
         .handle_page(
             page,
             "reply",
+            false,
             ValueConsumer {
                 targets: vec![&mut con1, &mut con2],
                 start_idx: values.len(),
@@ -193,6 +194,7 @@ async fn route_unstable_posts_list(
         pub fn handle_page(
             &self,
             page: Option<&str>,
+            sort_sticky: bool,
             mut value_out: ValueConsumer,
         ) -> Result<(Option<String>, Option<String>), InvalidPage> {
             match self {
@@ -210,7 +212,7 @@ async fn route_unstable_posts_list(
                         },
                     }
                 }
-                Self::Normal(sort) => sort.handle_page(page, "post", value_out),
+                Self::Normal(sort) => sort.handle_page(page, "post", sort_sticky, value_out),
             }
         }
     }
@@ -335,6 +337,7 @@ async fn route_unstable_posts_list(
         .sort
         .handle_page(
             query.page.as_deref(),
+            query.sort_sticky,
             ValueConsumer {
                 targets: vec![&mut con1, &mut con2],
                 start_idx: values.len(),
