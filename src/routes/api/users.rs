@@ -134,6 +134,87 @@ impl std::str::FromStr for UserIDOrMe {
     }
 }
 
+async fn route_unstable_users_list(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    #[derive(Deserialize)]
+    struct UsersListQuery<'a> {
+        local: Option<bool>,
+        username: Option<Cow<'a, str>>,
+    }
+
+    let query: UsersListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
+    let username = match (query.local, query.username) {
+        (Some(true), Some(username)) => username,
+        _ => {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::FORBIDDEN,
+                "User listing is only allowed when filtering by local=true and a username",
+            )))
+        }
+    };
+
+    let db = ctx.db_pool.get().await?;
+
+    let rows = db.query(
+        "SELECT id, description, description_html, avatar, suspended FROM person WHERE local AND username=$1",
+        &[&username]
+    )
+        .await?;
+
+    let output = RespList {
+        next_page: None,
+        items: Cow::Owned(
+            rows.iter()
+                .map(|row| {
+                    let avatar: Option<&str> = row.get(3);
+
+                    let user_id = UserLocalID(row.get(0));
+
+                    let info = RespMinimalAuthorInfo {
+                        id: user_id,
+                        local: true,
+                        username: Cow::Borrowed(&username),
+                        host: Cow::Borrowed(&ctx.local_hostname),
+                        remote_url: None,
+                        avatar: avatar.map(|url| RespAvatarInfo {
+                            url: ctx.process_avatar_href(url, user_id),
+                        }),
+                    };
+
+                    let (description, description_text, description_html) = match row.get(2) {
+                        Some(description_html) => (
+                            description_html,
+                            None,
+                            Some(crate::clean_html(description_html)),
+                        ),
+                        None => {
+                            let description_text: &str = row.get(1);
+                            (description_text, Some(description_text), None)
+                        }
+                    };
+
+                    let info = RespUserInfo {
+                        base: info,
+                        description,
+                        description_html,
+                        description_text,
+                        suspended: Some(row.get(4)),
+                        your_note: None,
+                    };
+
+                    info
+                })
+                .collect::<Vec<_>>(),
+        ),
+    };
+
+    crate::json_response(&output)
+}
+
 async fn route_unstable_users_create(
     _: (),
     ctx: Arc<crate::RouteContext>,
@@ -540,7 +621,7 @@ async fn route_unstable_users_get(
     let info = RespUserInfo {
         base: info,
         description,
-        description_html: description_html.as_deref(),
+        description_html,
         description_text,
         suspended: if local { Some(row.get(6)) } else { None },
         your_note,
@@ -732,6 +813,7 @@ async fn route_unstable_users_things_list(
 
 pub fn route_users() -> crate::RouteNode<()> {
     crate::RouteNode::new()
+        .with_handler_async("GET", route_unstable_users_list)
         .with_handler_async("POST", route_unstable_users_create)
         .with_child_parse::<UserIDOrMe, _>(
             crate::RouteNode::new()

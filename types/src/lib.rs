@@ -75,18 +75,18 @@ pub struct FingerResponse<'a> {
     pub links: Vec<FingerLink<'a>>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 pub struct JustContentText<'a> {
     pub content_text: Cow<'a, str>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespUserInfo<'a> {
     #[serde(flatten)]
     pub base: RespMinimalAuthorInfo<'a>,
 
     pub description: &'a str,
-    pub description_html: Option<&'a str>,
+    pub description_html: Option<String>,
     pub description_text: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suspended: Option<bool>,

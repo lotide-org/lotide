@@ -100,6 +100,19 @@
 					}
 				}
 			},
+			"UserInfo": {
+				"allOf": [{"$ref": "#/components/schemas/MinimalUserInfo"}],
+				"type": "object",
+				"required": ["description"],
+				"properties": {
+					"description": {"type": "string"},
+					"your_note": {
+						"type": "string",
+						"nullable": true,
+						"description": "Private note about this user written by you"
+					}
+				}
+			},
 			"CommunityInfo": {
 				"allOf": [{"$ref": "#/components/schemas/MinimalCommunityInfo"}],
 				"type": "object",
@@ -1600,6 +1613,45 @@
 			}
 		},
 		"/api/unstable/users": {
+			"get": {
+				"summary": "Find a local user by username",
+				"parameters": [
+					{
+						"name": "local",
+						"in": "query",
+						"required": true,
+						"schema": {"type": "boolean"},
+						"description": "Filter by whether the user is local. Currently required to be true."
+					},
+					{
+						"name": "username",
+						"in": "query",
+						"required": true,
+						"schema": {"type": "string"},
+						"description": "Filter by the user's name"
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {"$ref": "#/components/schemas/UserInfo"}
+										},
+										"next_page": {"type": "string", "nullable": true}
+									}
+								}
+							}
+						}
+					}
+				}
+			},
 			"post": {
 				"summary": "Register a new account",
 				"requestBody": {
@@ -1669,17 +1721,7 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"allOf": [{"$ref": "#/components/schemas/MinimalUserInfo"}],
-									"type": "object",
-									"required": ["description"],
-									"properties": {
-										"description": {"type": "string"},
-										"your_note": {
-											"type": "string",
-											"nullable": true,
-											"description": "Private note about this user written by you"
-										}
-									}
+									"$ref": "#/components/schemas/UserInfo"
 								}
 							}
 						}
