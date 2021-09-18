@@ -34,7 +34,7 @@ async fn route_unstable_comments_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id), reply.content_markdown, person.is_bot, post.ap_id, post.local FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id), reply.content_markdown, person.is_bot, post.ap_id, post.local, reply.ap_id FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
             &[&comment_id],
         )
         .map_err(crate::Error::from),
@@ -59,6 +59,17 @@ async fn route_unstable_comments_get(
         )),
         Some(row) => {
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
+            let ap_id: Option<&str> = row.get(20);
+            let local: bool = row.get(4);
+
+            let remote_url = if local {
+                Some(Cow::Owned(String::from(
+                    crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub),
+                )))
+            } else {
+                ap_id.map(Cow::Borrowed)
+            };
+
             let author = match row.get(6) {
                 Some(author_username) => {
                     let author_id = UserLocalID(row.get(0));
@@ -123,6 +134,7 @@ async fn route_unstable_comments_get(
                 base: RespPostCommentInfo {
                     base: RespMinimalCommentInfo {
                         id: comment_id,
+                        remote_url,
                         content_text: row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
                         content_html_safe: row
                             .get::<_, Option<&str>>(5)
@@ -140,7 +152,7 @@ async fn route_unstable_comments_get(
                     content_markdown: row.get::<_, Option<&str>>(16).map(Cow::Borrowed),
                     created: created.to_rfc3339(),
                     deleted: row.get(10),
-                    local: row.get(4),
+                    local,
                     replies: if row.get(15) {
                         None
                     } else {

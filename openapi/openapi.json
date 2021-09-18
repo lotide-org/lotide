@@ -28,9 +28,10 @@
 			},
 			"MinimalCommentInfo": {
 				"type": "object",
-				"required": ["id"],
+				"required": ["id", "remote_url"],
 				"properties": {
 					"id": {"type": "integer"},
+					"remote_url": {"type": "string", "nullable": true},
 					"content_text": {"type": "string"},
 					"content_html": {"type": "string"}
 				}
@@ -201,9 +202,10 @@
 			},
 			"PostCommentInfo": {
 				"type": "object",
-				"required": ["id", "content_text", "content_markdown", "content_html", "author", "created", "deleted", "replies", "attachments", "local"],
+				"required": ["id", "content_text", "content_markdown", "content_html", "author", "created", "deleted", "replies", "attachments", "local", "remote_url"],
 				"properties": {
 					"id": {"type": "integer"},
+					"remote_url": {"type": "string", "nullable": true},
 					"content_text": {"type": "string", "nullable": true},
 					"content_markdown": {"type": "string", "nullable": true},
 					"content_html": {"type": "string", "nullable": true},
@@ -316,9 +318,10 @@
 							"application/json": {
 								"schema": {
 									"type": "object",
-									"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "parent", "post"],
+									"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "parent", "post", "remote_url"],
 									"properties": {
 										"id": {"type": "integer"},
+										"remote_url": {"type": "string", "nullable": true},
 										"content_text": {"type": "string", "nullable": true},
 										"content_html": {"type": "string", "nullable": true},
 										"author": {

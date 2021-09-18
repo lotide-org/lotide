@@ -214,6 +214,7 @@ pub struct RespPostListPost<'a> {
 #[derive(Serialize, Clone)]
 pub struct RespMinimalCommentInfo<'a> {
     pub id: CommentLocalID,
+    pub remote_url: Option<Cow<'a, str>>,
     pub content_text: Option<Cow<'a, str>>,
     #[serde(rename = "content_html")]
     pub content_html_safe: Option<String>,

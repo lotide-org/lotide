@@ -25,7 +25,7 @@ async fn get_post_comments<'a>(
 
     let limit_i = i64::from(limit) + 1;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown, person.is_bot";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown, person.is_bot, reply.ap_id, reply.local";
     let (sql2, mut values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -77,6 +77,17 @@ async fn get_post_comments<'a>(
             let content_text: Option<String> = row.get(2);
             let content_html: Option<String> = row.get(4);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
+            let ap_id: Option<String> = row.get(15);
+            let local: bool = row.get(16);
+
+            let remote_url = if local {
+                Some(String::from(crate::apub_util::get_local_comment_apub_id(
+                    id,
+                    &ctx.host_url_apub,
+                )))
+            } else {
+                ap_id
+            };
 
             let author_username: Option<String> = row.get(5);
             let author = author_username.map(|author_username| {
@@ -116,6 +127,7 @@ async fn get_post_comments<'a>(
                 RespPostCommentInfo {
                     base: RespMinimalCommentInfo {
                         id,
+                        remote_url: remote_url.map(Cow::Owned),
                         content_text: content_text.map(From::from),
                         content_html_safe: content_html.map(|html| crate::clean_html(&html)),
                     },
@@ -135,7 +147,7 @@ async fn get_post_comments<'a>(
                     score: row.get(12),
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(15) {
+                        Some(_) => Some(if row.get(17) {
                             Some(crate::types::Empty {})
                         } else {
                             None
