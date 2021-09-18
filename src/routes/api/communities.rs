@@ -197,10 +197,10 @@ async fn route_unstable_communities_list(
                         None
                     },
                     your_follow: if query.include_your {
-                        Some(match row.get(6) {
-                            Some(accepted) => Some(RespYourFollowInfo { accepted }),
-                            None => None,
-                        })
+                        Some(
+                            row.get::<_, Option<bool>>(6)
+                                .map(|accepted| RespYourFollowInfo { accepted }),
+                        )
                     } else {
                         None
                     },
@@ -370,10 +370,10 @@ async fn route_unstable_communities_get(
             None
         },
         your_follow: if query.include_your {
-            Some(match row.get(5) {
-                Some(accepted) => Some(RespYourFollowInfo { accepted }),
-                None => None,
-            })
+            Some(
+                row.get::<_, Option<bool>>(5)
+                    .map(|accepted| RespYourFollowInfo { accepted }),
+            )
         } else {
             None
         },
@@ -466,40 +466,39 @@ async fn route_unstable_communities_follow(
 
     let row_count = db.execute("INSERT INTO community_follow (community, follower, local, accepted) VALUES ($1, $2, TRUE, $3) ON CONFLICT DO NOTHING", &[&community, &user.raw(), &community_local]).await?;
 
-    let output =
-        if community_local {
-            RespYourFollowInfo { accepted: true }
-        } else {
-            if row_count > 0 {
-                crate::apub_util::spawn_enqueue_send_community_follow(community, user, ctx);
+    let output = if community_local {
+        RespYourFollowInfo { accepted: true }
+    } else if row_count > 0 {
+        crate::apub_util::spawn_enqueue_send_community_follow(community, user, ctx);
 
-                if body.try_wait_for_accept {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        if body.try_wait_for_accept {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-                    let row = db.query_one(
+            let row = db
+                .query_one(
                     "SELECT accepted FROM community_follow WHERE community=$1 AND follower=$2",
                     &[&community, &user.raw()],
-                ).await?;
+                )
+                .await?;
 
-                    RespYourFollowInfo {
-                        accepted: row.get(0),
-                    }
-                } else {
-                    RespYourFollowInfo { accepted: false }
-                }
-            } else {
-                let row = db
-                    .query_one(
-                        "SELECT accepted FROM community_follow WHERE community=$1 AND follower=$2",
-                        &[&community, &user.raw()],
-                    )
-                    .await?;
-
-                RespYourFollowInfo {
-                    accepted: row.get(0),
-                }
+            RespYourFollowInfo {
+                accepted: row.get(0),
             }
-        };
+        } else {
+            RespYourFollowInfo { accepted: false }
+        }
+    } else {
+        let row = db
+            .query_one(
+                "SELECT accepted FROM community_follow WHERE community=$1 AND follower=$2",
+                &[&community, &user.raw()],
+            )
+            .await?;
+
+        RespYourFollowInfo {
+            accepted: row.get(0),
+        }
+    };
 
     crate::json_response(&output)
 }
@@ -687,10 +686,7 @@ async fn route_unstable_communities_moderators_remove(
                     None => true, // was already removed, ok
                     Some(row) => {
                         let res: Option<bool> = row.get(0);
-                        match res {
-                            None => false, // other has no timestamp, must be older
-                            Some(value) => value,
-                        }
+                        res.unwrap_or(false) // other has no timestamp, must be older
                     }
                 }
             }

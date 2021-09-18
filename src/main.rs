@@ -177,10 +177,7 @@ impl BaseContext {
         href: Option<Cow<'a, str>>,
         post_id: PostLocalID,
     ) -> Option<Cow<'a, str>> {
-        match href {
-            Some(href) => Some(self.process_href(href, post_id)),
-            None => None,
-        }
+        href.map(|href| self.process_href(href, post_id))
     }
 
     pub fn process_attachments_inner<'a>(
@@ -188,8 +185,8 @@ impl BaseContext {
         href: Option<Cow<'a, str>>,
         comment_id: CommentLocalID,
     ) -> Option<Cow<'a, str>> {
-        match href {
-            Some(href) => Some(if href.starts_with("local-media://") {
+        href.map(|href| {
+            if href.starts_with("local-media://") {
                 format!(
                     "{}/stable/comments/{}/attachments/0/href",
                     self.host_url_api, comment_id
@@ -197,9 +194,8 @@ impl BaseContext {
                 .into()
             } else {
                 href
-            }),
-            None => None,
-        }
+            }
+        })
     }
 
     pub fn process_avatar_href<'a>(

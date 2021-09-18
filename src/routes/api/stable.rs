@@ -32,10 +32,10 @@ async fn route_stable_comments_attachments_0_href_get(
                     lang.tr("no_such_attachment", None).into_owned(),
                 )),
                 Some(href) => {
-                    if href.starts_with("local-media://") {
+                    if let Some(rest) = href.strip_prefix("local-media://") {
                         // local media, serve file content
 
-                        let media_id: crate::Pineapple = (&href[14..]).parse()?;
+                        let media_id: crate::Pineapple = rest.parse()?;
 
                         let media_row = db
                             .query_opt(
@@ -148,7 +148,7 @@ async fn route_stable_communities_feed_get(
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
             if first {
                 first = false;
-                builder.updated(created.clone());
+                builder.updated(created);
             }
 
             let post_id = PostLocalID(row.get(0));
@@ -179,7 +179,7 @@ async fn route_stable_communities_feed_get(
             let mut entry_builder = atom_syndication::EntryBuilder::default();
             entry_builder.title(title);
             entry_builder.id(post_ap_id.clone());
-            entry_builder.updated(created.clone());
+            entry_builder.updated(created);
             entry_builder.author(atom_syndication::Person {
                 name: author_username,
                 email: None,
@@ -199,16 +199,15 @@ async fn route_stable_communities_feed_get(
                     let content = content_html.or_else(|| {
                         let content_text: Option<&str> = row.get(3);
                         content_text
-                            .map(|content_text| Cow::Owned(ammonia::clean_text(&content_text)))
+                            .map(|content_text| Cow::Owned(ammonia::clean_text(content_text)))
                     });
 
-                    let link_content = match href {
-                        None => None,
-                        Some(href) => Some(format!(
+                    let link_content = href.map(|href| {
+                        format!(
                             r#"<p><a href="{0}">{0}</a></p>"#,
                             ammonia::clean_text(&href)
-                        )),
-                    };
+                        )
+                    });
 
                     match (content, link_content) {
                         (None, None) => None,
@@ -265,10 +264,10 @@ async fn route_stable_posts_href_get(
                     lang.tr("post_not_link", None).into_owned(),
                 )),
                 Some(href) => {
-                    if href.starts_with("local-media://") {
+                    if let Some(rest) = href.strip_prefix("local-media://") {
                         // local media, serve file content
 
-                        let media_id: crate::Pineapple = (&href[14..]).parse()?;
+                        let media_id: crate::Pineapple = rest.parse()?;
 
                         let media_row = db
                             .query_opt(
@@ -345,10 +344,10 @@ async fn route_unstable_users_avatar_href_get(
                     lang.tr("user_no_avatar", None).into_owned(),
                 )),
                 Some(href) => {
-                    if href.starts_with("local-media://") {
+                    if let Some(rest) = href.strip_prefix("local-media://") {
                         // local media, serve file content
 
-                        let media_id: crate::Pineapple = (&href[14..]).parse()?;
+                        let media_id: crate::Pineapple = rest.parse()?;
 
                         let media_row = db
                             .query_opt(

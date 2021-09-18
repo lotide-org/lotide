@@ -300,13 +300,13 @@ async fn insert_token(
 }
 
 enum Lookup<'a> {
-    URL(url::Url),
+    Url(url::Url),
     WebFinger { user: &'a str, host: &'a str },
 }
 
 fn parse_lookup(src: &str) -> Result<Lookup, crate::Error> {
     if src.starts_with("http") {
-        return Ok(Lookup::URL(src.parse()?));
+        return Ok(Lookup::Url(src.parse()?));
     }
     if let Some(at_idx) = src.rfind('@') {
         let mut user = &src[..at_idx];
@@ -335,7 +335,7 @@ async fn route_unstable_actors_lookup(
     let lookup = parse_lookup(&query)?;
 
     let uri = match lookup {
-        Lookup::URL(uri) => Some(uri),
+        Lookup::Url(uri) => Some(uri),
         Lookup::WebFinger { user, host } => {
             let uri = format!(
                 "https://{}/.well-known/webfinger?{}",
@@ -639,7 +639,7 @@ async fn route_unstable_objects_lookup(
     let lookup = parse_lookup(&query)?;
 
     let uri = match lookup {
-        Lookup::URL(uri) => Some(uri),
+        Lookup::Url(uri) => Some(uri),
         Lookup::WebFinger { user, host } => {
             let uri = format!(
                 "https://{}/.well-known/webfinger?{}",
@@ -683,7 +683,7 @@ async fn route_unstable_objects_lookup(
 
     let res = match &uri {
         Some(uri) => {
-            let obj = crate::apub_util::fetch_ap_object(&uri, &ctx.http_client).await?;
+            let obj = crate::apub_util::fetch_ap_object(uri, &ctx.http_client).await?;
 
             crate::apub_util::ingest::ingest_object(
                 obj,
@@ -722,19 +722,15 @@ async fn apply_comments_replies<'a, T>(
                 .await?;
 
         for (_, comment) in comments.iter_mut() {
-            let (current, next_page) = replies
-                .remove(&comment.base.id)
-                .unwrap_or_else(|| (Vec::new(), None));
-            comment.replies = Some(RespList {
-                items: current.into(),
-                next_page: next_page.map(From::from),
-            });
+            let list: RespList<RespPostCommentInfo> =
+                replies.remove(&comment.base.id).unwrap_or_default().into();
+            comment.replies = Some(list);
         }
     } else {
         use futures::stream::TryStreamExt;
 
         let stream = crate::query_stream(
-            &db,
+            db,
             "SELECT DISTINCT parent FROM reply WHERE parent = ANY($1)",
             &[&ids],
         )
@@ -760,6 +756,23 @@ async fn apply_comments_replies<'a, T>(
     Ok(())
 }
 
+type PinBoxFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+#[derive(Default)]
+struct CommentsRepliesInfoInternal<'a> {
+    replies: Vec<RespPostCommentInfo<'a>>,
+    next_page: Option<String>,
+}
+
+impl<'a> From<CommentsRepliesInfoInternal<'a>> for RespList<'a, RespPostCommentInfo<'a>> {
+    fn from(src: CommentsRepliesInfoInternal<'a>) -> RespList<RespPostCommentInfo<'a>> {
+        RespList {
+            items: src.replies.into(),
+            next_page: src.next_page.map(Cow::Owned),
+        }
+    }
+}
+
 fn get_comments_replies_box<'a: 'b, 'b>(
     parents: &'b [CommentLocalID],
     include_your_for: Option<UserLocalID>,
@@ -768,17 +781,8 @@ fn get_comments_replies_box<'a: 'b, 'b>(
     sort: SortType,
     db: &'b tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
-) -> std::pin::Pin<
-    Box<
-        dyn Future<
-                Output = Result<
-                    HashMap<CommentLocalID, (Vec<RespPostCommentInfo<'a>>, Option<String>)>,
-                    crate::Error,
-                >,
-            > + Send
-            + 'b,
-    >,
-> {
+) -> PinBoxFuture<'b, Result<HashMap<CommentLocalID, CommentsRepliesInfoInternal<'a>>, crate::Error>>
+{
     Box::pin(get_comments_replies(
         parents,
         include_your_for,
@@ -802,7 +806,7 @@ async fn get_comments_replies<'a>(
     page: Option<&str>,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
-) -> Result<HashMap<CommentLocalID, (Vec<RespPostCommentInfo<'a>>, Option<String>)>, crate::Error> {
+) -> Result<HashMap<CommentLocalID, CommentsRepliesInfoInternal<'a>>, crate::Error> {
     use futures::TryStreamExt;
 
     let limit_i = i64::from(limit) + 1;
@@ -934,38 +938,33 @@ async fn get_comments_replies<'a>(
                     local: row.get(12),
                     replies: Some(RespList::empty()),
                     score: row.get(13),
-                    your_vote: match include_your_for {
-                        None => None,
-                        Some(_) => Some(if row.get(18) {
+                    your_vote: include_your_for.map(|_| {
+                        if row.get(18) {
                             Some(crate::types::Empty {})
                         } else {
                             None
-                        }),
-                    },
+                        }
+                    }),
                 },
             ))
         })
         .try_collect()
         .await?;
 
-    apply_comments_replies(
-        &mut comments,
-        include_your_for,
-        depth,
-        limit,
-        sort,
-        db,
-        &ctx,
-    )
-    .await?;
+    apply_comments_replies(&mut comments, include_your_for, depth, limit, sort, db, ctx).await?;
 
     let mut result = HashMap::new();
     for (parent, comment) in comments {
-        let entry = result.entry(parent).or_insert_with(|| (Vec::new(), None));
-        if entry.0.len() < limit.into() {
-            entry.0.push(comment);
+        let entry = result
+            .entry(parent)
+            .or_insert_with(|| CommentsRepliesInfoInternal {
+                replies: Vec::new(),
+                next_page: None,
+            });
+        if entry.replies.len() < limit.into() {
+            entry.replies.push(comment);
         } else {
-            entry.1 = Some(sort.get_next_comments_page(comment, limit, page));
+            entry.next_page = Some(sort.get_next_comments_page(comment, limit, page));
         }
     }
 

@@ -131,11 +131,7 @@ pub fn try_strip_host<'a>(url: &'a impl AsRef<str>, host_url: &url::Url) -> Opti
 
     let url = url.as_ref();
 
-    if url.starts_with(host_url) {
-        Some(&url[host_url.len()..])
-    } else {
-        None
-    }
+    url.strip_prefix(host_url)
 }
 
 pub fn get_local_shared_inbox(host_url_apub: &BaseURL) -> BaseURL {
@@ -156,7 +152,7 @@ pub fn get_local_post_like_apub_id(
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> BaseURL {
-    let mut res = crate::apub_util::get_local_post_apub_id(post_local_id, &host_url_apub);
+    let mut res = crate::apub_util::get_local_post_apub_id(post_local_id, host_url_apub);
     res.path_segments_mut()
         .extend(&["likes", &user.to_string()]);
     res
@@ -174,7 +170,7 @@ pub fn get_local_comment_like_apub_id(
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> BaseURL {
-    let mut res = crate::apub_util::get_local_comment_apub_id(comment_local_id, &host_url_apub);
+    let mut res = crate::apub_util::get_local_comment_apub_id(comment_local_id, host_url_apub);
     res.path_segments_mut()
         .extend(&["likes", &user.to_string()]);
     res
@@ -290,8 +286,8 @@ pub fn do_sign(
     key: &openssl::pkey::PKey<openssl::pkey::Private>,
     src: &[u8],
 ) -> Result<Vec<u8>, openssl::error::ErrorStack> {
-    let mut signer = openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &key)?;
-    signer.update(&src)?;
+    let mut signer = openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), key)?;
+    signer.update(src)?;
     signer.sign_to_vec()
 }
 
@@ -301,8 +297,8 @@ pub fn do_verify(
     src: &[u8],
     sig: &[u8],
 ) -> Result<bool, openssl::error::ErrorStack> {
-    let mut verifier = openssl::sign::Verifier::new(alg, &key)?;
-    verifier.update(&src)?;
+    let mut verifier = openssl::sign::Verifier::new(alg, key)?;
+    verifier.update(src)?;
     verifier.verify(sig)
 }
 
@@ -415,8 +411,8 @@ pub async fn get_or_fetch_user_local_id(
     ctx: &Arc<crate::BaseContext>,
 ) -> Result<UserLocalID, crate::Error> {
     if let Some(remaining) = try_strip_host(ap_id, &ctx.host_url_apub) {
-        if remaining.starts_with("/users/") {
-            Ok(remaining[7..].parse()?)
+        if let Some(remaining) = remaining.strip_prefix("/users/") {
+            Ok(remaining.parse()?)
         } else {
             Err(crate::Error::InternalStr(format!(
                 "Unrecognized local AP ID: {:?}",
@@ -524,11 +520,11 @@ pub async fn fetch_or_create_local_actor_privkey(
     Ok(match actor_ref {
         ActorLocalRef::Person(id) => (
             fetch_or_create_local_user_privkey(id, db).await?,
-            get_local_person_pubkey_apub_id(id, &host_url_apub),
+            get_local_person_pubkey_apub_id(id, host_url_apub),
         ),
         ActorLocalRef::Community(id) => (
             fetch_or_create_local_community_privkey(id, db).await?,
-            get_local_community_pubkey_apub_id(id, &host_url_apub),
+            get_local_community_pubkey_apub_id(id, host_url_apub),
         ),
     })
 }
@@ -847,8 +843,8 @@ pub fn local_community_follow_undo_to_ap(
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let mut undo = activitystreams::activity::Undo::new(
-        get_local_person_apub_id(local_follower, &host_url_apub),
-        get_local_community_follow_apub_id(community_local_id, local_follower, &host_url_apub),
+        get_local_person_apub_id(local_follower, host_url_apub),
+        get_local_community_follow_apub_id(community_local_id, local_follower, host_url_apub),
     );
     undo.set_context(activitystreams::context()).set_id({
         let mut res = host_url_apub.clone();
@@ -956,7 +952,7 @@ pub fn post_to_ap(
     ) -> Result<(), crate::Error> {
         if let Some(html) = post.content_html {
             props
-                .set_content(crate::clean_html(&html))
+                .set_content(crate::clean_html(html))
                 .set_media_type(mime::TEXT_HTML);
 
             if let Some(md) = post.content_markdown {
@@ -1051,7 +1047,7 @@ pub fn local_post_to_create_ap(
     community_ap_id: url::Url,
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
-    let post_ap = post_to_ap(&post, community_ap_id, &ctx)?;
+    let post_ap = post_to_ap(post, community_ap_id, ctx)?;
 
     let mut create = activitystreams::activity::Create::new(
         get_local_person_apub_id(post.author.unwrap(), &ctx.host_url_apub),
@@ -1098,7 +1094,7 @@ pub fn local_comment_to_ap(
     let mut obj = activitystreams::object::ApObject::new(obj);
 
     if let Some(html) = &comment.content_html {
-        obj.set_content(crate::clean_html(&html))
+        obj.set_content(crate::clean_html(html))
             .set_media_type(mime::TEXT_HTML);
 
         if let Some(md) = &comment.content_markdown {
@@ -1226,7 +1222,7 @@ pub fn local_comment_to_create_ap(
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
     let comment_ap = local_comment_to_ap(
-        &comment,
+        comment,
         post_ap_id,
         parent_ap_id,
         parent_or_post_author_ap_id.clone(),
@@ -1266,11 +1262,11 @@ pub fn local_post_like_to_ap(
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
     let mut like = activitystreams::activity::Like::new(
-        crate::apub_util::get_local_person_apub_id(user, &host_url_apub),
+        crate::apub_util::get_local_person_apub_id(user, host_url_apub),
         post_ap_id,
     );
     like.set_context(activitystreams::context())
-        .set_id(get_local_post_like_apub_id(post_local_id, user, &host_url_apub).into());
+        .set_id(get_local_post_like_apub_id(post_local_id, user, host_url_apub).into());
 
     Ok(like)
 }
@@ -1281,10 +1277,10 @@ pub fn local_post_like_undo_to_ap(
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
-    let like_ap_id = get_local_post_like_apub_id(post_local_id, user, &host_url_apub);
+    let like_ap_id = get_local_post_like_apub_id(post_local_id, user, host_url_apub);
 
     let mut undo = activitystreams::activity::Undo::new(
-        get_local_person_apub_id(user, &host_url_apub),
+        get_local_person_apub_id(user, host_url_apub),
         like_ap_id,
     );
     undo.set_context(activitystreams::context()).set_id({
@@ -1304,11 +1300,11 @@ pub fn local_comment_like_to_ap(
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
     let mut like = activitystreams::activity::Like::new(
-        crate::apub_util::get_local_person_apub_id(user, &host_url_apub),
+        crate::apub_util::get_local_person_apub_id(user, host_url_apub),
         comment_ap_id,
     );
     like.set_context(activitystreams::context())
-        .set_id(get_local_comment_like_apub_id(comment_local_id, user, &host_url_apub).into());
+        .set_id(get_local_comment_like_apub_id(comment_local_id, user, host_url_apub).into());
 
     Ok(like)
 }
@@ -1319,10 +1315,10 @@ pub fn local_comment_like_undo_to_ap(
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
-    let like_ap_id = get_local_comment_like_apub_id(comment_local_id, user, &host_url_apub);
+    let like_ap_id = get_local_comment_like_apub_id(comment_local_id, user, host_url_apub);
 
     let mut undo = activitystreams::activity::Undo::new(
-        get_local_person_apub_id(user, &host_url_apub),
+        get_local_person_apub_id(user, host_url_apub),
         like_ap_id,
     );
     undo.set_context(activitystreams::context()).set_id({
@@ -1407,8 +1403,8 @@ pub fn maybe_get_local_community_id_from_uri(
     host_url_apub: &BaseURL,
 ) -> Option<CommunityLocalID> {
     if let Some(path) = try_strip_host(uri, host_url_apub) {
-        if path.starts_with("/communities/") {
-            if let Ok(local_community_id) = path[13..].parse() {
+        if let Some(rest) = path.strip_prefix("/communities/") {
+            if let Ok(local_community_id) = rest.parse() {
                 Some(local_community_id)
             } else {
                 None
@@ -1542,10 +1538,10 @@ pub async fn verify_incoming_object(
                 signature,
                 req.method(),
                 path_and_query,
-                &req.headers(),
-                &actor_ap_id,
+                req.headers(),
+                actor_ap_id,
                 db,
-                &ctx,
+                ctx,
             )
             .await?
             {

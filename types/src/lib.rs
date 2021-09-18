@@ -244,10 +244,7 @@ pub struct RespPostCommentInfo<'a> {
 
 impl<'a> RespPostCommentInfo<'a> {
     pub fn has_replies(&self) -> Option<bool> {
-        match &self.replies {
-            None => None,
-            Some(list) => Some(!list.items.is_empty()),
-        }
+        self.replies.as_ref().map(|list| !list.items.is_empty())
     }
 }
 

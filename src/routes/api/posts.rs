@@ -145,14 +145,13 @@ async fn get_post_comments<'a>(
                     local: row.get(11),
                     replies: Some(RespList::empty()),
                     score: row.get(12),
-                    your_vote: match include_your_for {
-                        None => None,
-                        Some(_) => Some(if row.get(17) {
+                    your_vote: include_your_for.map(|_| {
+                        if row.get(17) {
                             Some(crate::types::Empty {})
                         } else {
                             None
-                        }),
-                    },
+                        }
+                    }),
                 },
             ))
         })
@@ -165,8 +164,7 @@ async fn get_post_comments<'a>(
         None
     };
 
-    super::apply_comments_replies(&mut comments, include_your_for, 2, limit, sort, db, &ctx)
-        .await?;
+    super::apply_comments_replies(&mut comments, include_your_for, 2, limit, sort, db, ctx).await?;
 
     Ok((
         comments.into_iter().map(|(_, comment)| comment).collect(),
@@ -309,11 +307,9 @@ async fn route_unstable_posts_list(
         super::common_posts_list_query(include_your_idx)
     );
 
-    let relevance_sql = if let Some(search_value_idx) = search_value_idx {
-        Some(format!("ts_rank_cd(to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')), plainto_tsquery('english', ${}))", search_value_idx))
-    } else {
-        None
-    };
+    let relevance_sql = search_value_idx.map(|search_value_idx| {
+        format!("ts_rank_cd(to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')), plainto_tsquery('english', ${}))", search_value_idx)
+    });
 
     if let Some(relevance_sql) = &relevance_sql {
         sql.push_str(", ");
@@ -737,7 +733,7 @@ async fn route_unstable_posts_get(
                 title: Cow::Borrowed(title),
                 href: ctx.process_href_opt(href.map(Cow::Borrowed), post_id),
                 content_text: content_text.map(Cow::Borrowed),
-                content_html_safe: content_html.map(|html| crate::clean_html(&html)),
+                content_html_safe: content_html.map(|html| crate::clean_html(html)),
                 author: author.map(Cow::Owned),
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Owned(community),

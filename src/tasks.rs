@@ -161,7 +161,7 @@ impl TaskDef for FetchCommunityFeatured {
             Some(items) => items
                 .iter()
                 .map(|item| item.as_xsd_any_uri())
-                .filter_map(|x| x)
+                .flatten()
                 .map(|x| x.as_str())
                 .partition(|x| x.starts_with(ctx.host_url_apub.as_str())),
         };

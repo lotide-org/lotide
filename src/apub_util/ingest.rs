@@ -74,8 +74,7 @@ pub async fn ingest_object(
                 if let Some(remaining) =
                     crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
                 {
-                    if remaining.starts_with("/communities/") {
-                        let remaining = &remaining[13..];
+                    if let Some(remaining) = remaining.strip_prefix("/communities/") {
                         let next_expected = format!("{}/followers/", community_local_id);
                         if remaining.starts_with(&next_expected) {
                             let remaining = &remaining[next_expected.len()..];
@@ -118,8 +117,7 @@ pub async fn ingest_object(
                     if let Some(remaining) =
                         crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
                     {
-                        if remaining.starts_with("/posts/") {
-                            let remaining = &remaining[7..];
+                        if let Some(remaining) = remaining.strip_prefix("/posts/") {
                             if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
                                 db.execute(
                                     "UPDATE post SET approved=TRUE, approved_ap_id=$1 WHERE id=$2 AND community=$3",
@@ -338,14 +336,14 @@ pub async fn ingest_like(
             let thing_local_ref = if let Some(remaining) =
                 super::try_strip_host(&object_id, &ctx.host_url_apub)
             {
-                if remaining.starts_with("/posts/") {
-                    if let Ok(local_post_id) = remaining[7..].parse() {
+                if let Some(remaining) = remaining.strip_prefix("/posts/") {
+                    if let Ok(local_post_id) = remaining.parse() {
                         Some(ThingLocalRef::Post(local_post_id))
                     } else {
                         None
                     }
-                } else if remaining.starts_with("/comments/") {
-                    if let Ok(local_comment_id) = remaining[10..].parse() {
+                } else if let Some(remaining) = remaining.strip_prefix("/comments/") {
+                    if let Ok(local_comment_id) = remaining.parse() {
                         Some(ThingLocalRef::Comment(local_comment_id))
                     } else {
                         None
@@ -359,15 +357,13 @@ pub async fn ingest_like(
                     &[&object_id.as_str()],
                 ).await?;
 
-                if let Some(row) = row {
-                    Some(if row.get(0) {
+                row.map(|row| {
+                    if row.get(0) {
                         ThingLocalRef::Post(PostLocalID(row.get(1)))
                     } else {
                         ThingLocalRef::Comment(CommentLocalID(row.get(1)))
-                    })
-                } else {
-                    None
-                }
+                    }
+                })
             };
 
             match thing_local_ref {
@@ -746,7 +742,7 @@ async fn ingest_postlike(
                         media_type,
                         created.as_ref(),
                         author,
-                        &in_reply_to,
+                        in_reply_to,
                         attachment_href,
                         ctx,
                     )
@@ -860,7 +856,7 @@ async fn handle_recieved_reply(
     let db = ctx.db_pool.get().await?;
 
     let author = match author {
-        Some(author) => Some(super::get_or_fetch_user_local_id(&author, &db, &ctx).await?),
+        Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
         None => None,
     };
 
@@ -882,25 +878,21 @@ async fn handle_recieved_reply(
             let target = if let Some(remaining) =
                 super::try_strip_host(&term_ap_id, &ctx.host_url_apub)
             {
-                if remaining.starts_with("/posts/") {
-                    if let Ok(local_post_id) = remaining[7..].parse() {
+                if let Some(remaining) = remaining.strip_prefix("/posts/") {
+                    if let Ok(local_post_id) = remaining.parse() {
                         Some(ReplyTarget::Post { id: local_post_id })
                     } else {
                         None
                     }
-                } else if remaining.starts_with("/comments/") {
-                    if let Ok(local_comment_id) = remaining[10..].parse() {
+                } else if let Some(remaining) = remaining.strip_prefix("/comments/") {
+                    if let Ok(local_comment_id) = remaining.parse() {
                         let row = db
                             .query_opt("SELECT post FROM reply WHERE id=$1", &[&local_comment_id])
                             .await?;
-                        if let Some(row) = row {
-                            Some(ReplyTarget::Comment {
-                                id: local_comment_id,
-                                post: PostLocalID(row.get(0)),
-                            })
-                        } else {
-                            None
-                        }
+                        row.map(|row| ReplyTarget::Comment {
+                            id: local_comment_id,
+                            post: PostLocalID(row.get(0)),
+                        })
                     } else {
                         None
                     }
@@ -971,10 +963,7 @@ async fn handle_recieved_reply(
                             &[&object_id.as_str()],
                         )
                         .await?;
-                    Ok(match row {
-                        None => None,
-                        Some(row) => Some(CommentLocalID(row.get(0))),
-                    })
+                    Ok(row.map(|row| CommentLocalID(row.get(0))))
                 }
             } else {
                 Ok(None)
@@ -1022,7 +1011,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
 
     if let Some(object_id) = obj.id_unchecked() {
         if let Some(author) = author {
-            super::require_containment(&object_id, author)?;
+            super::require_containment(object_id, author)?;
         }
 
         Ok(Some(
@@ -1061,7 +1050,7 @@ async fn handle_recieved_post(
 ) -> Result<PostLocalID, crate::Error> {
     let db = ctx.db_pool.get().await?;
     let author = match author {
-        Some(author) => Some(super::get_or_fetch_user_local_id(&author, &db, &ctx).await?),
+        Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
         None => None,
     };
 

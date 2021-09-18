@@ -416,14 +416,13 @@ async fn handler_users_outbox_page_get(
 
     let items = items?;
 
-    let next = match last_created {
-        Some(ts) => Some(crate::apub_util::get_local_person_outbox_page_apub_id(
+    let next = last_created.map(|ts| {
+        crate::apub_util::get_local_person_outbox_page_apub_id(
             user,
             &crate::TimestampOrLatest::Timestamp(ts),
             &ctx.host_url_apub,
-        )),
-        None => None,
-    };
+        )
+    });
 
     let info = serde_json::json!({
         "@context": activitystreams::context(),

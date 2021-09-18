@@ -138,7 +138,7 @@ async fn route_unstable_comments_get(
                         content_text: row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
                         content_html_safe: row
                             .get::<_, Option<&str>>(5)
-                            .map(|html| crate::clean_html(&html)),
+                            .map(|html| crate::clean_html(html)),
                     },
 
                     attachments: match ctx.process_attachments_inner(
@@ -589,7 +589,7 @@ async fn route_unstable_comments_replies_list(
         None
     };
 
-    let (replies, next_page) = super::get_comments_replies(
+    let body: RespList<RespPostCommentInfo> = super::get_comments_replies(
         &[comment_id],
         include_your_for,
         query.depth,
@@ -601,12 +601,8 @@ async fn route_unstable_comments_replies_list(
     )
     .await?
     .remove(&comment_id)
-    .unwrap_or_else(|| (Vec::new(), None));
-
-    let body = RespList {
-        items: (&replies).into(),
-        next_page: next_page.as_deref().map(Cow::Borrowed),
-    };
+    .unwrap_or_default()
+    .into();
 
     crate::json_response(&body)
 }

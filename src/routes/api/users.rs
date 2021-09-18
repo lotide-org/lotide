@@ -203,16 +203,14 @@ async fn route_unstable_users_list(
                         }
                     };
 
-                    let info = RespUserInfo {
+                    RespUserInfo {
                         base: info,
                         description,
                         description_html,
                         description_text,
                         suspended: Some(row.get(4)),
                         your_note: None,
-                    };
-
-                    info
+                    }
                 })
                 .collect::<Vec<_>>(),
         ),
@@ -344,7 +342,7 @@ async fn route_unstable_users_patch(
         changes.push(("description", description));
     }
     if let Some(email_address) = body.email_address.as_ref() {
-        if !fast_chemail::is_valid_email(&email_address) {
+        if !fast_chemail::is_valid_email(email_address) {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
                 lang.tr("user_email_invalid", None).into_owned(),
@@ -485,7 +483,7 @@ async fn route_unstable_users_notifications_list(
                                 content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
                                 content_html_safe: row
                                     .get::<_, Option<&str>>(4)
-                                    .map(|html| crate::clean_html(&html)),
+                                    .map(|html| crate::clean_html(html)),
                             };
 
                             let post_ap_id: Option<&str> = row.get(10);
@@ -544,7 +542,7 @@ async fn route_unstable_users_notifications_list(
                                 content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
                                 content_html_safe: row
                                     .get::<_, Option<&str>>(4)
-                                    .map(|html| crate::clean_html(&html)),
+                                    .map(|html| crate::clean_html(html)),
                             };
                             let parent_id = CommentLocalID(parent_id);
 
@@ -904,7 +902,7 @@ async fn route_unstable_users_things_list(
                         content_text: row.get::<_, Option<_>>(2).map(Cow::Borrowed),
                         content_html_safe: row
                             .get::<_, Option<&str>>(3)
-                            .map(|html| crate::clean_html(&html)),
+                            .map(|html| crate::clean_html(html)),
                     },
                     created,
                     post: RespMinimalPostInfo {

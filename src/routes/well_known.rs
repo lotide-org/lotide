@@ -52,14 +52,14 @@ async fn handler_webfinger_get(
 
     let found_ref =
         if let Some(rest) = crate::apub_util::try_strip_host(&query.resource, &ctx.host_url_apub) {
-            if rest.starts_with("/users/") {
-                if let Ok(id) = rest[7..].parse() {
+            if let Some(rest) = rest.strip_prefix("/users/") {
+                if let Ok(id) = rest.parse() {
                     Some(LocalRef::UserID(id))
                 } else {
                     None
                 }
-            } else if rest.starts_with("/communities/") {
-                if let Ok(id) = rest[13..].parse() {
+            } else if let Some(rest) = rest.strip_prefix("/communities/") {
+                if let Ok(id) = rest.parse() {
                     Some(LocalRef::CommunityID(id))
                 } else {
                     None
