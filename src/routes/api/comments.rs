@@ -34,7 +34,7 @@ async fn route_unstable_comments_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id), reply.content_markdown FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id), reply.content_markdown, person.is_bot FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
             &[&comment_id],
         )
         .map_err(crate::Error::from),
@@ -75,6 +75,7 @@ async fn route_unstable_comments_get(
                             &ctx.local_hostname,
                         ),
                         remote_url: author_ap_id.map(From::from),
+                        is_bot: row.get(17),
                         avatar: author_avatar.map(|url| RespAvatarInfo {
                             url: ctx.process_avatar_href(url, author_id),
                         }),
@@ -358,7 +359,7 @@ async fn route_unstable_comments_likes_list(
         None => "",
     };
 
-    let sql: &str = &format!("SELECT person.id, person.username, person.local, person.ap_id, reply_like.created_local, person.avatar FROM reply_like, person WHERE person.id = reply_like.person AND reply_like.reply = $1{} ORDER BY reply_like.created_local DESC, reply_like.person DESC LIMIT $2", page_conditions);
+    let sql: &str = &format!("SELECT person.id, person.username, person.local, person.ap_id, reply_like.created_local, person.avatar, person.is_bot FROM reply_like, person WHERE person.id = reply_like.person AND reply_like.reply = $1{} ORDER BY reply_like.created_local DESC, reply_like.person DESC LIMIT $2", page_conditions);
 
     let mut rows = db.query(sql, &values).await?;
 
@@ -391,6 +392,7 @@ async fn route_unstable_comments_likes_list(
                     local,
                     host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
                     remote_url: ap_id.map(From::from),
+                    is_bot: row.get(6),
                     avatar: avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id),
                     }),

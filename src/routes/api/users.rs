@@ -160,7 +160,7 @@ async fn route_unstable_users_list(
     let db = ctx.db_pool.get().await?;
 
     let rows = db.query(
-        "SELECT id, description, description_html, avatar, suspended FROM person WHERE local AND username=$1",
+        "SELECT id, description, description_html, avatar, suspended, is_bot FROM person WHERE local AND username=$1",
         &[&username]
     )
         .await?;
@@ -180,6 +180,7 @@ async fn route_unstable_users_list(
                         username: Cow::Borrowed(&username),
                         host: Cow::Borrowed(&ctx.local_hostname),
                         remote_url: None,
+                        is_bot: row.get(5),
                         avatar: avatar.map(|url| RespAvatarInfo {
                             url: ctx.process_avatar_href(url, user_id),
                         }),
@@ -579,7 +580,7 @@ async fn route_unstable_users_get(
 
     let row = db
         .query_opt(
-            "SELECT username, local, ap_id, description, description_html, avatar, suspended FROM person WHERE id=$1",
+            "SELECT username, local, ap_id, description, description_html, avatar, suspended, is_bot FROM person WHERE id=$1",
             &[&user_id],
         )
         .await?;
@@ -601,6 +602,7 @@ async fn route_unstable_users_get(
         username: Cow::Borrowed(row.get(0)),
         host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
         remote_url: ap_id.map(From::from),
+        is_bot: row.get(7),
         avatar: avatar.map(|url| RespAvatarInfo {
             url: ctx.process_avatar_href(url, user_id),
         }),

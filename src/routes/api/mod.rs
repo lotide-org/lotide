@@ -807,7 +807,7 @@ async fn get_comments_replies<'a>(
 
     let limit_i = i64::from(limit) + 1;
 
-    let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown";
+    let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown, person.is_bot";
     let (sql2, mut values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -884,6 +884,7 @@ async fn get_comments_replies<'a>(
                         &ctx.local_hostname,
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
+                    is_bot: row.get(15),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, author_id).into_owned().into(),
                     }),
@@ -914,7 +915,7 @@ async fn get_comments_replies<'a>(
                     score: row.get(13),
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(15) {
+                        Some(_) => Some(if row.get(16) {
                             Some(crate::types::Empty {})
                         } else {
                             None
@@ -971,7 +972,7 @@ async fn route_unstable_misc_render_markdown(
 }
 
 fn common_posts_list_query(include_your_idx: Option<usize>) -> Cow<'static, str> {
-    const BASE: &str = "post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky";
+    const BASE: &str = "post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot";
     match include_your_idx {
         None => BASE.into(),
         Some(idx) => format!(
@@ -1023,6 +1024,7 @@ async fn handle_common_posts_list(
                     .into_owned()
                     .into(),
                     remote_url: author_ap_id.map(Cow::Owned),
+                    is_bot: row.get(18),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id).into_owned().into(),
                     }),
@@ -1055,7 +1057,7 @@ async fn handle_common_posts_list(
                 score: row.get(15),
                 sticky: row.get(17),
                 relevance: if relevance {
-                    row.get(if include_your { 19 } else { 18 })
+                    row.get(if include_your { 20 } else { 19 })
                 } else {
                     None
                 },

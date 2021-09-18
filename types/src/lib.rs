@@ -155,6 +155,7 @@ pub struct RespMinimalAuthorInfo<'a> {
     pub local: bool,
     pub host: Cow<'a, str>,
     pub remote_url: Option<Cow<'a, str>>,
+    pub is_bot: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar: Option<RespAvatarInfo<'a>>,
 }

@@ -523,7 +523,7 @@ async fn route_unstable_communities_moderators_list(
     })?;
 
     let rows = db.query(
-        "SELECT person.id, person.username, person.local, person.ap_id, person.avatar, community_moderator.created_local FROM person, community_moderator WHERE person.id = community_moderator.person AND community_moderator.community = $1 ORDER BY community_moderator.created_local ASC NULLS FIRST",
+        "SELECT person.id, person.username, person.local, person.ap_id, person.avatar, community_moderator.created_local, person.is_bot FROM person, community_moderator WHERE person.id = community_moderator.person AND community_moderator.community = $1 ORDER BY community_moderator.created_local ASC NULLS FIRST",
         &[&community_id],
     ).await?;
 
@@ -543,6 +543,7 @@ async fn route_unstable_communities_moderators_list(
                     local,
                     host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
                     remote_url: ap_id.map(|x| x.into()),
+                    is_bot: row.get(6),
                     avatar: row.get::<_, Option<&str>>(4).map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id),
                     }),
@@ -801,7 +802,7 @@ async fn route_unstable_communities_posts_list(
 
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&community_id, &limit];
     let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky{} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {}{} LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot{} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {}{} LIMIT $2",
         if let Some(user) = &include_your_for {
             values.push(user);
             ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$3)"
@@ -847,6 +848,7 @@ async fn route_unstable_communities_posts_list(
                         }
                     },
                     remote_url: author_ap_id.map(From::from),
+                    is_bot: row.get(14),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id),
                     }),
@@ -867,7 +869,7 @@ async fn route_unstable_communities_posts_list(
                 score: row.get(11),
                 sticky: row.get(13),
                 your_vote: if include_your_for.is_some() {
-                    Some(if row.get(14) {
+                    Some(if row.get(15) {
                         Some(crate::types::Empty {})
                     } else {
                         None
