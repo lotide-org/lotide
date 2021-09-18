@@ -44,6 +44,12 @@ impl std::fmt::Display for BaseURL {
     }
 }
 
+impl From<BaseURL> for String {
+    fn from(src: BaseURL) -> String {
+        src.0.into_string()
+    }
+}
+
 #[derive(Debug)]
 pub struct CannotBeABase;
 impl std::fmt::Display for CannotBeABase {

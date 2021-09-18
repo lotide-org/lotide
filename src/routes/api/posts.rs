@@ -85,6 +85,15 @@ async fn get_post_comments<'a>(
                 let author_ap_id: Option<&str> = row.get(7);
                 let author_avatar: Option<&str> = row.get(9);
 
+                let author_remote_url = if author_local {
+                    Some(String::from(crate::apub_util::get_local_person_apub_id(
+                        author_id,
+                        &ctx.host_url_apub,
+                    )))
+                } else {
+                    author_ap_id.map(ToOwned::to_owned)
+                };
+
                 RespMinimalAuthorInfo {
                     id: author_id,
                     username: author_username.into(),
@@ -94,7 +103,7 @@ async fn get_post_comments<'a>(
                         author_ap_id,
                         &ctx.local_hostname,
                     ),
-                    remote_url: author_ap_id.map(|x| x.to_owned().into()),
+                    remote_url: author_remote_url.map(Cow::Owned),
                     is_bot: row.get(14),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, author_id).into_owned().into(),
@@ -639,12 +648,32 @@ async fn route_unstable_posts_get(
             let community_local = row.get(8);
             let community_ap_id: Option<&str> = row.get(9);
 
+            let community_remote_url = if community_local {
+                Some(Cow::Owned(String::from(
+                    crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+                )))
+            } else {
+                community_ap_id.map(Cow::Borrowed)
+            };
+
             let author = match row.get(10) {
                 Some(author_username) => {
                     let author_id = UserLocalID(row.get(0));
                     let author_local = row.get(11);
-                    let author_ap_id = row.get(12);
+                    let author_ap_id: Option<_> = row.get(12);
                     let author_avatar: Option<&str> = row.get(15);
+
+                    let author_remote_url = if author_local {
+                        Some(Cow::Owned(String::from(
+                            crate::apub_util::get_local_person_apub_id(
+                                author_id,
+                                &ctx.host_url_apub,
+                            ),
+                        )))
+                    } else {
+                        author_ap_id.map(Cow::Borrowed)
+                    };
+
                     Some(RespMinimalAuthorInfo {
                         id: author_id,
                         username: Cow::Borrowed(author_username),
@@ -654,7 +683,7 @@ async fn route_unstable_posts_get(
                             author_ap_id,
                             &ctx.local_hostname,
                         ),
-                        remote_url: author_ap_id.map(From::from),
+                        remote_url: author_remote_url,
                         is_bot: row.get(19),
                         avatar: author_avatar.map(|url| RespAvatarInfo {
                             url: ctx.process_avatar_href(url, author_id),
@@ -673,7 +702,7 @@ async fn route_unstable_posts_get(
                     community_ap_id,
                     &ctx.local_hostname,
                 ),
-                remote_url: community_ap_id.map(Cow::Borrowed),
+                remote_url: community_remote_url,
             };
 
             let post = RespPostListPost {
@@ -951,13 +980,21 @@ async fn route_unstable_posts_likes_list(
             let ap_id: Option<&str> = row.get(3);
             let avatar: Option<&str> = row.get(5);
 
+            let remote_url = if local {
+                Some(Cow::Owned(String::from(
+                    crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub),
+                )))
+            } else {
+                ap_id.map(Cow::Borrowed)
+            };
+
             JustUser {
                 user: RespMinimalAuthorInfo {
                     id,
                     username: Cow::Borrowed(username),
                     local,
                     host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
-                    remote_url: ap_id.map(From::from),
+                    remote_url,
                     is_bot: row.get(6),
                     avatar: avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id),

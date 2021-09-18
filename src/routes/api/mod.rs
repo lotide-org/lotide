@@ -874,6 +874,15 @@ async fn get_comments_replies<'a>(
                 let author_ap_id: Option<&str> = row.get(8);
                 let author_avatar: Option<&str> = row.get(10);
 
+                let author_remote_url = if author_local {
+                    Some(String::from(crate::apub_util::get_local_person_apub_id(
+                        author_id,
+                        &ctx.host_url_apub,
+                    )))
+                } else {
+                    author_ap_id.map(ToOwned::to_owned)
+                };
+
                 RespMinimalAuthorInfo {
                     id: author_id,
                     username: author_username.into(),
@@ -883,7 +892,7 @@ async fn get_comments_replies<'a>(
                         author_ap_id,
                         &ctx.local_hostname,
                     ),
-                    remote_url: author_ap_id.map(|x| x.to_owned().into()),
+                    remote_url: author_remote_url.map(Cow::Owned),
                     is_bot: row.get(15),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, author_id).into_owned().into(),
@@ -1007,11 +1016,30 @@ async fn handle_common_posts_list(
             let community_local: bool = row.get(9);
             let community_ap_id: Option<String> = row.get(10);
 
+            let community_remote_url = if community_local {
+                Some(String::from(crate::apub_util::get_local_community_apub_id(
+                    community_id,
+                    &ctx.host_url_apub,
+                )))
+            } else {
+                community_ap_id.clone()
+            };
+
             let author = author_id.map(|id| {
                 let author_name: String = row.get(11);
                 let author_local: bool = row.get(12);
                 let author_ap_id: Option<String> = row.get(13);
                 let author_avatar: Option<String> = row.get(14);
+
+                let author_remote_url = if author_local {
+                    Some(String::from(crate::apub_util::get_local_person_apub_id(
+                        id,
+                        &ctx.host_url_apub,
+                    )))
+                } else {
+                    author_ap_id.clone()
+                };
+
                 RespMinimalAuthorInfo {
                     id,
                     username: author_name.into(),
@@ -1023,7 +1051,7 @@ async fn handle_common_posts_list(
                     )
                     .into_owned()
                     .into(),
-                    remote_url: author_ap_id.map(Cow::Owned),
+                    remote_url: author_remote_url.map(Cow::Owned),
                     is_bot: row.get(18),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id).into_owned().into(),
@@ -1042,7 +1070,7 @@ async fn handle_common_posts_list(
                 )
                 .into_owned()
                 .into(),
-                remote_url: community_ap_id.map(Cow::Owned),
+                remote_url: community_remote_url.map(Cow::Owned),
             };
 
             let post = RespPostListPost {

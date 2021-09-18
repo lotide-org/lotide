@@ -164,13 +164,21 @@ async fn route_unstable_communities_list(
 
                 let host = crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname);
 
+                let remote_url = if local {
+                    Some(Cow::Owned(String::from(
+                        crate::apub_util::get_local_community_apub_id(id, &ctx.host_url_apub),
+                    )))
+                } else {
+                    ap_id.map(Cow::Borrowed)
+                };
+
                 RespCommunityInfo {
                     base: RespMinimalCommunityInfo {
                         id,
                         name: Cow::Borrowed(name),
                         local,
                         host,
-                        remote_url: ap_id.map(Cow::Borrowed),
+                        remote_url,
                     },
 
                     description,
@@ -319,6 +327,14 @@ async fn route_unstable_communities_get(
     let community_local = row.get(1);
     let community_ap_id: Option<&str> = row.get(2);
 
+    let community_remote_url = if community_local {
+        Some(Cow::Owned(String::from(
+            crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+        )))
+    } else {
+        community_ap_id.map(Cow::Borrowed)
+    };
+
     let (description, description_text, description_html) =
         get_community_description_fields(row.get(3), row.get(4));
 
@@ -335,7 +351,7 @@ async fn route_unstable_communities_get(
                     None => "[unknown]".into(),
                 }
             },
-            remote_url: community_ap_id.map(Cow::Borrowed),
+            remote_url: community_remote_url,
         },
         description,
         description_html,
@@ -532,9 +548,17 @@ async fn route_unstable_communities_moderators_list(
         .map(|row| {
             let id = UserLocalID(row.get(0));
             let local = row.get(2);
-            let ap_id = row.get(3);
+            let ap_id: Option<_> = row.get(3);
 
             let moderator_since: Option<chrono::DateTime<chrono::offset::Utc>> = row.get(5);
+
+            let remote_url = if local {
+                Some(Cow::Owned(String::from(
+                    crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub),
+                )))
+            } else {
+                ap_id.map(Cow::Borrowed)
+            };
 
             RespModeratorInfo {
                 base: RespMinimalAuthorInfo {
@@ -542,7 +566,7 @@ async fn route_unstable_communities_moderators_list(
                     username: Cow::Borrowed(row.get(1)),
                     local,
                     host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
-                    remote_url: ap_id.map(|x| x.into()),
+                    remote_url,
                     is_bot: row.get(6),
                     avatar: row.get::<_, Option<&str>>(4).map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id),
@@ -782,6 +806,14 @@ async fn route_unstable_communities_posts_list(
         let community_local = row.get(1);
         let community_ap_id: Option<&str> = row.get(2);
 
+        let community_remote_url = if community_local {
+            Some(Cow::Owned(String::from(
+                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+            )))
+        } else {
+            community_ap_id.map(Cow::Borrowed)
+        };
+
         RespMinimalCommunityInfo {
             id: community_id,
             name: Cow::Borrowed(row.get(0)),
@@ -794,7 +826,7 @@ async fn route_unstable_communities_posts_list(
                     None => "[unknown]".into(),
                 }
             },
-            remote_url: community_ap_id.map(Cow::Borrowed),
+            remote_url: community_remote_url,
         }
     };
 
@@ -835,6 +867,15 @@ async fn route_unstable_communities_posts_list(
                 let author_local: bool = row.get(8);
                 let author_ap_id: Option<&str> = row.get(9);
                 let author_avatar: Option<&str> = row.get(10);
+
+                let author_remote_url = if author_local {
+                    Some(Cow::Owned(String::from(
+                        crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub),
+                    )))
+                } else {
+                    author_ap_id.map(Cow::Borrowed)
+                };
+
                 RespMinimalAuthorInfo {
                     id,
                     username: author_name.into(),
@@ -847,7 +888,7 @@ async fn route_unstable_communities_posts_list(
                             None => "[unknown]".into(),
                         }
                     },
-                    remote_url: author_ap_id.map(From::from),
+                    remote_url: author_remote_url,
                     is_bot: row.get(14),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id),
