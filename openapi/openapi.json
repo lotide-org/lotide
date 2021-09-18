@@ -877,52 +877,6 @@
 				"security": [{"bearer": []}]
 			}
 		},
-		"/api/unstable/communities/{communityID}/posts": {
-			"get": {
-				"deprecated": true,
-				"summary": "List posts published to a community",
-				"parameters": [
-					{
-						"name": "communityID",
-						"in": "path",
-						"required": true,
-						"schema": {"type": "integer"}
-					},
-					{
-						"name": "sort",
-						"in": "query",
-						"required": false,
-						"schema": {"$ref": "#/components/schemas/SortType"}
-					},
-					{
-						"name": "sort_sticky",
-						"in": "query",
-						"required": false,
-						"schema": {"type": "boolean"},
-						"description": "If true, will sort sticky posts before everything else"
-					},
-					{
-						"name": "include_your",
-						"in": "query",
-						"required": false,
-						"schema": {"type": "boolean"}
-					}
-				],
-				"responses": {
-					"200": {
-						"description": "",
-						"content": {
-							"application/json": {
-								"schema": {
-									"type": "array",
-									"items": {"$ref": "#/components/schemas/PostListPost"}
-								}
-							}
-						}
-					}
-				}
-			}
-		},
 		"/api/unstable/communities/{communityID}/posts/{postID}": {
 			"patch": {
 				"summary": "Modify a post's publishing state",
@@ -1868,33 +1822,6 @@
 				"responses": {
 					"204": {
 						"description": "Successfully modified."
-					}
-				},
-				"security": [{"bearer": []}]
-			}
-		},
-		"/api/unstable/users/~me/following:posts": {
-			"get": {
-				"deprecated": true,
-				"summary": "Fetch posts from all the communities you follow",
-				"responses": {
-					"200": {
-						"description": "",
-						"content": {
-							"application/json": {
-								"schema": {
-									"type": "array",
-									"items": {
-										"allOf": [{"$ref": "#/components/schemas/PostListPost"}],
-										"type": "object",
-										"required": ["your_vote"],
-										"properties": {
-											"your_vote": {"$ref": "#/components/schemas/YourVote"}
-										}
-									}
-								}
-							}
-						}
 					}
 				},
 				"security": [{"bearer": []}]

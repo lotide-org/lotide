@@ -7,7 +7,6 @@ use crate::types::{
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
-use std::ops::Deref;
 use std::sync::Arc;
 
 struct MeOrLocalAndAdminResult {
@@ -419,30 +418,6 @@ async fn route_unstable_users_patch(
     }
 
     Ok(crate::empty_response())
-}
-
-async fn route_unstable_users_following_posts_list(
-    params: (UserIDOrMe,),
-    ctx: Arc<crate::RouteContext>,
-    req: hyper::Request<hyper::Body>,
-) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    let db = ctx.db_pool.get().await?;
-
-    let user = params.0.require_me(&req, &db).await?;
-
-    let limit: i64 = 30; // TODO make configurable
-
-    let values: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[&user, &limit];
-
-    let stream = crate::query_stream(
-        &db,
-        format!("SELECT {} FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.approved AND post.deleted=FALSE AND community.id IN (SELECT community FROM community_follow WHERE follower=$1 AND accepted) ORDER BY hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC LIMIT $2", super::common_posts_list_query(Some(1))).deref(),
-        values,
-    ).await?;
-
-    let posts = super::handle_common_posts_list(stream, &ctx, true, false).await?;
-
-    crate::json_response(&posts)
 }
 
 async fn route_unstable_users_notifications_list(
@@ -956,11 +931,6 @@ pub fn route_users() -> crate::RouteNode<()> {
             crate::RouteNode::new()
                 .with_handler_async("GET", route_unstable_users_get)
                 .with_handler_async("PATCH", route_unstable_users_patch)
-                .with_child(
-                    "following:posts",
-                    crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_users_following_posts_list),
-                )
                 .with_child(
                     "notifications",
                     crate::RouteNode::new()

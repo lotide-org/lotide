@@ -1,7 +1,7 @@
 use crate::types::{
     CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityFeeds,
     RespCommunityFeedsType, RespCommunityInfo, RespList, RespMinimalAuthorInfo,
-    RespMinimalCommunityInfo, RespModeratorInfo, RespPostListPost, RespYourFollowInfo, UserLocalID,
+    RespMinimalCommunityInfo, RespModeratorInfo, RespYourFollowInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -753,193 +753,6 @@ async fn route_unstable_communities_unfollow(
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))
 }
 
-async fn route_unstable_communities_posts_list(
-    params: (CommunityLocalID,),
-    ctx: Arc<crate::RouteContext>,
-    req: hyper::Request<hyper::Body>,
-) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    let (community_id,) = params;
-
-    fn default_sort() -> super::SortType {
-        super::SortType::Hot
-    }
-
-    #[derive(Deserialize)]
-    struct Query {
-        #[serde(default = "default_sort")]
-        sort: super::SortType,
-        #[serde(default)]
-        include_your: bool,
-        #[serde(default)]
-        sort_sticky: bool,
-    }
-
-    let query: Query = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
-
-    use futures::stream::TryStreamExt;
-
-    let lang = crate::get_lang_for_req(&req);
-    let db = ctx.db_pool.get().await?;
-
-    let include_your_for = if query.include_your {
-        let user = crate::require_login(&req, &db).await?;
-        Some(user)
-    } else {
-        None
-    };
-
-    let community_row = db
-        .query_opt(
-            "SELECT name, local, ap_id FROM community WHERE id=$1",
-            &[&community_id],
-        )
-        .await?
-        .ok_or_else(|| {
-            crate::Error::UserError(crate::simple_response(
-                hyper::StatusCode::NOT_FOUND,
-                lang.tr("no_such_community", None).into_owned(),
-            ))
-        })?;
-
-    let community = {
-        let row = &community_row;
-        let community_local = row.get(1);
-        let community_ap_id: Option<&str> = row.get(2);
-
-        let community_remote_url = if community_local {
-            Some(Cow::Owned(String::from(
-                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
-            )))
-        } else {
-            community_ap_id.map(Cow::Borrowed)
-        };
-
-        RespMinimalCommunityInfo {
-            id: community_id,
-            name: Cow::Borrowed(row.get(0)),
-            local: community_local,
-            host: if community_local {
-                (&ctx.local_hostname).into()
-            } else {
-                match community_ap_id.and_then(crate::get_url_host_from_str) {
-                    Some(host) => host.into(),
-                    None => "[unknown]".into(),
-                }
-            },
-            remote_url: community_remote_url,
-        }
-    };
-
-    let limit: i64 = 30; // TODO make configurable
-
-    let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&community_id, &limit];
-    let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot, post.ap_id, post.local{} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {}{} LIMIT $2",
-        if let Some(user) = &include_your_for {
-            values.push(user);
-            ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$3)"
-        } else {
-            ""
-        },
-        if query.sort_sticky {
-            "sticky DESC, "
-        } else {
-            ""
-        },
-        query.sort.post_sort_sql(),
-    );
-
-    let stream = crate::query_stream(&db, sql, &values).await?;
-
-    let posts: Vec<serde_json::Value> = stream
-        .map_err(crate::Error::from)
-        .and_then(|row| {
-            let id = PostLocalID(row.get(0));
-            let author_id = row.get::<_, Option<_>>(1).map(UserLocalID);
-            let href: Option<&str> = row.get(2);
-            let content_text: Option<&str> = row.get(3);
-            let content_html: Option<&str> = row.get(6);
-            let title: &str = row.get(4);
-            let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
-
-            let author = author_id.map(|id| {
-                let author_name: &str = row.get(7);
-                let author_local: bool = row.get(8);
-                let author_ap_id: Option<&str> = row.get(9);
-                let author_avatar: Option<&str> = row.get(10);
-
-                let author_remote_url = if author_local {
-                    Some(Cow::Owned(String::from(
-                        crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub),
-                    )))
-                } else {
-                    author_ap_id.map(Cow::Borrowed)
-                };
-
-                RespMinimalAuthorInfo {
-                    id,
-                    username: author_name.into(),
-                    local: author_local,
-                    host: if author_local {
-                        (&ctx.local_hostname).into()
-                    } else {
-                        match author_ap_id.and_then(crate::get_url_host_from_str) {
-                            Some(host) => host.into(),
-                            None => "[unknown]".into(),
-                        }
-                    },
-                    remote_url: author_remote_url,
-                    is_bot: row.get(14),
-                    avatar: author_avatar.map(|url| RespAvatarInfo {
-                        url: ctx.process_avatar_href(url, id),
-                    }),
-                }
-            });
-
-            let ap_id: Option<&str> = row.get(15);
-            let local: bool = row.get(16);
-
-            let remote_url = if local {
-                Some(Cow::Owned(String::from(
-                    crate::apub_util::get_local_post_apub_id(id, &ctx.host_url_apub),
-                )))
-            } else {
-                ap_id.map(Cow::Borrowed)
-            };
-
-            let post = RespPostListPost {
-                id,
-                title: Cow::Borrowed(title),
-                href: ctx.process_href_opt(href.map(Cow::Borrowed), id),
-                content_text: content_text.map(Cow::Borrowed),
-                content_html_safe: content_html.map(|html| crate::clean_html(&html)),
-                author: author.map(Cow::Owned),
-                created: Cow::Owned(created.to_rfc3339()),
-                community: Cow::Borrowed(&community),
-                relevance: None,
-                remote_url,
-                replies_count_total: Some(row.get(12)),
-                score: row.get(11),
-                sticky: row.get(13),
-                your_vote: if include_your_for.is_some() {
-                    Some(if row.get(17) {
-                        Some(crate::types::Empty {})
-                    } else {
-                        None
-                    })
-                } else {
-                    None
-                },
-            };
-
-            futures::future::ready(serde_json::to_value(&post).map_err(Into::into))
-        })
-        .try_collect()
-        .await?;
-
-    crate::json_response(&posts)
-}
-
 async fn route_unstable_communities_posts_patch(
     params: (CommunityLocalID, PostLocalID),
     ctx: Arc<crate::RouteContext>,
@@ -1104,14 +917,10 @@ pub fn route_communities() -> crate::RouteNode<()> {
                 )
                 .with_child(
                     "posts",
-                    crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_communities_posts_list)
-                        .with_child_parse::<PostLocalID, _>(
-                            crate::RouteNode::new().with_handler_async(
-                                "PATCH",
-                                route_unstable_communities_posts_patch,
-                            ),
-                        ),
+                    crate::RouteNode::new().with_child_parse::<PostLocalID, _>(
+                        crate::RouteNode::new()
+                            .with_handler_async("PATCH", route_unstable_communities_posts_patch),
+                    ),
                 ),
         )
 }
