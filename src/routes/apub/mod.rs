@@ -118,7 +118,7 @@ async fn handler_users_get(
 
     match db
         .query_opt(
-            "SELECT username, local, public_key, description, description_html, avatar FROM person WHERE id=$1",
+            "SELECT username, local, public_key, description, description_html, avatar, is_bot FROM person WHERE id=$1",
             &[&user_id.raw()],
         )
         .await?
@@ -155,64 +155,75 @@ async fn handler_users_get(
 
             let avatar: Option<&str> = row.get(5);
 
-            let user_ap_id =
-                crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
+            let is_bot: bool = row.get(6);
 
-            let mut info = activitystreams::actor::Person::new();
-            info.set_many_contexts(vec![
-                activitystreams::context(),
-                activitystreams::security(),
-            ]);
-            info.set_id(user_ap_id.deref().clone())
-                .set_name(username.as_ref())
-                .set_summary(description);
+            fn format_user<T, K: serde::Serialize + activitystreams::base::AsBase<T> + activitystreams::object::AsObject<T> + activitystreams::markers::Actor>(mut info: K, user_id: UserLocalID, ctx: &crate::RouteContext, username: String, description: String, avatar: Option<&str>, public_key: Option<&str>) -> Result<Vec<u8>, crate::Error> {
+                let user_ap_id =
+                    crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
 
-            if let Some(avatar) = avatar {
-                let mut attachment = activitystreams::object::Image::new();
-                attachment.set_url(ctx.process_avatar_href(avatar, user_id).into_owned());
+                info.set_many_contexts(vec![
+                    activitystreams::context(),
+                    activitystreams::security(),
+                ]);
+                info.set_id(user_ap_id.deref().clone())
+                    .set_name(username.as_ref())
+                    .set_summary(description);
 
-                info.set_icon(attachment.into_any_base()?);
-            }
+                if let Some(avatar) = avatar {
+                    let mut attachment = activitystreams::object::Image::new();
+                    attachment.set_url(ctx.process_avatar_href(avatar, user_id).into_owned());
 
-            let endpoints = activitystreams::actor::Endpoints {
-                shared_inbox: Some(
-                    crate::apub_util::get_local_shared_inbox(&ctx.host_url_apub).into(),
-                ),
-                ..Default::default()
-            };
+                    info.set_icon(attachment.into_any_base()?);
+                }
 
-            let mut info = activitystreams::actor::ApActor::new(
-                {
-                    let mut res = user_ap_id.clone();
-                    res.path_segments_mut().push("inbox");
-                    res.into()
-                },
-                info,
-            );
-            info.set_outbox(
-                crate::apub_util::get_local_person_outbox_apub_id(user_id, &ctx.host_url_apub)
-                    .into(),
-            )
-            .set_endpoints(endpoints)
-            .set_preferred_username(username);
-
-            let key_id = format!("{}/users/{}#main-key", ctx.host_url_apub, user_id);
-
-            let body = if let Some(public_key) = public_key {
-                let public_key_ext = crate::apub_util::PublicKeyExtension {
-                    public_key: Some(crate::apub_util::PublicKey {
-                        id: (&key_id).into(),
-                        owner: user_ap_id.as_str().into(),
-                        public_key_pem: public_key.into(),
-                        signature_algorithm: Some(crate::apub_util::SIGALG_RSA_SHA256.into()),
-                    }),
+                let endpoints = activitystreams::actor::Endpoints {
+                    shared_inbox: Some(
+                        crate::apub_util::get_local_shared_inbox(&ctx.host_url_apub).into(),
+                    ),
+                    ..Default::default()
                 };
 
-                let info = activitystreams_ext::Ext1::new(info, public_key_ext);
+                let mut info = activitystreams::actor::ApActor::new(
+                    {
+                        let mut res = user_ap_id.clone();
+                        res.path_segments_mut().push("inbox");
+                        res.into()
+                    },
+                    info,
+                );
+                info.set_outbox(
+                    crate::apub_util::get_local_person_outbox_apub_id(user_id, &ctx.host_url_apub)
+                        .into(),
+                )
+                .set_endpoints(endpoints)
+                .set_preferred_username(username);
 
-                serde_json::to_vec(&info)
+                let key_id = format!("{}/users/{}#main-key", ctx.host_url_apub, user_id);
+
+                let body = if let Some(public_key) = public_key {
+                    let public_key_ext = crate::apub_util::PublicKeyExtension {
+                        public_key: Some(crate::apub_util::PublicKey {
+                            id: (&key_id).into(),
+                            owner: user_ap_id.as_str().into(),
+                            public_key_pem: public_key.into(),
+                            signature_algorithm: Some(crate::apub_util::SIGALG_RSA_SHA256.into()),
+                        }),
+                    };
+
+                    let info = activitystreams_ext::Ext1::new(info, public_key_ext);
+
+                    serde_json::to_vec(&info)
+                } else {
+                    serde_json::to_vec(&info)
+                }?;
+
+                Ok(body)
+            }
+
+            let body = if is_bot {
+                format_user(activitystreams::actor::Service::new(), user_id, &ctx, username, description, avatar, public_key)
             } else {
-                serde_json::to_vec(&info)
+                format_user(activitystreams::actor::Person::new(), user_id, &ctx, username, description, avatar, public_key)
             }?;
 
             let mut resp = hyper::Response::new(body.into());

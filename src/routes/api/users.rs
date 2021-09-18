@@ -325,6 +325,7 @@ async fn route_unstable_users_patch(
         password: Option<String>,
         avatar: Option<Cow<'a, str>>,
         suspended: Option<bool>,
+        is_bot: Option<bool>,
     }
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
@@ -368,6 +369,9 @@ async fn route_unstable_users_patch(
         me_or_admin.require_admin(&db, &lang).await?;
 
         changes.push(("suspended", suspended));
+    }
+    if let Some(is_bot) = &body.is_bot {
+        changes.push(("is_bot", is_bot));
     }
 
     if !changes.is_empty() {
