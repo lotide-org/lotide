@@ -265,7 +265,7 @@ async fn handler_communities_featured_list(
 
     let rows = db
         .query(
-            "SELECT id, local, ap_id FROM post WHERE community=$1 AND sticky",
+            "SELECT id, local, ap_id FROM post WHERE community=$1 AND sticky ORDER BY created",
             &[&community_id],
         )
         .await?;
@@ -288,14 +288,14 @@ async fn handler_communities_featured_list(
         .collect();
     let items = items?;
 
-    let mut body = activitystreams::collection::UnorderedCollection::new();
+    let mut body = activitystreams::collection::OrderedCollection::new();
     body.set_id(
         crate::apub_util::get_local_community_featured_apub_id(community_id, &ctx.host_url_apub)
             .into(),
     );
     body.set_context(activitystreams::context());
     body.set_total_items(items.len() as u64);
-    body.set_many_items(items);
+    body.set_many_ordered_items(items);
 
     let body = serde_json::to_vec(&body)?;
 
