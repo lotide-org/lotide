@@ -186,12 +186,14 @@ pub struct RespMinimalCommunityInfo<'a> {
 pub struct RespMinimalPostInfo<'a> {
     pub id: PostLocalID,
     pub title: &'a str,
+    pub remote_url: Option<Cow<'a, str>>,
 }
 
 #[derive(Serialize, Clone)]
 pub struct RespPostListPost<'a> {
     pub id: PostLocalID,
     pub title: Cow<'a, str>,
+    pub remote_url: Option<Cow<'a, str>>,
     pub href: Option<Cow<'a, str>>,
     pub content_text: Option<Cow<'a, str>>,
     #[serde(rename = "content_html")]

@@ -834,7 +834,7 @@ async fn route_unstable_communities_posts_list(
 
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&community_id, &limit];
     let sql: &str = &format!(
-        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot{} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {}{} LIMIT $2",
+        "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot, post.ap_id, post.local{} FROM post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = $1 AND post.approved=TRUE AND post.deleted=FALSE ORDER BY {}{} LIMIT $2",
         if let Some(user) = &include_your_for {
             values.push(user);
             ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=$3)"
@@ -896,6 +896,17 @@ async fn route_unstable_communities_posts_list(
                 }
             });
 
+            let ap_id: Option<&str> = row.get(15);
+            let local: bool = row.get(16);
+
+            let remote_url = if local {
+                Some(Cow::Owned(String::from(
+                    crate::apub_util::get_local_post_apub_id(id, &ctx.host_url_apub),
+                )))
+            } else {
+                ap_id.map(Cow::Borrowed)
+            };
+
             let post = RespPostListPost {
                 id,
                 title: Cow::Borrowed(title),
@@ -906,11 +917,12 @@ async fn route_unstable_communities_posts_list(
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Borrowed(&community),
                 relevance: None,
+                remote_url,
                 replies_count_total: Some(row.get(12)),
                 score: row.get(11),
                 sticky: row.get(13),
                 your_vote: if include_your_for.is_some() {
-                    Some(if row.get(15) {
+                    Some(if row.get(17) {
                         Some(crate::types::Empty {})
                     } else {
                         None

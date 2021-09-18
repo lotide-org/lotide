@@ -614,7 +614,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, post.content_markdown, person.is_bot FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, post.content_markdown, person.is_bot, post.ap_id, post.local FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -643,10 +643,20 @@ async fn route_unstable_posts_get(
             let content_html: Option<&str> = row.get(5);
             let title: &str = row.get(3);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
+            let local: bool = row.get(21);
+            let ap_id: Option<&str> = row.get(20);
             let community_id = CommunityLocalID(row.get(6));
             let community_name: &str = row.get(7);
             let community_local = row.get(8);
             let community_ap_id: Option<&str> = row.get(9);
+
+            let remote_url = if local {
+                Some(Cow::Owned(String::from(
+                    crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                )))
+            } else {
+                ap_id.map(Cow::Borrowed)
+            };
 
             let community_remote_url = if community_local {
                 Some(Cow::Owned(String::from(
@@ -715,6 +725,7 @@ async fn route_unstable_posts_get(
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Owned(community),
                 relevance: None,
+                remote_url,
                 replies_count_total: None,
                 score: row.get(13),
                 sticky: row.get(17),

@@ -48,19 +48,21 @@
 			},
 			"MinimalPostInfo": {
 				"type": "object",
-				"required": ["id", "title"],
+				"required": ["id", "title", "remote_url"],
 				"properties": {
 					"id": {"type": "integer"},
-					"title": {"type": "string"}
+					"title": {"type": "string"},
+					"remote_url": {"type": "string", "nullable": true}
 				}
 			},
 			"NullableMinimalPostInfo": {
 				"type": "object",
 				"nullable": true,
-				"required": ["id", "title"],
+				"required": ["id", "title", "remote_url"],
 				"properties": {
 					"id": {"type": "integer"},
-					"title": {"type": "string"}
+					"title": {"type": "string"},
+					"remote_url": {"type": "string", "nullable": true}
 				}
 			},
 			"MinimalUserInfo": {
@@ -151,10 +153,11 @@
 			},
 			"SomePostInfo": {
 				"type": "object",
-				"required": ["id", "title", "created", "community", "score", "sticky"],
+				"required": ["id", "title", "created", "community", "score", "sticky", "remote_url"],
 				"properties": {
 					"id": {"type": "integer"},
 					"title": {"type": "string"},
+					"remote_url": {"type": "string", "nullable": true},
 					"href": {"type": "string"},
 					"content_text": {
 						"type": "string",

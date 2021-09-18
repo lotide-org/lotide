@@ -462,7 +462,7 @@ async fn route_unstable_users_notifications_list(
         let trans = db.transaction().await?;
 
         let rows = trans.query(
-            "SELECT notification.kind, (notification.created_at > (SELECT last_checked_notifications FROM person WHERE id=$1)), reply.id, reply.content_text, reply.content_html, parent_reply.id, parent_reply_post.id, parent_reply_post.title, parent_post.id, parent_post.title FROM notification LEFT OUTER JOIN reply ON (reply.id = notification.reply) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = notification.parent_reply) LEFT OUTER JOIN post AS parent_reply_post ON (parent_reply_post.id = parent_reply.post) LEFT OUTER JOIN post AS parent_post ON (parent_post.id = notification.parent_post) WHERE notification.to_user = $1 AND NOT COALESCE(reply.deleted OR parent_reply.deleted OR parent_reply_post.deleted OR parent_post.deleted, FALSE) ORDER BY created_at DESC LIMIT $2",
+            "SELECT notification.kind, (notification.created_at > (SELECT last_checked_notifications FROM person WHERE id=$1)), reply.id, reply.content_text, reply.content_html, parent_reply.id, parent_reply_post.id, parent_reply_post.title, parent_post.id, parent_post.title, parent_post.ap_id, parent_post.local, parent_reply_post.ap_id, parent_reply_post.local FROM notification LEFT OUTER JOIN reply ON (reply.id = notification.reply) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = notification.parent_reply) LEFT OUTER JOIN post AS parent_reply_post ON (parent_reply_post.id = parent_reply.post) LEFT OUTER JOIN post AS parent_post ON (parent_post.id = notification.parent_post) WHERE notification.to_user = $1 AND NOT COALESCE(reply.deleted OR parent_reply.deleted OR parent_reply_post.deleted OR parent_post.deleted, FALSE) ORDER BY created_at DESC LIMIT $2",
             &[&user, &limit],
         ).await?;
         trans
@@ -486,6 +486,8 @@ async fn route_unstable_users_notifications_list(
                 "post_reply" => {
                     if let Some(reply_id) = row.get(2) {
                         if let Some(post_id) = row.get(8) {
+                            let post_id = PostLocalID(post_id);
+
                             let comment = RespMinimalCommentInfo {
                                 id: CommentLocalID(reply_id),
                                 content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
@@ -493,9 +495,25 @@ async fn route_unstable_users_notifications_list(
                                     .get::<_, Option<&str>>(4)
                                     .map(|html| crate::clean_html(&html)),
                             };
+
+                            let post_ap_id: Option<&str> = row.get(10);
+                            let post_local: bool = row.get(11);
+
+                            let post_remote_url = if post_local {
+                                Some(Cow::Owned(String::from(
+                                    crate::apub_util::get_local_post_apub_id(
+                                        post_id,
+                                        &ctx.host_url_apub,
+                                    ),
+                                )))
+                            } else {
+                                post_ap_id.map(Cow::Borrowed)
+                            };
+
                             let post = RespMinimalPostInfo {
-                                id: PostLocalID(post_id),
+                                id: post_id,
                                 title: row.get(9),
+                                remote_url: post_remote_url,
                             };
 
                             Some(RespNotificationInfo::PostReply {
@@ -520,12 +538,29 @@ async fn route_unstable_users_notifications_list(
                                     .map(|html| crate::clean_html(&html)),
                             };
                             let parent_id = CommentLocalID(parent_id);
-                            let post =
-                                row.get::<_, Option<_>>(6)
-                                    .map(|post_id| RespMinimalPostInfo {
-                                        id: PostLocalID(post_id),
-                                        title: row.get(7),
-                                    });
+
+                            let post = row.get::<_, Option<_>>(6).map(|post_id| {
+                                let post_id = PostLocalID(post_id);
+                                let post_ap_id: Option<&str> = row.get(12);
+                                let post_local: bool = row.get(13);
+
+                                let post_remote_url = if post_local {
+                                    Some(Cow::Owned(String::from(
+                                        crate::apub_util::get_local_post_apub_id(
+                                            post_id,
+                                            &ctx.host_url_apub,
+                                        ),
+                                    )))
+                                } else {
+                                    post_ap_id.map(Cow::Borrowed)
+                                };
+
+                                RespMinimalPostInfo {
+                                    id: post_id,
+                                    title: row.get(7),
+                                    remote_url: post_remote_url,
+                                }
+                            });
 
                             Some(RespNotificationInfo::CommentReply {
                                 reply,
@@ -744,7 +779,7 @@ async fn route_unstable_users_things_list(
     };
 
     let sql: &str = &format!(
-        "(SELECT TRUE AS is_post, post.id AS thing_id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE AS is_post, reply.id AS thing_id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, NULL, NULL, NULL, NULL FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted){} ORDER BY created DESC, is_post ASC, thing_id DESC LIMIT $2",
+        "(SELECT TRUE AS is_post, post.id AS thing_id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, post.ap_id, post.local FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE AS is_post, reply.id AS thing_id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, NULL, NULL, post.ap_id, post.local FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted){} ORDER BY created DESC, is_post ASC, thing_id DESC LIMIT $2",
         page_conditions,
     );
 
@@ -772,6 +807,9 @@ async fn route_unstable_users_things_list(
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
             let created = created.to_rfc3339();
 
+            let post_ap_id: Option<&str> = row.get(12);
+            let post_local: bool = row.get(13);
+
             if row.get(0) {
                 let community_id = CommunityLocalID(row.get(5));
                 let community_local = row.get(7);
@@ -789,6 +827,14 @@ async fn route_unstable_users_things_list(
                 };
 
                 let post_id = PostLocalID(row.get(1));
+
+                let post_remote_url = if post_local {
+                    Some(Cow::Owned(String::from(
+                        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                    )))
+                } else {
+                    post_ap_id.map(Cow::Borrowed)
+                };
 
                 RespThingInfo::Post(RespPostListPost {
                     id: post_id,
@@ -810,6 +856,7 @@ async fn route_unstable_users_things_list(
                         remote_url: community_remote_url,
                     }),
                     relevance: None,
+                    remote_url: post_remote_url,
                     replies_count_total: row.get(10),
                     sticky: row.get(11),
                     score: row.get(9),
@@ -819,6 +866,16 @@ async fn route_unstable_users_things_list(
                     your_vote: None,
                 })
             } else {
+                let post_id = PostLocalID(row.get(5));
+
+                let post_remote_url = if post_local {
+                    Some(Cow::Owned(String::from(
+                        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                    )))
+                } else {
+                    post_ap_id.map(Cow::Borrowed)
+                };
+
                 RespThingInfo::Comment {
                     base: RespMinimalCommentInfo {
                         id: CommentLocalID(row.get(1)),
@@ -829,8 +886,9 @@ async fn route_unstable_users_things_list(
                     },
                     created,
                     post: RespMinimalPostInfo {
-                        id: PostLocalID(row.get(5)),
+                        id: post_id,
                         title: row.get(6),
+                        remote_url: post_remote_url,
                     },
                 }
             }

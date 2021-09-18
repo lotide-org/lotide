@@ -34,7 +34,7 @@ async fn route_unstable_comments_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id), reply.content_markdown, person.is_bot FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id), reply.content_markdown, person.is_bot, post.ap_id, post.local FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
             &[&comment_id],
         )
         .map_err(crate::Error::from),
@@ -97,10 +97,25 @@ async fn route_unstable_comments_get(
             };
 
             let post = match row.get(9) {
-                Some(post_title) => Some(RespMinimalPostInfo {
-                    id: PostLocalID(row.get(1)),
-                    title: post_title,
-                }),
+                Some(post_title) => {
+                    let post_id = PostLocalID(row.get(1));
+                    let post_ap_id: Option<&str> = row.get(18);
+                    let post_local: bool = row.get(19);
+
+                    let post_remote_url = if post_local {
+                        Some(Cow::Owned(String::from(
+                            crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                        )))
+                    } else {
+                        post_ap_id.map(Cow::Borrowed)
+                    };
+
+                    Some(RespMinimalPostInfo {
+                        id: post_id,
+                        title: post_title,
+                        remote_url: post_remote_url,
+                    })
+                }
                 None => None,
             };
 
