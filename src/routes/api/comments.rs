@@ -524,6 +524,8 @@ async fn route_unstable_comments_replies_list(
         depth: u8,
         #[serde(default = "super::default_replies_limit")]
         limit: u8,
+        #[serde(default = "super::default_comment_sort")]
+        sort: super::SortType,
         page: Option<Cow<'a, str>>,
     }
 
@@ -543,6 +545,7 @@ async fn route_unstable_comments_replies_list(
         include_your_for,
         query.depth,
         query.limit,
+        query.sort,
         query.page.as_deref(),
         &db,
         &ctx,

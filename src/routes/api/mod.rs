@@ -46,7 +46,7 @@ fn format_number_58(src: i64) -> String {
     bs58::encode(src.to_be_bytes()).into_string()
 }
 
-struct ValueConsumer<'a> {
+pub struct ValueConsumer<'a> {
     targets: Vec<&'a mut Option<Box<dyn tokio_postgres::types::ToSql + Send + Sync>>>,
     start_idx: usize,
     used: usize,
@@ -61,7 +61,7 @@ impl<'a> ValueConsumer<'a> {
     }
 }
 
-struct InvalidPage;
+pub struct InvalidPage;
 impl InvalidPage {
     fn into_user_error(self) -> crate::Error {
         crate::Error::UserError(crate::simple_response(
@@ -71,9 +71,9 @@ impl InvalidPage {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
-enum SortType {
+pub enum SortType {
     Hot,
     New,
 }
@@ -220,6 +220,10 @@ pub fn default_replies_depth() -> u8 {
 
 pub fn default_replies_limit() -> u8 {
     30
+}
+
+pub fn default_comment_sort() -> SortType {
+    SortType::Hot
 }
 
 pub fn route_api() -> crate::RouteNode<()> {
@@ -704,6 +708,7 @@ async fn apply_comments_replies<'a, T>(
     include_your_for: Option<UserLocalID>,
     depth: u8,
     limit: u8,
+    sort: SortType,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> Result<(), crate::Error> {
@@ -713,7 +718,8 @@ async fn apply_comments_replies<'a, T>(
         .collect::<Vec<_>>();
     if depth > 0 {
         let mut replies =
-            get_comments_replies_box(&ids, include_your_for, depth - 1, limit, db, ctx).await?;
+            get_comments_replies_box(&ids, include_your_for, depth - 1, limit, sort, db, ctx)
+                .await?;
 
         for (_, comment) in comments.iter_mut() {
             let (current, next_page) = replies
@@ -759,6 +765,7 @@ fn get_comments_replies_box<'a: 'b, 'b>(
     include_your_for: Option<UserLocalID>,
     depth: u8,
     limit: u8,
+    sort: SortType,
     db: &'b tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> std::pin::Pin<
@@ -777,6 +784,7 @@ fn get_comments_replies_box<'a: 'b, 'b>(
         include_your_for,
         depth,
         limit,
+        sort,
         None,
         db,
         ctx,
@@ -790,17 +798,13 @@ async fn get_comments_replies<'a>(
     include_your_for: Option<UserLocalID>,
     depth: u8,
     limit: u8,
+    sort: SortType,
     page: Option<&str>,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> Result<HashMap<CommentLocalID, (Vec<RespPostCommentInfo<'a>>, Option<String>)>, crate::Error> {
     use futures::TryStreamExt;
-    use std::fmt::Write;
 
-    let page = page
-        .map(parse_number_58)
-        .transpose()
-        .map_err(|_| InvalidPage.into_user_error())?;
     let limit_i = i64::from(limit) + 1;
 
     let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown";
@@ -813,15 +817,43 @@ async fn get_comments_replies<'a>(
         } else {
             ("", vec![&parents, &limit_i])
         };
-    let sql3 = " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = unnest ORDER BY hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC) AS result ON TRUE LIMIT $2";
+    let mut sql3 =
+        " FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE parent = unnest"
+            .to_owned();
+    let mut sql4 = format!(
+        " ORDER BY {}) AS result ON TRUE LIMIT $2",
+        sort.comment_sort_sql()
+    );
 
-    let mut sql: String = format!("{}{}{}", sql1, sql2, sql3);
-
-    if let Some(page) = &page {
-        values.push(page);
-        write!(sql, " OFFSET ${}", values.len()).unwrap();
+    let mut con1 = None;
+    let mut con2 = None;
+    let (page_part1, page_part2) = sort
+        .handle_page(
+            page,
+            "reply",
+            false,
+            ValueConsumer {
+                targets: vec![&mut con1, &mut con2],
+                start_idx: values.len(),
+                used: 0,
+            },
+        )
+        .map_err(InvalidPage::into_user_error)?;
+    if let Some(value) = &con1 {
+        values.push(value.as_ref());
+        if let Some(value) = &con2 {
+            values.push(value.as_ref());
+        }
     }
 
+    if let Some(part) = page_part1 {
+        sql3.push_str(&part);
+    }
+    if let Some(part) = page_part2 {
+        sql4.push_str(&part);
+    }
+
+    let sql: String = format!("{}{}{}{}", sql1, sql2, sql3, sql4);
     let sql: &str = &sql;
 
     let stream = crate::query_stream(db, sql, &values).await?;
@@ -894,7 +926,16 @@ async fn get_comments_replies<'a>(
         .try_collect()
         .await?;
 
-    apply_comments_replies(&mut comments, include_your_for, depth, limit, db, &ctx).await?;
+    apply_comments_replies(
+        &mut comments,
+        include_your_for,
+        depth,
+        limit,
+        sort,
+        db,
+        &ctx,
+    )
+    .await?;
 
     let mut result = HashMap::new();
     for (parent, comment) in comments {
@@ -902,7 +943,7 @@ async fn get_comments_replies<'a>(
         if entry.0.len() < limit.into() {
             entry.0.push(comment);
         } else {
-            entry.1 = Some(format_number_58(i64::from(limit) + page.unwrap_or(0)));
+            entry.1 = Some(sort.get_next_comments_page(comment, limit, page));
         }
     }
 

@@ -401,6 +401,12 @@
 						"schema": {"type": "integer"}
 					},
 					{
+						"name": "sort",
+						"in": "query",
+						"required": false,
+						"schema": {"$ref": "#/components/schemas/SortType"}
+					},
+					{
 						"name": "page",
 						"in": "query",
 						"required": false,
@@ -1448,6 +1454,12 @@
 						"in": "query",
 						"required": false,
 						"schema": {"type": "integer"}
+					},
+					{
+						"name": "sort",
+						"in": "query",
+						"required": false,
+						"schema": {"$ref": "#/components/schemas/SortType"}
 					},
 					{
 						"name": "page",

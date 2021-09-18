@@ -143,7 +143,8 @@ async fn get_post_comments<'a>(
         None
     };
 
-    super::apply_comments_replies(&mut comments, include_your_for, 2, limit, db, &ctx).await?;
+    super::apply_comments_replies(&mut comments, include_your_for, 2, limit, sort, db, &ctx)
+        .await?;
 
     Ok((
         comments.into_iter().map(|(_, comment)| comment).collect(),
@@ -425,6 +426,8 @@ async fn route_unstable_posts_replies_list(
         include_your: bool,
         #[serde(default = "super::default_replies_limit")]
         limit: u8,
+        #[serde(default = "super::default_comment_sort")]
+        sort: super::SortType,
         page: Option<Cow<'a, str>>,
     }
 
@@ -442,7 +445,7 @@ async fn route_unstable_posts_replies_list(
     let (replies, next_page) = get_post_comments(
         post_id,
         include_your_for,
-        super::SortType::Hot,
+        query.sort,
         query.limit,
         query.page.as_deref(),
         &db,
