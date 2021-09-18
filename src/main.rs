@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::ops::Deref;
 use std::sync::Arc;
-use trout::hyper::RoutingFailureExtHyper;
 
 mod apub_util;
 mod config;
@@ -1067,7 +1066,16 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
                         Ok::<_, hyper::Error>(match result {
                             Ok(val) => val,
                             Err(Error::UserError(res)) => res,
-                            Err(Error::RoutingError(err)) => err.to_simple_response(),
+                            Err(Error::RoutingError(err)) => {
+                                let code = match err {
+                                    trout::RoutingFailure::NotFound => hyper::StatusCode::NOT_FOUND,
+                                    trout::RoutingFailure::MethodNotAllowed => {
+                                        hyper::StatusCode::METHOD_NOT_ALLOWED
+                                    }
+                                };
+
+                                simple_response(code, code.canonical_reason().unwrap())
+                            }
                             Err(Error::Internal(err)) => {
                                 log::error!("Error: {:?}", err);
 
