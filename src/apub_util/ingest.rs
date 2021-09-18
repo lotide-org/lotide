@@ -266,70 +266,8 @@ pub async fn ingest_object(
         KnownObject::Page(obj) => {
             ingest_postlike(Verified(KnownObject::Page(obj)), found_from, ctx).await
         }
-        KnownObject::Person(person) => {
-            let ap_id = person
-                .id_unchecked()
-                .ok_or(crate::Error::InternalStrStatic("Missing ID in Person"))?;
-
-            let username = person
-                .preferred_username()
-                .or_else(|| {
-                    person
-                        .name()
-                        .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
-                })
-                .unwrap_or("");
-            let inbox = person.inbox_unchecked().as_str();
-            let shared_inbox = person
-                .endpoints_unchecked()
-                .and_then(|endpoints| endpoints.shared_inbox)
-                .map(|url| url.as_str());
-            let public_key = person
-                .ext_one
-                .public_key
-                .as_ref()
-                .map(|key| key.public_key_pem.as_bytes());
-            let public_key_sigalg = person
-                .ext_one
-                .public_key
-                .as_ref()
-                .and_then(|key| key.signature_algorithm.as_deref());
-            let description_html = person
-                .summary()
-                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next());
-
-            let avatar = person.icon().and_then(|icon| {
-                icon.iter()
-                    .filter_map(|icon| {
-                        if icon.kind_str() == Some("Image") {
-                            match activitystreams::object::Image::from_any_base(icon.clone()) {
-                                Err(_) | Ok(None) => None,
-                                Ok(Some(icon)) => Some(icon),
-                            }
-                        } else {
-                            None
-                        }
-                    })
-                    .next()
-            });
-            let avatar = avatar
-                .as_ref()
-                .and_then(|icon| icon.url().and_then(|url| url.as_single_id()))
-                .map(|x| x.as_str());
-
-            let id = UserLocalID(db.query_one(
-                "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html, avatar) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7, avatar=$8 RETURNING id",
-                &[&username, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html, &avatar],
-            ).await?.get(0));
-
-            Ok(Some(IngestResult::Actor(super::ActorLocalInfo::User {
-                id,
-                public_key: public_key.map(|key| super::PubKeyInfo {
-                    algorithm: super::get_message_digest(public_key_sigalg),
-                    key: key.to_owned(),
-                }),
-            })))
-        }
+        KnownObject::Person(person) => ingest_personlike(Verified(person), false, ctx).await,
+        KnownObject::Service(obj) => ingest_personlike(Verified(obj), true, ctx).await,
         KnownObject::Undo(activity) => {
             ingest_undo(Verified(activity), ctx).await?;
             Ok(None)
@@ -825,6 +763,88 @@ async fn ingest_postlike(
             Ok(None)
         }
     }
+}
+
+async fn ingest_personlike<
+    T,
+    K: activitystreams::base::AsBase<T>
+        + activitystreams::object::AsObject<T>
+        + activitystreams::markers::Actor
+        + Clone,
+>(
+    person: Verified<
+        activitystreams_ext::Ext1<
+            activitystreams::actor::ApActor<K>,
+            super::PublicKeyExtension<'static>,
+        >,
+    >,
+    is_bot: bool,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<Option<IngestResult>, crate::Error> {
+    let ap_id = person
+        .id_unchecked()
+        .ok_or(crate::Error::InternalStrStatic("Missing ID in Person"))?;
+
+    let username = person
+        .preferred_username()
+        .or_else(|| {
+            person
+                .name()
+                .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next())
+        })
+        .unwrap_or("");
+    let inbox = person.inbox_unchecked().as_str();
+    let shared_inbox = person
+        .endpoints_unchecked()
+        .and_then(|endpoints| endpoints.shared_inbox)
+        .map(|url| url.as_str());
+    let public_key = person
+        .ext_one
+        .public_key
+        .as_ref()
+        .map(|key| key.public_key_pem.as_bytes());
+    let public_key_sigalg = person
+        .ext_one
+        .public_key
+        .as_ref()
+        .and_then(|key| key.signature_algorithm.as_deref());
+    let description_html = person
+        .summary()
+        .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next());
+
+    let avatar = person.icon().and_then(|icon| {
+        icon.iter()
+            .filter_map(|icon| {
+                if icon.kind_str() == Some("Image") {
+                    match activitystreams::object::Image::from_any_base(icon.clone()) {
+                        Err(_) | Ok(None) => None,
+                        Ok(Some(icon)) => Some(icon),
+                    }
+                } else {
+                    None
+                }
+            })
+            .next()
+    });
+    let avatar = avatar
+        .as_ref()
+        .and_then(|icon| icon.url().and_then(|url| url.as_single_id()))
+        .map(|x| x.as_str());
+
+    let db = ctx.db_pool.get().await?;
+
+    let id = UserLocalID(db.query_one(
+        "INSERT INTO person (username, local, created_local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html, avatar, is_bot) VALUES ($1, FALSE, localtimestamp, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7, avatar=$8, is_bot=$9 RETURNING id",
+        &[&username, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html, &avatar, &is_bot],
+    ).await?.get(0));
+
+    Ok(Some(IngestResult::Actor(super::ActorLocalInfo::User {
+        id,
+        public_key: public_key.map(|key| super::PubKeyInfo {
+            algorithm: super::get_message_digest(public_key_sigalg),
+            key: key.to_owned(),
+        }),
+    })))
 }
 
 async fn handle_recieved_reply(

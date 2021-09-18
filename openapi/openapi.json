@@ -65,13 +65,14 @@
 			},
 			"MinimalUserInfo": {
 				"type": "object",
-				"required": ["id", "username", "local", "host", "remote_url"],
+				"required": ["id", "username", "local", "host", "remote_url", "is_bot"],
 				"properties": {
 					"id": {"type": "integer"},
 					"username": {"type": "string"},
 					"local": {"type": "boolean"},
 					"host": {"type": "string"},
 					"remote_url": {"type": "string", "nullable": true},
+					"is_bot": {"type": "boolean"},
 					"avatar": {
 						"type": "object",
 						"required": ["url"],

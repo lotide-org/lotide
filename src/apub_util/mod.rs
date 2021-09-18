@@ -67,6 +67,12 @@ pub enum KnownObject {
             PublicKeyExtension<'static>,
         >,
     ),
+    Service(
+        activitystreams_ext::Ext1<
+            activitystreams::actor::ApActor<activitystreams::actor::Service>,
+            PublicKeyExtension<'static>,
+        >,
+    ),
     Group(
         activitystreams_ext::Ext2<
             activitystreams::actor::ApActor<activitystreams::actor::Group>,

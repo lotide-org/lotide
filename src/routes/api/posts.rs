@@ -25,7 +25,7 @@ async fn get_post_comments<'a>(
 
     let limit_i = i64::from(limit) + 1;
 
-    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown";
+    let sql1 = "SELECT reply.id, reply.author, reply.content_text, reply.created, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown, person.is_bot";
     let (sql2, mut values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -95,6 +95,7 @@ async fn get_post_comments<'a>(
                         &ctx.local_hostname,
                     ),
                     remote_url: author_ap_id.map(|x| x.to_owned().into()),
+                    is_bot: row.get(14),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, author_id).into_owned().into(),
                     }),
@@ -125,7 +126,7 @@ async fn get_post_comments<'a>(
                     score: row.get(12),
                     your_vote: match include_your_for {
                         None => None,
-                        Some(_) => Some(if row.get(14) {
+                        Some(_) => Some(if row.get(15) {
                             Some(crate::types::Empty {})
                         } else {
                             None
@@ -604,7 +605,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, post.content_markdown FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, post.content_markdown, person.is_bot FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -654,6 +655,7 @@ async fn route_unstable_posts_get(
                             &ctx.local_hostname,
                         ),
                         remote_url: author_ap_id.map(From::from),
+                        is_bot: row.get(19),
                         avatar: author_avatar.map(|url| RespAvatarInfo {
                             url: ctx.process_avatar_href(url, author_id),
                         }),
@@ -923,7 +925,7 @@ async fn route_unstable_posts_likes_list(
         None => "",
     };
 
-    let sql: &str = &format!("SELECT person.id, person.username, person.local, person.ap_id, post_like.created_local, person.avatar FROM post_like, person WHERE person.id = post_like.person AND post_like.post = $1{} ORDER BY post_like.created_local DESC, post_like.person DESC LIMIT $2", page_conditions);
+    let sql: &str = &format!("SELECT person.id, person.username, person.local, person.ap_id, post_like.created_local, person.avatar, person.is_bot FROM post_like, person WHERE person.id = post_like.person AND post_like.post = $1{} ORDER BY post_like.created_local DESC, post_like.person DESC LIMIT $2", page_conditions);
 
     let mut rows = db.query(sql, &values).await?;
 
@@ -956,6 +958,7 @@ async fn route_unstable_posts_likes_list(
                     local,
                     host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
                     remote_url: ap_id.map(From::from),
+                    is_bot: row.get(6),
                     avatar: avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id),
                     }),
