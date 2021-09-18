@@ -335,19 +335,24 @@ async fn route_unstable_posts_list(
         )
         .unwrap();
     }
+    let maybe_user_id;
     if let Some(value) = query.in_your_follows {
-        if let Some(include_your_idx) = include_your_idx {
-            write!(
-                sql,
-                " AND {}(community.id IN (SELECT community FROM community_follow WHERE accepted AND follower=${}) AND post.approved)",
-                if value { "" } else { "NOT " },
-                include_your_idx,
-            ).unwrap();
-        } else {
-            return Err(crate::Error::InternalStrStatic(
-                "in_your_follows can only be used with include_your=true",
-            ));
-        }
+        let user_idx = match include_your_idx {
+            Some(idx) => idx,
+            None => {
+                let user = crate::require_login(&req, &db).await?;
+                maybe_user_id = user;
+                values.push(&maybe_user_id);
+                values.len()
+            }
+        };
+
+        write!(
+            sql,
+            " AND {}(community.id IN (SELECT community FROM community_follow WHERE accepted AND follower=${}) AND post.approved)",
+            if value { "" } else { "NOT " },
+            user_idx,
+        ).unwrap();
     }
     if let Some(value) = &query.community {
         values.push(value);
