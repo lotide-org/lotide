@@ -107,22 +107,54 @@
 			"UserInfo": {
 				"allOf": [{"$ref": "#/components/schemas/MinimalUserInfo"}],
 				"type": "object",
-				"required": ["description"],
+				"required": ["description", "description_html", "description_text"],
 				"properties": {
-					"description": {"type": "string"},
+					"description": {
+						"type": "string",
+						"deprecated": true,
+						"description": "Old field for description. Should not be used."
+					},
+					"description_html": {
+						"type": "string",
+						"nullable": true,
+						"description": "Description as HTML, if available"
+					},
+					"description_text": {
+						"type": "string",
+						"nullable": true,
+						"description": "Description as text, if available"
+					},
 					"your_note": {
 						"type": "string",
 						"nullable": true,
 						"description": "Private note about this user written by you"
+					},
+					"suspended": {
+						"type": "boolean",
+						"description": "Whether the user is suspended"
 					}
 				}
 			},
 			"CommunityInfo": {
 				"allOf": [{"$ref": "#/components/schemas/MinimalCommunityInfo"}],
 				"type": "object",
-				"required": ["description", "feeds"],
+				"required": ["description", "feeds", "description_html", "description_text"],
 				"properties": {
-					"description": {"type": "string"},
+					"description": {
+						"type": "string",
+						"deprecated": true,
+						"description": "Old field for description. Should not be used."
+					},
+					"description_html": {
+						"type": "string",
+						"nullable": true,
+						"description": "Description as HTML, if available"
+					},
+					"description_text": {
+						"type": "string",
+						"nullable": true,
+						"description": "Description as text, if available"
+					},
 					"feeds": {
 						"type": "object",
 						"required": ["atom"],
