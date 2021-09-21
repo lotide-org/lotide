@@ -82,7 +82,12 @@ async fn route_unstable_communities_list(
 
     if let Some(search) = &query.search {
         values.push(search);
-        write!(sql, " WHERE community_fts(community) @@ plainto_tsquery('english', ${0}) ORDER BY ts_rank_cd(community_fts(community), plainto_tsquery('english', ${0})) DESC", values.len()).unwrap();
+        write!(
+            sql,
+            " WHERE community_fts(community) @@ plainto_tsquery('english', ${0})",
+            values.len()
+        )
+        .unwrap();
         did_where = true;
     }
     if let Some(req_your_follow_accepted) = &query.your_follow_accepted {
