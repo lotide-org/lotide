@@ -214,6 +214,91 @@ impl SortType {
     }
 }
 
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum CommunitiesSortType {
+    OldLocal,
+    Alphabetic,
+}
+
+impl CommunitiesSortType {
+    pub fn sort_sql(&self) -> &'static str {
+        match self {
+            Self::OldLocal => "community.id ASC",
+            Self::Alphabetic => "community.name ASC, ap_id ASC",
+        }
+    }
+
+    pub fn handle_page(
+        &self,
+        page: Option<&str>,
+        mut value_out: ValueConsumer,
+    ) -> Result<(Option<String>, Option<String>), InvalidPage> {
+        match page {
+            None => Ok((None, None)),
+            Some(page) => match self {
+                Self::OldLocal => {
+                    let start_id: i64 = parse_number_58(page).map_err(|_| InvalidPage)?;
+                    let idx = value_out.push(start_id);
+                    Ok((Some(format!(" AND community.id >= ${}", idx)), None))
+                }
+                Self::Alphabetic => {
+                    let mut spl = page.split(',');
+
+                    let name = spl.next().ok_or(InvalidPage)?;
+                    let name =
+                        String::from_utf8(bs58::decode(name).into_vec().map_err(|_| InvalidPage)?)
+                            .map_err(|_| InvalidPage)?;
+
+                    match spl.next() {
+                        None => {
+                            let idx = value_out.push(name);
+                            Ok((Some(format!(" AND community.name >= ${}", idx)), None))
+                        }
+                        Some(apid) => {
+                            let apid = String::from_utf8(
+                                bs58::decode(apid).into_vec().map_err(|_| InvalidPage)?,
+                            )
+                            .map_err(|_| InvalidPage)?;
+
+                            if spl.next().is_some() {
+                                return Err(InvalidPage);
+                            }
+
+                            let idx1 = value_out.push(name);
+                            let idx2 = value_out.push(apid);
+
+                            Ok((Some(format!(" AND community.name > ${} OR (community.name = ${} AND community.ap_id >= ${})", idx1, idx1, idx2)), None))
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    pub fn get_next_page(
+        &self,
+        community: &RespMinimalCommunityInfo,
+        _current_page: Option<&str>,
+    ) -> String {
+        match self {
+            Self::OldLocal => format_number_58(community.id.raw()),
+            Self::Alphabetic => {
+                let mut result = bs58::encode(community.name.as_bytes()).into_string();
+
+                if !community.local {
+                    if let Some(url) = &community.remote_url {
+                        result.push(',');
+                        result.push_str(&bs58::encode(url.as_bytes()).into_string());
+                    }
+                }
+
+                result
+            }
+        }
+    }
+}
+
 pub fn default_replies_depth() -> u8 {
     3
 }

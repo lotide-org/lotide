@@ -1,3 +1,4 @@
+use super::{CommunitiesSortType, ValueConsumer};
 use crate::types::{
     CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityFeeds,
     RespCommunityFeedsType, RespCommunityInfo, RespList, RespMinimalAuthorInfo,
@@ -34,6 +35,10 @@ async fn route_unstable_communities_list(
         30
     }
 
+    fn default_sort() -> CommunitiesSortType {
+        CommunitiesSortType::OldLocal
+    }
+
     #[derive(Deserialize)]
     struct CommunitiesListQuery<'a> {
         search: Option<Cow<'a, str>>,
@@ -50,6 +55,9 @@ async fn route_unstable_communities_list(
         limit: i64,
 
         page: Option<Cow<'a, str>>,
+
+        #[serde(default = "default_sort")]
+        sort: CommunitiesSortType,
     }
 
     let query: CommunitiesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -76,69 +84,69 @@ async fn route_unstable_communities_list(
         sql.push_str(", (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$1), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$1)");
     }
 
-    sql.push_str(" FROM community");
-
-    let mut did_where = false;
+    sql.push_str(" FROM community WHERE TRUE");
 
     if let Some(search) = &query.search {
         values.push(search);
         write!(
             sql,
-            " WHERE community_fts(community) @@ plainto_tsquery('english', ${0})",
+            " AND community_fts(community) @@ plainto_tsquery('english', ${0})",
             values.len()
         )
         .unwrap();
-        did_where = true;
     }
     if let Some(req_your_follow_accepted) = &query.your_follow_accepted {
         values.push(login_user_maybe.as_ref().unwrap());
         write!(
             sql,
-            " {} community.id IN (SELECT community FROM community_follow WHERE follower=${}",
-            if did_where { "AND" } else { "WHERE" },
+            " AND community.id IN (SELECT community FROM community_follow WHERE follower=${}",
             values.len()
         )
         .unwrap();
-        did_where = true;
         values.push(req_your_follow_accepted);
         write!(sql, " AND accepted=${})", values.len()).unwrap();
     }
     if let Some(req_local) = &query.local {
         values.push(req_local);
-        write!(
-            sql,
-            " {} community.local=${}",
-            if did_where { "AND" } else { "WHERE" },
-            values.len()
-        )
-        .unwrap();
-        did_where = true;
+        write!(sql, " AND community.local=${}", values.len()).unwrap();
     }
 
-    let page = query
-        .page
-        .as_deref()
-        .map(super::parse_number_58)
-        .transpose()
-        .map_err(|_| super::InvalidPage.into_user_error())?;
-
-    if let Some(page) = &page {
-        values.push(page);
-        write!(
-            sql,
-            " {} id >= ${}",
-            if did_where { "AND" } else { "WHERE" },
-            values.len()
+    let mut con1 = None;
+    let mut con2 = None;
+    let (page_part1, page_part2) = query
+        .sort
+        .handle_page(
+            query.page.as_deref(),
+            ValueConsumer {
+                targets: vec![&mut con1, &mut con2],
+                start_idx: values.len(),
+                used: 0,
+            },
         )
-        .unwrap();
+        .map_err(super::InvalidPage::into_user_error)?;
+    if let Some(value) = &con1 {
+        values.push(value.as_ref());
+        if let Some(value) = &con2 {
+            values.push(value.as_ref());
+        }
     }
 
-    write!(sql, " ORDER BY id").unwrap();
+    if let Some(part) = page_part1 {
+        sql.push_str(&part);
+    }
+
+    write!(sql, " ORDER BY {}", query.sort.sort_sql()).unwrap();
 
     let limit_plus_1 = query.limit + 1;
 
     values.push(&limit_plus_1);
     write!(sql, " LIMIT ${}", values.len()).unwrap();
+
+    if let Some(part) = page_part2 {
+        sql.push_str(&part);
+    }
+
+    log::debug!("sql = {:?}", sql);
 
     let sql: &str = &sql;
     let mut rows = db.query(sql, &values).await?;
@@ -146,9 +154,21 @@ async fn route_unstable_communities_list(
     let next_page = if rows.len() > query.limit.try_into().unwrap() {
         let row = rows.pop().unwrap();
 
-        let id: i64 = row.get(0);
+        let id = CommunityLocalID(row.get(0));
+        let name = Cow::Borrowed(row.get(1));
+        let local = row.get(2);
+        let ap_id: Option<&str> = row.get(3);
 
-        Some(super::format_number_58(id))
+        Some(query.sort.get_next_page(
+            &RespMinimalCommunityInfo {
+                host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
+                id,
+                name,
+                local,
+                remote_url: ap_id.map(Cow::Borrowed),
+            },
+            query.page.as_deref(),
+        ))
     } else {
         None
     };
@@ -847,8 +867,6 @@ async fn route_unstable_communities_posts_patch(
 
     if any_changes {
         sql.push_str(" WHERE id=$1");
-
-        log::debug!("sql = {}", sql);
 
         db.execute(sql.deref(), &values).await?;
 

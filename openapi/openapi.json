@@ -657,6 +657,12 @@
 						"in": "query",
 						"required": false,
 						"schema": {"type": "string"}
+					},
+					{
+						"name": "sort",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string", "enum": ["old_local", "alphabetic"]}
 					}
 				],
 				"responses": {
