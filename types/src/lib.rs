@@ -196,6 +196,7 @@ pub struct RespPostListPost<'a> {
     pub remote_url: Option<Cow<'a, str>>,
     pub href: Option<Cow<'a, str>>,
     pub content_text: Option<Cow<'a, str>>,
+    pub content_markdown: Option<Cow<'a, str>>,
     #[serde(rename = "content_html")]
     pub content_html_safe: Option<String>,
     pub author: Option<Cow<'a, RespMinimalAuthorInfo<'a>>>,
@@ -266,7 +267,6 @@ pub enum RespThingInfo<'a> {
 pub struct RespPostInfo<'a> {
     #[serde(flatten)]
     pub post: &'a RespPostListPost<'a>,
-    pub content_markdown: Option<&'a str>,
     pub approved: bool,
     pub local: bool,
 }
