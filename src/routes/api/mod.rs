@@ -76,6 +76,7 @@ impl InvalidPage {
 pub enum SortType {
     Hot,
     New,
+    Top,
 }
 
 impl SortType {
