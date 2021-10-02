@@ -82,7 +82,8 @@ impl SortType {
     pub fn post_sort_sql(&self) -> &'static str {
         match self {
             SortType::Hot => "hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC",
-            SortType::New => "post.created DESC",
+            SortType::New => "post.created DESC, post.id DESC",
+            SortType::Top => "(SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author) DESC, post.id DESC",
         }
     }
 
@@ -90,6 +91,7 @@ impl SortType {
         match self {
             SortType::Hot => "hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC",
             SortType::New => "reply.created DESC",
+            SortType::Top => "(SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author) DESC, reply.id DESC",
         }
     }
 
@@ -103,7 +105,7 @@ impl SortType {
         match page {
             None => Ok((None, None)),
             Some(page) => match self {
-                SortType::Hot => {
+                SortType::Hot | SortType::Top => {
                     let page: i64 = parse_number_58(page).map_err(|_| InvalidPage)?;
                     let idx = value_out.push(page);
                     Ok((None, Some(format!(" OFFSET ${}", idx))))
@@ -168,7 +170,7 @@ impl SortType {
         current_page: Option<&str>,
     ) -> String {
         match self {
-            SortType::Hot => format_number_58(
+            SortType::Hot | SortType::Top => format_number_58(
                 i64::from(limit)
                     + match current_page {
                         None => 0,
@@ -191,7 +193,7 @@ impl SortType {
         current_page: Option<&str>,
     ) -> String {
         match self {
-            SortType::Hot => format_number_58(
+            SortType::Hot | SortType::Top => format_number_58(
                 i64::from(limit)
                     + match current_page {
                         None => 0,
