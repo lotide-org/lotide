@@ -786,7 +786,7 @@ async fn route_unstable_users_things_list(
     };
 
     let sql: &str = &format!(
-        "(SELECT TRUE AS is_post, post.id AS thing_id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, post.ap_id, post.local FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE AS is_post, reply.id AS thing_id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, reply.ap_id, NULL, NULL, reply.local, post.ap_id, post.local FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted){} ORDER BY created DESC, is_post ASC, thing_id DESC LIMIT $2",
+        "(SELECT TRUE AS is_post, post.id AS thing_id, post.href, post.title, post.created, community.id, community.name, community.local, community.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, post.ap_id, post.local, post.content_html, post.content_text, post.content_markdown FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted) UNION ALL (SELECT FALSE AS is_post, reply.id AS thing_id, reply.content_text, reply.content_html, reply.created, post.id, post.title, NULL, reply.ap_id, NULL, NULL, reply.local, post.ap_id, post.local, NULL, NULL, NULL FROM reply, post WHERE post.id = reply.post AND reply.author = $1 AND NOT reply.deleted){} ORDER BY created DESC, is_post ASC, thing_id DESC LIMIT $2",
         page_conditions,
     );
 
@@ -867,9 +867,11 @@ async fn route_unstable_users_things_list(
                     replies_count_total: row.get(10),
                     sticky: row.get(11),
                     score: row.get(9),
-                    content_html_safe: None,
-                    content_text: None,
-                    content_markdown: None,
+                    content_html_safe: row
+                        .get::<_, Option<&str>>(14)
+                        .map(|html| crate::clean_html(&html)),
+                    content_text: row.get::<_, Option<&str>>(15).map(Cow::Borrowed),
+                    content_markdown: row.get::<_, Option<&str>>(16).map(Cow::Borrowed),
                     author: None,
                     your_vote: None,
                 })
