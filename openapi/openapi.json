@@ -186,17 +186,19 @@
 			},
 			"SomePostInfo": {
 				"type": "object",
-				"required": ["id", "title", "created", "community", "score", "sticky", "remote_url"],
+				"required": ["id", "title", "created", "community", "score", "sticky", "remote_url", "content_text", "content_html", "content_markdown"],
 				"properties": {
 					"id": {"type": "integer"},
 					"title": {"type": "string"},
 					"remote_url": {"type": "string", "nullable": true},
 					"href": {"type": "string"},
 					"content_text": {
+						"nullable": true,
 						"type": "string",
 						"description": "Content in text form. Should be displayed if content_html is not present."
 					},
 					"content_html": {
+						"nullable": true,
 						"type": "string",
 						"description": "Content in HTML form."
 					},
@@ -217,7 +219,8 @@
 					},
 					"score": {"type": "integer"},
 					"sticky": {"type": "boolean"},
-					"your_vote": {"$ref": "#/components/schemas/YourVote"}
+					"your_vote": {"$ref": "#/components/schemas/YourVote"},
+					"content_markdown": {"type": "string", "nullable": true}
 				}
 			},
 			"PostListPost": {
@@ -1395,11 +1398,10 @@
 								"schema": {
 									"allOf": [{"$ref": "#/components/schemas/SomePostInfo"}],
 									"type": "object",
-									"required": ["approved", "local", "content_markdown"],
+									"required": ["approved", "local"],
 									"properties": {
 										"approved": {"type": "boolean"},
-										"local": {"type": "boolean"},
-										"content_markdown": {"type": "string", "nullable": true}
+										"local": {"type": "boolean"}
 									}
 								}
 							}
