@@ -627,7 +627,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, post.content_markdown, person.is_bot, post.ap_id, post.local FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -653,15 +653,16 @@ async fn route_unstable_posts_get(
         Some(row) => {
             let href: Option<&str> = row.get(1);
             let content_text: Option<&str> = row.get(2);
-            let content_html: Option<&str> = row.get(5);
+            let content_markdown: Option<&str> = row.get(5);
+            let content_html: Option<&str> = row.get(6);
             let title: &str = row.get(3);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
             let local: bool = row.get(21);
             let ap_id: Option<&str> = row.get(20);
-            let community_id = CommunityLocalID(row.get(6));
-            let community_name: &str = row.get(7);
-            let community_local = row.get(8);
-            let community_ap_id: Option<&str> = row.get(9);
+            let community_id = CommunityLocalID(row.get(7));
+            let community_name: &str = row.get(8);
+            let community_local = row.get(9);
+            let community_ap_id: Option<&str> = row.get(10);
 
             let remote_url = if local {
                 Some(Cow::Owned(String::from(
@@ -679,12 +680,12 @@ async fn route_unstable_posts_get(
                 community_ap_id.map(Cow::Borrowed)
             };
 
-            let author = match row.get(10) {
+            let author = match row.get(11) {
                 Some(author_username) => {
                     let author_id = UserLocalID(row.get(0));
-                    let author_local = row.get(11);
-                    let author_ap_id: Option<_> = row.get(12);
-                    let author_avatar: Option<&str> = row.get(15);
+                    let author_local = row.get(12);
+                    let author_ap_id: Option<_> = row.get(13);
+                    let author_avatar: Option<&str> = row.get(16);
 
                     let author_remote_url = if author_local {
                         Some(Cow::Owned(String::from(
@@ -733,6 +734,7 @@ async fn route_unstable_posts_get(
                 title: Cow::Borrowed(title),
                 href: ctx.process_href_opt(href.map(Cow::Borrowed), post_id),
                 content_text: content_text.map(Cow::Borrowed),
+                content_markdown: content_markdown.map(Cow::Borrowed),
                 content_html_safe: content_html.map(|html| crate::clean_html(html)),
                 author: author.map(Cow::Owned),
                 created: Cow::Owned(created.to_rfc3339()),
@@ -740,16 +742,15 @@ async fn route_unstable_posts_get(
                 relevance: None,
                 remote_url,
                 replies_count_total: None,
-                score: row.get(13),
-                sticky: row.get(17),
+                score: row.get(14),
+                sticky: row.get(18),
                 your_vote,
             };
 
             let output = RespPostInfo {
                 post: &post,
-                content_markdown: row.get(18),
-                local: row.get(16),
-                approved: row.get(14),
+                local: row.get(17),
+                approved: row.get(15),
             };
 
             crate::json_response(&output)

@@ -76,15 +76,13 @@ impl InvalidPage {
 pub enum SortType {
     Hot,
     New,
-    Top,
 }
 
 impl SortType {
     pub fn post_sort_sql(&self) -> &'static str {
         match self {
             SortType::Hot => "hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC",
-            SortType::New => "post.created DESC, post.id DESC",
-            SortType::Top => "(SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author) DESC, post.id DESC",
+            SortType::New => "post.created DESC",
         }
     }
 
@@ -92,7 +90,6 @@ impl SortType {
         match self {
             SortType::Hot => "hot_rank((SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author), reply.created) DESC",
             SortType::New => "reply.created DESC",
-            SortType::Top => "(SELECT COUNT(*) FROM reply_like WHERE reply = reply.id AND person != reply.author) DESC, reply.id DESC",
         }
     }
 
@@ -106,7 +103,7 @@ impl SortType {
         match page {
             None => Ok((None, None)),
             Some(page) => match self {
-                SortType::Hot | SortType::Top => {
+                SortType::Hot => {
                     let page: i64 = parse_number_58(page).map_err(|_| InvalidPage)?;
                     let idx = value_out.push(page);
                     Ok((None, Some(format!(" OFFSET ${}", idx))))
@@ -171,7 +168,7 @@ impl SortType {
         current_page: Option<&str>,
     ) -> String {
         match self {
-            SortType::Hot | SortType::Top => format_number_58(
+            SortType::Hot => format_number_58(
                 i64::from(limit)
                     + match current_page {
                         None => 0,
@@ -194,7 +191,7 @@ impl SortType {
         current_page: Option<&str>,
     ) -> String {
         match self {
-            SortType::Hot | SortType::Top => format_number_58(
+            SortType::Hot => format_number_58(
                 i64::from(limit)
                     + match current_page {
                         None => 0,
@@ -1080,7 +1077,7 @@ async fn route_unstable_misc_render_markdown(
 }
 
 fn common_posts_list_query(include_your_idx: Option<usize>) -> Cow<'static, str> {
-    const BASE: &str = "post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot, post.ap_id, post.local";
+    const BASE: &str = "post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot, post.ap_id, post.local";
     match include_your_idx {
         None => BASE.into(),
         Some(idx) => format!(
@@ -1107,15 +1104,16 @@ async fn handle_common_posts_list(
             let author_id = row.get::<_, Option<_>>(1).map(UserLocalID);
             let href: Option<String> = row.get(2);
             let content_text: Option<String> = row.get(3);
-            let content_html: Option<String> = row.get(6);
+            let content_markdown: Option<String> = row.get(6);
+            let content_html: Option<String> = row.get(7);
             let title: String = row.get(4);
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
-            let community_id = CommunityLocalID(row.get(7));
-            let community_name: String = row.get(8);
-            let community_local: bool = row.get(9);
-            let community_ap_id: Option<String> = row.get(10);
-            let ap_id: Option<String> = row.get(19);
-            let local: bool = row.get(20);
+            let community_id = CommunityLocalID(row.get(8));
+            let community_name: String = row.get(9);
+            let community_local: bool = row.get(10);
+            let community_ap_id: Option<String> = row.get(11);
+            let ap_id: Option<String> = row.get(20);
+            let local: bool = row.get(21);
 
             let remote_url = if local {
                 Some(String::from(crate::apub_util::get_local_post_apub_id(
@@ -1136,10 +1134,10 @@ async fn handle_common_posts_list(
             };
 
             let author = author_id.map(|id| {
-                let author_name: String = row.get(11);
-                let author_local: bool = row.get(12);
-                let author_ap_id: Option<String> = row.get(13);
-                let author_avatar: Option<String> = row.get(14);
+                let author_name: String = row.get(12);
+                let author_local: bool = row.get(13);
+                let author_ap_id: Option<String> = row.get(14);
+                let author_avatar: Option<String> = row.get(15);
 
                 let author_remote_url = if author_local {
                     Some(String::from(crate::apub_util::get_local_person_apub_id(
@@ -1188,21 +1186,22 @@ async fn handle_common_posts_list(
                 title: Cow::Owned(title),
                 href: ctx.process_href_opt(href.map(Cow::Owned), id),
                 content_text: content_text.map(Cow::Owned),
+                content_markdown: content_markdown.map(Cow::Owned),
                 content_html_safe: content_html.map(|html| crate::clean_html(&html)),
                 author: author.map(Cow::Owned),
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Owned(community),
-                score: row.get(15),
-                sticky: row.get(17),
+                score: row.get(16),
+                sticky: row.get(18),
                 relevance: if relevance {
                     row.get(if include_your { 22 } else { 21 })
                 } else {
                     None
                 },
                 remote_url: remote_url.map(Cow::Owned),
-                replies_count_total: Some(row.get(16)),
+                replies_count_total: Some(row.get(17)),
                 your_vote: if include_your {
-                    Some(if row.get(18) {
+                    Some(if row.get(19) {
                         Some(crate::types::Empty {})
                     } else {
                         None

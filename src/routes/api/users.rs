@@ -869,6 +869,7 @@ async fn route_unstable_users_things_list(
                     score: row.get(9),
                     content_html_safe: None,
                     content_text: None,
+                    content_markdown: None,
                     author: None,
                     your_vote: None,
                 })
