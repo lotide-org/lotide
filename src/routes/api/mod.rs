@@ -1075,7 +1075,7 @@ async fn handle_common_posts_list(
                     .into_owned()
                     .into(),
                     remote_url: author_remote_url.map(Cow::Owned),
-                    is_bot: row.get(18),
+                    is_bot: row.get(19),
                     avatar: author_avatar.map(|url| RespAvatarInfo {
                         url: ctx.process_avatar_href(url, id).into_owned().into(),
                     }),
@@ -1109,14 +1109,14 @@ async fn handle_common_posts_list(
                 score: row.get(16),
                 sticky: row.get(18),
                 relevance: if relevance {
-                    row.get(if include_your { 22 } else { 21 })
+                    row.get(if include_your { 23 } else { 22 })
                 } else {
                     None
                 },
                 remote_url: remote_url.map(Cow::Owned),
                 replies_count_total: Some(row.get(17)),
                 your_vote: if include_your {
-                    Some(if row.get(19) {
+                    Some(if row.get(22) {
                         Some(crate::types::Empty {})
                     } else {
                         None
