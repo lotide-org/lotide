@@ -497,6 +497,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "date_duration"
+version = "0.1.0"
+source = "git+https://git.sr.ht/~vpzom/date_duration?rev=c675b0d7#c675b0d771e18738c9715b81f813ac98bc09c1f2"
+
+[[package]]
 name = "deadpool"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1353,6 +1358,7 @@ dependencies = [
  "chrono",
  "clap",
  "config 0.11.0",
+ "date_duration",
  "deadpool-postgres",
  "either",
  "env_logger",

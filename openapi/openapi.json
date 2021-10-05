@@ -1292,6 +1292,14 @@
 						"description": "Filter by whether the post is approved in one of the communities you follow"
 					},
 					{
+						"name": "created_within",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"},
+						"example": "P6M",
+						"description": "How far into the past to include posts from, as an ISO8601 duration."
+					},
+					{
 						"name": "sort_sticky",
 						"in": "query",
 						"required": false,

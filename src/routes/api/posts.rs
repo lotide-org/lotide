@@ -256,6 +256,7 @@ async fn route_unstable_posts_list(
         #[serde(default)]
         use_aggregate_filters: bool,
         community: Option<CommunityLocalID>,
+        created_within: Option<Cow<'a, str>>,
 
         #[serde(default = "default_limit")]
         limit: u8,
@@ -273,6 +274,19 @@ async fn route_unstable_posts_list(
     }
 
     let query: PostsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
+    let created_within = query
+        .created_within
+        .as_deref()
+        .map(|x| date_duration::DateDuration::parse_iso8601(x))
+        .transpose()
+        .map_err(|_| {
+            crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Invalid duration for created_within",
+            ))
+        })?
+        .map(|x| x.to_iso8601_long());
 
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
@@ -353,6 +367,15 @@ async fn route_unstable_posts_list(
     if let Some(value) = &query.community {
         values.push(value);
         write!(sql, " AND community.id=${} AND post.approved", values.len(),).unwrap();
+    }
+    if let Some(value) = &created_within {
+        values.push(value);
+        write!(
+            sql,
+            " AND created > (current_timestamp - ${}::TEXT::INTERVAL)",
+            values.len()
+        )
+        .unwrap();
     }
 
     let mut con1 = None;

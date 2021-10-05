@@ -62,6 +62,7 @@ clap = "2.33.3"
 bytes = "1.0.1"
 atom_syndication = { git = "https://github.com/rust-syndication/atom", rev = "927ea48" }
 lotide_types = { path = "./types" }
+date_duration = { git = "https://git.sr.ht/~vpzom/date_duration", rev = "c675b0d7" }
 
 [dev-dependencies]
 rand = "0.7.3"
