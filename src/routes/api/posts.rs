@@ -316,19 +316,28 @@ async fn route_unstable_posts_list(
         None
     };
 
-    let mut sql = format!(
-        "SELECT {}",
-        super::common_posts_list_query(include_your_idx)
-    );
+    let mut sql = "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot, post.ap_id, post.local".to_owned();
+    if let Some(idx) = include_your_idx {
+        write!(
+            sql,
+            ", EXISTS(SELECT 1 FROM post_like WHERE post=post.id AND person=${})",
+            idx
+        )
+        .unwrap();
+    }
 
     let relevance_sql = search_value_idx.map(|search_value_idx| {
         format!("ts_rank_cd(to_tsvector('english', title || ' ' || COALESCE(content_text, content_markdown, content_html, '')), plainto_tsquery('english', ${}))", search_value_idx)
     });
 
-    if let Some(relevance_sql) = &relevance_sql {
+    let has_relevance = if let Some(relevance_sql) = &relevance_sql {
         sql.push_str(", ");
         sql.push_str(relevance_sql);
-    }
+
+        true
+    } else {
+        false
+    };
 
     sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE");
     if query.use_aggregate_filters {
@@ -428,15 +437,123 @@ async fn route_unstable_posts_list(
 
     let sql: &str = &sql;
 
-    let stream = crate::query_stream(&db, sql, &values).await?;
+    let rows = db.query(sql, &values).await?;
 
-    let posts = super::handle_common_posts_list(
-        stream,
-        &ctx,
-        include_your_for.is_some(),
-        search_value_idx.is_some(),
-    )
-    .await?;
+    let posts = rows
+        .iter()
+        .map(|row| {
+            let id = PostLocalID(row.get(0));
+            let author_id = row.get::<_, Option<_>>(1).map(UserLocalID);
+            let href: Option<&str> = row.get(2);
+            let content_text: Option<&str> = row.get(3);
+            let content_markdown: Option<&str> = row.get(6);
+            let content_html: Option<&str> = row.get(7);
+            let title: &str = row.get(4);
+            let created: chrono::DateTime<chrono::FixedOffset> = row.get(5);
+            let community_id = CommunityLocalID(row.get(8));
+            let community_name: &str = row.get(9);
+            let community_local: bool = row.get(10);
+            let community_ap_id: Option<&str> = row.get(11);
+            let ap_id: Option<&str> = row.get(20);
+            let local: bool = row.get(21);
+
+            let remote_url = if local {
+                Some(Cow::Owned(String::from(
+                    crate::apub_util::get_local_post_apub_id(id, &ctx.host_url_apub),
+                )))
+            } else {
+                ap_id.map(Cow::Borrowed)
+            };
+
+            let community_remote_url = if community_local {
+                Some(Cow::Owned(String::from(
+                    crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+                )))
+            } else {
+                community_ap_id.map(Cow::Borrowed)
+            };
+
+            let author = author_id.map(|id| {
+                let author_name: &str = row.get(12);
+                let author_local: bool = row.get(13);
+                let author_ap_id: Option<&str> = row.get(14);
+                let author_avatar: Option<&str> = row.get(15);
+
+                let author_remote_url = if author_local {
+                    Some(Cow::Owned(String::from(
+                        crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub),
+                    )))
+                } else {
+                    author_ap_id.map(Cow::Borrowed)
+                };
+
+                RespMinimalAuthorInfo {
+                    id,
+                    username: author_name.into(),
+                    local: author_local,
+                    host: crate::get_actor_host_or_unknown(
+                        author_local,
+                        author_ap_id.as_deref(),
+                        &ctx.local_hostname,
+                    )
+                    .into_owned()
+                    .into(),
+                    remote_url: author_remote_url,
+                    is_bot: row.get(19),
+                    avatar: author_avatar.map(|url| RespAvatarInfo {
+                        url: ctx.process_avatar_href(url, id).into_owned().into(),
+                    }),
+                }
+            });
+
+            let community = RespMinimalCommunityInfo {
+                id: community_id,
+                name: Cow::Borrowed(community_name),
+                local: community_local,
+                host: crate::get_actor_host_or_unknown(
+                    community_local,
+                    community_ap_id.as_deref(),
+                    &ctx.local_hostname,
+                )
+                .into_owned()
+                .into(),
+                remote_url: community_remote_url,
+            };
+
+            let post = RespPostListPost {
+                id,
+                title: Cow::Borrowed(title),
+                href: ctx.process_href_opt(href.map(Cow::Borrowed), id),
+                content_text: content_text.map(Cow::Borrowed),
+                content_markdown: content_markdown.map(Cow::Borrowed),
+                content_html_safe: content_html.map(|html| crate::clean_html(&html)),
+                author: author.map(Cow::Owned),
+                created: Cow::Owned(created.to_rfc3339()),
+                community: Cow::Owned(community),
+                score: row.get(16),
+                sticky: row.get(18),
+                relevance: if has_relevance {
+                    row.get(if include_your_idx.is_some() { 23 } else { 22 })
+                } else {
+                    None
+                },
+                remote_url,
+                replies_count_total: Some(row.get(17)),
+                your_vote: if include_your_idx.is_some() {
+                    Some(if row.get(22) {
+                        Some(crate::types::Empty {})
+                    } else {
+                        None
+                    })
+                } else {
+                    None
+                },
+            };
+
+            post
+        })
+        .collect::<Vec<_>>();
+
     let output = if posts.len() > query.limit as usize {
         let last_post = &posts[posts.len() - 1];
 
