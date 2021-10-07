@@ -1,9 +1,9 @@
 use super::InvalidPage;
 use crate::types::{
-    CommentLocalID, CommunityLocalID, JustContentText, MaybeIncludeYour, PostLocalID,
+    CommentLocalID, CommunityLocalID, JustContentText, JustURL, MaybeIncludeYour, PostLocalID,
     RespAvatarInfo, RespList, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespMinimalCommunityInfo, RespMinimalPostInfo, RespNotification, RespNotificationInfo,
-    RespPostListPost, RespThingInfo, RespUserInfo, UserLocalID,
+    RespPostCommentInfo, RespPostListPost, RespThingInfo, RespUserInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -435,7 +435,7 @@ async fn route_unstable_users_notifications_list(
         let trans = db.transaction().await?;
 
         let rows = trans.query(
-            "SELECT notification.kind, (notification.created_at > (SELECT last_checked_notifications FROM person WHERE id=$1)), reply.id, reply.content_text, reply.content_html, parent_reply.id, parent_reply_post.id, parent_reply_post.title, parent_post.id, parent_post.title, parent_post.ap_id, parent_post.local, parent_reply_post.ap_id, parent_reply_post.local, reply.ap_id, reply.local FROM notification LEFT OUTER JOIN reply ON (reply.id = notification.reply) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = notification.parent_reply) LEFT OUTER JOIN post AS parent_reply_post ON (parent_reply_post.id = parent_reply.post) LEFT OUTER JOIN post AS parent_post ON (parent_post.id = notification.parent_post) WHERE notification.to_user = $1 AND NOT COALESCE(reply.deleted OR parent_reply.deleted OR parent_reply_post.deleted OR parent_post.deleted, FALSE) ORDER BY created_at DESC LIMIT $2",
+            "SELECT notification.kind, (notification.created_at > (SELECT last_checked_notifications FROM person WHERE id=$1)), reply.id, reply.content_text, reply.content_html, parent_reply.id, parent_reply.content_text, parent_reply.content_html, parent_post.id, parent_post.title, parent_post.ap_id, parent_post.local, reply.ap_id, reply.local, parent_post.href, parent_post.content_text, parent_post.created, parent_post.content_markdown, parent_post.content_html, community.id, community.local, community.ap_id, parent_post_author.id, parent_post_author.username, parent_post_author.local, parent_post_author.ap_id, parent_post_author.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = parent_post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = parent_post.id), parent_post.sticky, parent_post_author.is_bot, parent_reply_author.id, parent_reply_author.is_bot, parent_reply_author.username, parent_reply_author.ap_id, parent_reply_author.local, parent_reply_author.avatar, parent_reply.ap_id, parent_reply.local, EXISTS(SELECT 1 FROM post_like WHERE post_like.post = parent_post.id AND post_like.person = $1), reply.attachment_href, parent_reply.attachment_href, reply.content_markdown, parent_reply.content_markdown, reply.created, parent_reply.created, (SELECT COUNT(*) FROM reply_like WHERE reply_like.reply = parent_reply.id), EXISTS(SELECT 1 FROM reply_like WHERE reply_like.reply = parent_reply.id AND reply_like.person = $1), (SELECT COUNT(*) FROM reply_like WHERE reply_like.reply = reply.id), EXISTS(SELECT 1 FROM reply_like WHERE reply_like.reply = reply.id AND reply_like.person = $1), reply_author.id, reply_author.is_bot, reply_author.username, reply_author.ap_id, reply_author.local, reply_author.avatar, community.name FROM notification LEFT OUTER JOIN reply ON (reply.id = notification.reply) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = notification.parent_reply) LEFT OUTER JOIN post AS parent_post ON (parent_post.id = notification.parent_post) LEFT OUTER JOIN community ON (community.id = parent_post.community) LEFT OUTER JOIN person AS parent_post_author ON (parent_post_author.id = parent_post.author) LEFT OUTER JOIN person AS parent_reply_author ON (parent_reply_author.id = parent_reply.author) LEFT OUTER JOIN person AS reply_author ON (reply_author.id = reply.author) WHERE notification.to_user = $1 AND NOT COALESCE(reply.deleted OR parent_reply.deleted OR parent_post.deleted, FALSE) ORDER BY created_at DESC LIMIT $2",
             &[&user, &limit],
         ).await?;
         trans
@@ -455,61 +455,260 @@ async fn route_unstable_users_notifications_list(
         .filter_map(|row| {
             let kind: &str = row.get(0);
             let unseen: bool = row.get(1);
+
+            let post = row.get::<_, Option<_>>(8).map(|post_id| {
+                let post_id = PostLocalID(post_id);
+
+                let post_ap_id: Option<&str> = row.get(10);
+                let post_local: bool = row.get(11);
+
+                let post_remote_url = if post_local {
+                    Some(Cow::Owned(String::from(
+                        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                    )))
+                } else {
+                    post_ap_id.map(Cow::Borrowed)
+                };
+
+                let community_id = CommunityLocalID(row.get(19));
+                let community_local: bool = row.get(20);
+                let community_ap_id: Option<&str> = row.get(21);
+
+                RespPostListPost {
+                    id: post_id,
+                    title: Cow::Borrowed(row.get(9)),
+                    remote_url: post_remote_url,
+                    href: ctx.process_href_opt(
+                        row.get::<_, Option<&str>>(14).map(Cow::Borrowed),
+                        post_id,
+                    ),
+                    content_text: row.get::<_, Option<_>>(15).map(Cow::Borrowed),
+                    created: Cow::Owned(
+                        row.get::<_, chrono::DateTime<chrono::FixedOffset>>(16)
+                            .to_rfc3339(),
+                    ),
+                    content_markdown: row.get::<_, Option<_>>(17).map(Cow::Borrowed),
+                    content_html_safe: row
+                        .get::<_, Option<&str>>(18)
+                        .map(|html| crate::clean_html(&html)),
+                    community: Cow::Owned(RespMinimalCommunityInfo {
+                        id: community_id,
+                        name: Cow::Borrowed(row.get(56)),
+                        local: community_local,
+                        host: crate::get_actor_host_or_unknown(
+                            community_local,
+                            community_ap_id,
+                            &ctx.local_hostname,
+                        ),
+                        remote_url: if community_local {
+                            Some(Cow::Owned(String::from(
+                                crate::apub_util::get_local_community_apub_id(
+                                    community_id,
+                                    &ctx.host_url_apub,
+                                ),
+                            )))
+                        } else {
+                            community_ap_id.map(Cow::Borrowed)
+                        },
+                    }),
+                    author: if let Some(author_id) = row.get(22) {
+                        let author_id = UserLocalID(author_id);
+                        let author_local: bool = row.get(24);
+                        let author_ap_id: Option<&str> = row.get(25);
+
+                        Some(Cow::Owned(RespMinimalAuthorInfo {
+                            id: author_id,
+                            username: Cow::Borrowed(row.get(23)),
+                            avatar: row.get::<_, Option<&str>>(26).map(|url| RespAvatarInfo {
+                                url: ctx.process_avatar_href(url, author_id).into_owned().into(),
+                            }),
+                            is_bot: row.get(30),
+                            local: author_local,
+                            host: crate::get_actor_host_or_unknown(
+                                author_local,
+                                author_ap_id,
+                                &ctx.local_hostname,
+                            ),
+                            remote_url: if author_local {
+                                Some(Cow::Owned(String::from(
+                                    crate::apub_util::get_local_person_apub_id(
+                                        author_id,
+                                        &ctx.host_url_apub,
+                                    ),
+                                )))
+                            } else {
+                                author_ap_id.map(Cow::Borrowed)
+                            },
+                        }))
+                    } else {
+                        None
+                    },
+                    relevance: None,
+                    score: row.get(27),
+                    replies_count_total: row.get(28),
+                    sticky: row.get(29),
+                    your_vote: Some(if row.get(39) {
+                        Some(crate::types::Empty {})
+                    } else {
+                        None
+                    }),
+                }
+            });
+
+            let reply = row.get::<_, Option<_>>(2).map(|reply_id| {
+                let reply_id = CommentLocalID(reply_id);
+
+                let reply_ap_id: Option<&str> = row.get(12);
+                let reply_local: bool = row.get(13);
+
+                RespPostCommentInfo {
+                    base: RespMinimalCommentInfo {
+                        id: reply_id,
+                        content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
+                        content_html_safe: row
+                            .get::<_, Option<&str>>(4)
+                            .map(|html| crate::clean_html(&html)),
+                        remote_url: if reply_local {
+                            Some(Cow::Owned(String::from(
+                                crate::apub_util::get_local_comment_apub_id(
+                                    reply_id,
+                                    &ctx.host_url_apub,
+                                ),
+                            )))
+                        } else {
+                            reply_ap_id.map(Cow::Borrowed)
+                        },
+                    },
+                    attachments: match ctx.process_attachments_inner(
+                        row.get::<_, Option<_>>(40).map(Cow::Borrowed),
+                        reply_id,
+                    ) {
+                        None => vec![],
+                        Some(href) => vec![JustURL { url: href }],
+                    },
+                    author: if let Some(author_id) = row.get(50) {
+                        let author_id = UserLocalID(author_id);
+                        let author_local: bool = row.get(54);
+                        let author_ap_id: Option<&str> = row.get(53);
+
+                        Some(RespMinimalAuthorInfo {
+                            id: author_id,
+                            is_bot: row.get(51),
+                            local: author_local,
+                            host: crate::get_actor_host_or_unknown(
+                                author_local,
+                                author_ap_id,
+                                &ctx.local_hostname,
+                            ),
+                            remote_url: if author_local {
+                                Some(Cow::Owned(String::from(
+                                    crate::apub_util::get_local_person_apub_id(
+                                        author_id,
+                                        &ctx.host_url_apub,
+                                    ),
+                                )))
+                            } else {
+                                author_ap_id.map(Cow::Borrowed)
+                            },
+                            username: Cow::Borrowed(row.get(52)),
+                            avatar: row.get::<_, Option<&str>>(55).map(|url| RespAvatarInfo {
+                                url: ctx.process_avatar_href(url, author_id).into_owned().into(),
+                            }),
+                        })
+                    } else {
+                        None
+                    },
+                    content_markdown: row.get::<_, Option<_>>(42).map(Cow::Borrowed),
+                    created: row
+                        .get::<_, chrono::DateTime<chrono::FixedOffset>>(44)
+                        .to_rfc3339(),
+                    deleted: false,
+                    score: row.get(48),
+                    your_vote: Some(row.get::<_, bool>(49).then(|| crate::types::Empty {})),
+                    local: reply_local,
+                    replies: None,
+                }
+            });
+
+            let parent_reply = row.get::<_, Option<_>>(5).map(|parent_id| {
+                let parent_id = CommentLocalID(parent_id);
+                let parent_ap_id: Option<&str> = row.get(37);
+                let parent_local: bool = row.get(38);
+
+                RespPostCommentInfo {
+                    base: RespMinimalCommentInfo {
+                        id: parent_id,
+                        content_text: row.get::<_, Option<_>>(6).map(Cow::Borrowed),
+                        content_html_safe: row
+                            .get::<_, Option<&str>>(7)
+                            .map(|html| crate::clean_html(&html)),
+                        remote_url: if parent_local {
+                            Some(Cow::Owned(String::from(
+                                crate::apub_util::get_local_comment_apub_id(
+                                    parent_id,
+                                    &ctx.host_url_apub,
+                                ),
+                            )))
+                        } else {
+                            parent_ap_id.map(Cow::Borrowed)
+                        },
+                    },
+                    author: if let Some(author_id) = row.get(31) {
+                        let author_id = UserLocalID(author_id);
+                        let author_local: bool = row.get(35);
+                        let author_ap_id: Option<&str> = row.get(34);
+
+                        Some(RespMinimalAuthorInfo {
+                            id: author_id,
+                            is_bot: row.get(32),
+                            local: author_local,
+                            host: crate::get_actor_host_or_unknown(
+                                author_local,
+                                author_ap_id,
+                                &ctx.local_hostname,
+                            ),
+                            remote_url: if author_local {
+                                Some(Cow::Owned(String::from(
+                                    crate::apub_util::get_local_person_apub_id(
+                                        author_id,
+                                        &ctx.host_url_apub,
+                                    ),
+                                )))
+                            } else {
+                                author_ap_id.map(Cow::Borrowed)
+                            },
+                            username: Cow::Borrowed(row.get(33)),
+                            avatar: row.get::<_, Option<&str>>(36).map(|url| RespAvatarInfo {
+                                url: ctx.process_avatar_href(url, author_id).into_owned().into(),
+                            }),
+                        })
+                    } else {
+                        None
+                    },
+                    attachments: match ctx.process_attachments_inner(
+                        row.get::<_, Option<_>>(41).map(Cow::Borrowed),
+                        parent_id,
+                    ) {
+                        None => vec![],
+                        Some(href) => vec![JustURL { url: href }],
+                    },
+                    content_markdown: row.get::<_, Option<_>>(43).map(Cow::Borrowed),
+                    created: row
+                        .get::<_, chrono::DateTime<chrono::FixedOffset>>(45)
+                        .to_rfc3339(),
+                    deleted: false,
+                    local: parent_local,
+                    score: row.get(46),
+                    replies: None,
+                    your_vote: Some(row.get::<_, bool>(47).then(|| crate::types::Empty {})),
+                }
+            });
+
             let info = match kind {
                 "post_reply" => {
-                    if let Some(reply_id) = row.get(2) {
-                        if let Some(post_id) = row.get(8) {
-                            let reply_id = CommentLocalID(reply_id);
-
-                            let reply_ap_id: Option<&str> = row.get(14);
-                            let reply_local: bool = row.get(15);
-
-                            let reply_remote_url = if reply_local {
-                                Some(Cow::Owned(String::from(
-                                    crate::apub_util::get_local_comment_apub_id(
-                                        reply_id,
-                                        &ctx.host_url_apub,
-                                    ),
-                                )))
-                            } else {
-                                reply_ap_id.map(Cow::Borrowed)
-                            };
-
-                            let post_id = PostLocalID(post_id);
-
-                            let comment = RespMinimalCommentInfo {
-                                id: reply_id,
-                                remote_url: reply_remote_url,
-                                content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
-                                content_html_safe: row
-                                    .get::<_, Option<&str>>(4)
-                                    .map(|html| crate::clean_html(html)),
-                            };
-
-                            let post_ap_id: Option<&str> = row.get(10);
-                            let post_local: bool = row.get(11);
-
-                            let post_remote_url = if post_local {
-                                Some(Cow::Owned(String::from(
-                                    crate::apub_util::get_local_post_apub_id(
-                                        post_id,
-                                        &ctx.host_url_apub,
-                                    ),
-                                )))
-                            } else {
-                                post_ap_id.map(Cow::Borrowed)
-                            };
-
-                            let post = RespMinimalPostInfo {
-                                id: post_id,
-                                title: row.get(9),
-                                remote_url: post_remote_url,
-                            };
-
-                            Some(RespNotificationInfo::PostReply {
-                                reply: comment,
-                                post,
-                            })
+                    if let Some(reply) = reply {
+                        if let Some(post) = post {
+                            Some(RespNotificationInfo::PostReply { reply, post })
                         } else {
                             None
                         }
@@ -518,62 +717,17 @@ async fn route_unstable_users_notifications_list(
                     }
                 }
                 "reply_reply" => {
-                    if let Some(reply_id) = row.get(2) {
-                        if let Some(parent_id) = row.get(5) {
-                            let reply_id = CommentLocalID(reply_id);
-
-                            let reply_ap_id: Option<&str> = row.get(14);
-                            let reply_local: bool = row.get(15);
-
-                            let reply_remote_url = if reply_local {
-                                Some(Cow::Owned(String::from(
-                                    crate::apub_util::get_local_comment_apub_id(
-                                        reply_id,
-                                        &ctx.host_url_apub,
-                                    ),
-                                )))
+                    if let Some(reply) = reply {
+                        if let Some(post) = post {
+                            if let Some(parent_reply) = parent_reply {
+                                Some(RespNotificationInfo::CommentReply {
+                                    reply,
+                                    comment: parent_reply,
+                                    post,
+                                })
                             } else {
-                                reply_ap_id.map(Cow::Borrowed)
-                            };
-
-                            let reply = RespMinimalCommentInfo {
-                                id: reply_id,
-                                remote_url: reply_remote_url,
-                                content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
-                                content_html_safe: row
-                                    .get::<_, Option<&str>>(4)
-                                    .map(|html| crate::clean_html(html)),
-                            };
-                            let parent_id = CommentLocalID(parent_id);
-
-                            let post = row.get::<_, Option<_>>(6).map(|post_id| {
-                                let post_id = PostLocalID(post_id);
-                                let post_ap_id: Option<&str> = row.get(12);
-                                let post_local: bool = row.get(13);
-
-                                let post_remote_url = if post_local {
-                                    Some(Cow::Owned(String::from(
-                                        crate::apub_util::get_local_post_apub_id(
-                                            post_id,
-                                            &ctx.host_url_apub,
-                                        ),
-                                    )))
-                                } else {
-                                    post_ap_id.map(Cow::Borrowed)
-                                };
-
-                                RespMinimalPostInfo {
-                                    id: post_id,
-                                    title: row.get(7),
-                                    remote_url: post_remote_url,
-                                }
-                            });
-
-                            Some(RespNotificationInfo::CommentReply {
-                                reply,
-                                comment: parent_id,
-                                post,
-                            })
+                                None
+                            }
                         } else {
                             None
                         }
