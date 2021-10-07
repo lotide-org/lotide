@@ -94,22 +94,22 @@ pub struct RespUserInfo<'a> {
     pub your_note: Option<Option<JustContentText<'a>>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 pub enum RespNotificationInfo<'a> {
     PostReply {
-        reply: RespMinimalCommentInfo<'a>,
-        post: RespMinimalPostInfo<'a>,
+        reply: RespPostCommentInfo<'a>,
+        post: RespPostListPost<'a>,
     },
     CommentReply {
-        reply: RespMinimalCommentInfo<'a>,
-        comment: CommentLocalID,
-        post: Option<RespMinimalPostInfo<'a>>,
+        reply: RespPostCommentInfo<'a>,
+        comment: RespPostCommentInfo<'a>,
+        post: RespPostListPost<'a>,
     },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespNotification<'a> {
     #[serde(flatten)]
     pub info: RespNotificationInfo<'a>,
