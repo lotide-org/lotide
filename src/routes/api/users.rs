@@ -749,7 +749,10 @@ async fn route_unstable_users_notifications_list(
         })
         .collect();
 
-    crate::json_response(&notifications)
+    crate::json_response(&RespList {
+        items: Cow::Owned(notifications),
+        next_page: None,
+    })
 }
 
 async fn route_unstable_users_get(

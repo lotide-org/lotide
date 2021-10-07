@@ -94,7 +94,7 @@ pub struct RespUserInfo<'a> {
     pub your_note: Option<Option<JustContentText<'a>>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 pub enum RespNotificationInfo<'a> {
@@ -109,7 +109,7 @@ pub enum RespNotificationInfo<'a> {
     },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RespNotification<'a> {
     #[serde(flatten)]
     pub info: RespNotificationInfo<'a>,
