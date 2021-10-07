@@ -1884,26 +1884,52 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "array",
-									"items": {
-										"type": "object",
-										"required": ["unseen", "type"],
-										"properties": {
-											"unseen": {
-												"type": "boolean",
-												"description": "Whether this notification was generated since the last time notifications were checked."
-											},
-											"type": {
-												"type": "string",
-												"enum": ["post_reply", "comment_reply"]
-											},
-											"reply": {
-												"$ref": "#/components/schemas/MinimalCommentInfo"
-											},
-											"post": {
-												"$ref": "#/components/schemas/MinimalPostInfo"
-											},
-											"comment": {"type": "integer"}
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"allOf": [
+													{
+														"type": "object",
+														"required": ["unseen"],
+														"properties": {
+															"unseen": {
+																"type": "boolean",
+																"description": "Whether this notification was generated since the last time notifications were checked."
+															}
+														}
+													},
+													{
+														"oneOf": [
+															{
+																"type": "object",
+																"required": ["type", "reply", "post"],
+																"properties": {
+																	"type": {"type": "string", "enum": ["post_reply"]},
+																	"reply": {"$ref": "#/components/schemas/PostCommentInfo"},
+																	"post": {"$ref": "#/components/schemas/PostListPost"}
+																}
+															},
+															{
+																"type": "object",
+																"required": ["type", "reply", "post", "comment"],
+																"properties": {
+																	"type": {"type": "string", "enum": ["comment_reply"]},
+																	"reply": {"$ref": "#/components/schemas/PostCommentInfo"},
+																	"comment": {"$ref": "#/components/schemas/PostCommentInfo"},
+																	"post": {"$ref": "#/components/schemas/PostListPost"}
+																}
+															}
+														]
+													}
+												]
+											}
+										},
+										"next_page": {
+											"type": "string",
+											"nullable": true
 										}
 									}
 								}
