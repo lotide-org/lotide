@@ -624,7 +624,11 @@ async fn route_unstable_users_notifications_list(
                         .to_rfc3339(),
                     deleted: false,
                     score: row.get(48),
-                    your_vote: Some(row.get::<_, bool>(49).then(|| crate::types::Empty {})),
+                    your_vote: Some(if row.get::<_, bool>(49) {
+                        Some(crate::types::Empty {})
+                    } else {
+                        None
+                    }),
                     local: reply_local,
                     replies: if row.get(57) {
                         None
@@ -707,7 +711,11 @@ async fn route_unstable_users_notifications_list(
                     local: parent_local,
                     score: row.get(46),
                     replies: None,
-                    your_vote: Some(row.get::<_, bool>(47).then(|| crate::types::Empty {})),
+                    your_vote: Some(if row.get::<_, bool>(47) {
+                        Some(crate::types::Empty {})
+                    } else {
+                        None
+                    }),
                 }
             });
 
