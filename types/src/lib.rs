@@ -48,6 +48,7 @@ id_wrapper!(CommentLocalID);
 id_wrapper!(CommunityLocalID);
 id_wrapper!(PostLocalID);
 id_wrapper!(UserLocalID);
+id_wrapper!(NotificationSubscriptionID);
 
 #[derive(Serialize, Default, Clone, Copy)]
 pub struct Empty {}
@@ -331,4 +332,13 @@ pub enum ThingLocalRef {
     Comment(CommentLocalID),
     User(UserLocalID),
     Community(CommunityLocalID),
+}
+
+#[derive(Deserialize)]
+pub struct NotificationSubscriptionCreateQuery<'a> {
+    #[serde(rename = "type")]
+    pub type_: Cow<'a, str>,
+    pub endpoint: Cow<'a, str>,
+    pub p256dh_key: Cow<'a, str>,
+    pub auth_key: Cow<'a, str>,
 }

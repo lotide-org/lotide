@@ -45,7 +45,7 @@ impl std::fmt::Display for BaseURL {
 
 impl From<BaseURL> for String {
     fn from(src: BaseURL) -> String {
-        src.0.into_string()
+        src.0.into()
     }
 }
 
@@ -152,6 +152,8 @@ pub struct BaseContext {
     pub apub_proxy_rewrites: bool,
     pub media_location: Option<std::path::PathBuf>,
     pub api_ratelimit: henry::RatelimitBucket<std::net::IpAddr>,
+    pub vapid_public_key_base64: String,
+    pub vapid_signature_builder: web_push::PartialVapidSignatureBuilder,
 
     pub local_hostname: String,
 
@@ -921,6 +923,35 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         16,
     );
 
+    let vapid_key: openssl::ec::EcKey<openssl::pkey::Private> = {
+        let db = db_pool.get().await?;
+        let row = db
+            .query_one("SELECT vapid_private_key FROM site WHERE local=TRUE", &[])
+            .await?;
+        match row.get(0) {
+            Some(bytes) => openssl::ec::EcKey::private_key_from_pem(bytes)?,
+            None => {
+                let key = openssl::ec::EcKey::generate(
+                    openssl::ec::EcGroup::from_curve_name(openssl::nid::Nid::X9_62_PRIME256V1)?
+                        .as_ref(),
+                )?;
+                let private_key_bytes = key.private_key_to_pem()?;
+                db.execute(
+                    "UPDATE site SET vapid_private_key=$1 WHERE local=TRUE",
+                    &[&private_key_bytes],
+                )
+                .await?;
+
+                key
+            }
+        }
+    };
+
+    let vapid_signature_builder = web_push::VapidSignatureBuilder::from_pem_no_sub::<&[u8]>(
+        vapid_key.private_key_to_pem()?.as_ref(),
+    )?;
+    let vapid_public_key_base64 = base64::encode(vapid_signature_builder.get_public_key());
+
     let host_url_apub: url::Url = config
         .host_url_activitypub
         .parse()
@@ -985,6 +1016,8 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
         apub_proxy_rewrites: config.apub_proxy_rewrites,
         api_ratelimit: henry::RatelimitBucket::new(300),
+        vapid_public_key_base64,
+        vapid_signature_builder,
 
         worker_trigger,
     });
