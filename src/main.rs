@@ -950,7 +950,10 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let vapid_signature_builder = web_push::VapidSignatureBuilder::from_pem_no_sub::<&[u8]>(
         vapid_key.private_key_to_pem()?.as_ref(),
     )?;
-    let vapid_public_key_base64 = base64::encode(vapid_signature_builder.get_public_key());
+    let vapid_public_key_base64 = base64::encode_config(
+        vapid_signature_builder.get_public_key(),
+        base64::Config::new(base64::CharacterSet::UrlSafe, false),
+    );
 
     let host_url_apub: url::Url = config
         .host_url_activitypub
