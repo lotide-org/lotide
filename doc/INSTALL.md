@@ -1,6 +1,6 @@
 # lotide installation
 ## For production
-Requirements: rustc (>=1.47.0), cargo, openssl, and a PostgreSQL database
+Requirements: rustc (>=1.51.0), cargo, openssl, and a PostgreSQL database
 
 Set these environment variables:
  - DATABASE_URL - Credentials for database connection.
