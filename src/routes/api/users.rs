@@ -775,7 +775,14 @@ async fn route_unstable_users_notifications_subscriptions_create(
 
     let user_id = user_id.require_me(&req, &db).await?;
 
-    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let (req_parts, body) = req.into_parts();
+
+    let language = req_parts
+        .headers
+        .get(hyper::header::ACCEPT_LANGUAGE)
+        .and_then(|x| x.to_str().ok());
+
+    let body = hyper::body::to_bytes(body).await?;
     let body: NotificationSubscriptionCreateQuery = serde_json::from_slice(&body)?;
 
     if body.type_ != "web_push" {
@@ -786,8 +793,8 @@ async fn route_unstable_users_notifications_subscriptions_create(
     }
 
     let row = db.query_one(
-        "INSERT INTO person_notification_subscription (person, endpoint, p256dh_key, auth_key) VALUES ($1, $2, $3, $4) RETURNING id",
-        &[&user_id, &body.endpoint, &body.p256dh_key, &body.auth_key],
+        "INSERT INTO person_notification_subscription (person, endpoint, p256dh_key, auth_key, language) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        &[&user_id, &body.endpoint, &body.p256dh_key, &body.auth_key, &language],
     ).await?;
     let id = NotificationSubscriptionID(row.get(0));
 
