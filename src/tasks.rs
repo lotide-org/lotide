@@ -1,4 +1,7 @@
-use crate::types::{ActorLocalRef, CommunityLocalID, PostLocalID};
+use crate::types::{
+    ActorLocalRef, CommentLocalID, CommunityLocalID, NotificationID, NotificationSubscriptionID,
+    PostLocalID, UserLocalID,
+};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -184,6 +187,204 @@ impl TaskDef for FetchCommunityFeatured {
             "UPDATE post SET sticky=COALESCE((ap_id = ANY($1)) OR (id = ANY($2)), FALSE) WHERE community=$3",
             &[&remote_items, &local_items, &self.community_id],
         ).await?;
+
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct SendNotification {
+    pub notification: NotificationID,
+}
+
+#[async_trait]
+impl TaskDef for SendNotification {
+    const KIND: &'static str = "send_notification";
+
+    async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
+        enum NotificationSendInfo<'a> {
+            PostReply {
+                href: crate::BaseURL,
+                reply_content: &'a str,
+                post_title: &'a str,
+            },
+            ReplyReply {
+                href: crate::BaseURL,
+                reply_content: &'a str,
+                post_title: &'a str,
+            },
+        }
+
+        let db = ctx.db_pool.get().await?;
+
+        let row = db.query_one("SELECT notification.kind, notification.to_user, reply.id, reply.content_text, reply.content_markdown, reply.content_html, parent_post.title FROM notification LEFT OUTER JOIN reply ON (reply.id = notification.reply) LEFT OUTER JOIN post AS parent_post ON (parent_post.id = notification.parent_post) WHERE notification.id=$1", &[&self.notification]).await?;
+
+        let user = UserLocalID(row.get(1));
+
+        let subscriptions_rows = db
+            .query(
+                "SELECT id, language FROM person_notification_subscription WHERE person=$1",
+                &[&user],
+            )
+            .await?;
+
+        let build_content = |info| -> Vec<_> {
+            subscriptions_rows
+                .into_iter()
+                .map(|row| {
+                    let id = NotificationSubscriptionID(row.get(0));
+                    let language_req: Option<&str> = row.get(1);
+
+                    let lang = crate::get_lang_for_header(language_req);
+
+                    match &info {
+                        NotificationSendInfo::PostReply {
+                            href,
+                            reply_content,
+                            post_title,
+                        } => SendNotificationForSubscription {
+                            subscription: id,
+                            href: Cow::Owned(href.to_string()),
+                            title: Cow::Owned(
+                                lang.tr(
+                                    "notification_title_post_reply",
+                                    Some(&fluent::fluent_args!["post_title" => *post_title]),
+                                )
+                                .into_owned(),
+                            ),
+                            body: Cow::Borrowed(reply_content),
+                        },
+                        NotificationSendInfo::ReplyReply {
+                            href,
+                            reply_content,
+                            post_title,
+                        } => SendNotificationForSubscription {
+                            subscription: id,
+                            href: Cow::Owned(href.to_string()),
+                            title: Cow::Owned(
+                                lang.tr(
+                                    "notification_title_reply_reply",
+                                    Some(&fluent::fluent_args!["post_title" => *post_title]),
+                                )
+                                .into_owned(),
+                            ),
+                            body: Cow::Borrowed(reply_content),
+                        },
+                    }
+                })
+                .collect()
+        };
+
+        let new_tasks = match row.get(0) {
+            "post_reply" => {
+                let content = row
+                    .get::<_, Option<&str>>(3)
+                    .or_else(|| row.get(4))
+                    .or_else(|| row.get(5));
+
+                if let Some(content) = content {
+                    let id = CommentLocalID(row.get(2));
+
+                    let post_title: Option<&str> = row.get(6);
+                    if let Some(post_title) = post_title {
+                        Some(build_content(NotificationSendInfo::PostReply {
+                            href: crate::apub_util::get_local_comment_apub_id(
+                                id,
+                                &ctx.host_url_apub,
+                            ),
+                            reply_content: content,
+                            post_title: post_title,
+                        }))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            "reply_reply" => {
+                let content = row
+                    .get::<_, Option<&str>>(3)
+                    .or_else(|| row.get(4))
+                    .or_else(|| row.get(5));
+
+                if let Some(content) = content {
+                    let id = CommentLocalID(row.get(2));
+
+                    let post_title: Option<&str> = row.get(6);
+                    if let Some(post_title) = post_title {
+                        Some(build_content(NotificationSendInfo::ReplyReply {
+                            href: crate::apub_util::get_local_comment_apub_id(
+                                id,
+                                &ctx.host_url_apub,
+                            ),
+                            reply_content: content,
+                            post_title: post_title,
+                        }))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        if let Some(new_tasks) = new_tasks {
+            ctx.enqueue_tasks(&new_tasks).await?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct SendNotificationForSubscription<'a> {
+    pub subscription: NotificationSubscriptionID,
+    pub title: Cow<'a, str>,
+    pub body: Cow<'a, str>,
+    pub href: Cow<'a, str>,
+}
+
+#[async_trait]
+impl<'a> TaskDef for SendNotificationForSubscription<'a> {
+    const KIND: &'static str = "send_notification_for_subscription";
+
+    async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
+        let db = ctx.db_pool.get().await?;
+
+        let row = db.query_one("SELECT endpoint, p256dh_key, auth_key FROM person_notification_subscription WHERE id=$1", &[&self.subscription]).await?;
+        let endpoint: &str = row.get(0);
+        let p256dh_key: &str = row.get(1);
+        let auth_key: &str = row.get(2);
+
+        let payload = serde_json::json!({
+            "title": (self.title),
+            "body": (self.body),
+            "href": (self.href),
+        });
+        let payload = serde_json::to_vec(&payload)?;
+
+        let subscription = web_push::SubscriptionInfo::new(endpoint, p256dh_key, auth_key);
+
+        let mut builder = web_push::WebPushMessageBuilder::new(&subscription)?;
+        builder.set_vapid_signature(
+            ctx.vapid_signature_builder
+                .clone()
+                .add_sub_info(&subscription)
+                .build()?,
+        );
+        builder.set_payload(web_push::ContentEncoding::Aes128Gcm, &payload);
+
+        let message = builder.build()?;
+
+        let req = web_push::request_builder::build_request(message);
+        let res = ctx.http_client.request(req).await?;
+        let code = res.status();
+        let body = hyper::body::to_bytes(res.into_body()).await?;
+
+        web_push::request_builder::parse_response(code, body.to_vec())?;
 
         Ok(())
     }

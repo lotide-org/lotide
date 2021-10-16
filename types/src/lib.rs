@@ -48,6 +48,7 @@ id_wrapper!(CommentLocalID);
 id_wrapper!(CommunityLocalID);
 id_wrapper!(PostLocalID);
 id_wrapper!(UserLocalID);
+id_wrapper!(NotificationID);
 id_wrapper!(NotificationSubscriptionID);
 
 #[derive(Serialize, Default, Clone, Copy)]

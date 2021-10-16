@@ -15,7 +15,7 @@ mod tasks;
 mod worker;
 
 use self::config::Config;
-use self::types::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
+use self::types::{CommentLocalID, CommunityLocalID, NotificationID, PostLocalID, UserLocalID};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(try_from = "url::Url")]
@@ -221,6 +221,27 @@ impl BaseContext {
         db.execute(
             "INSERT INTO task (kind, params, max_attempts, created_at) VALUES ($1, $2, $3, current_timestamp)",
             &[&T::KIND, &tokio_postgres::types::Json(task), &T::MAX_ATTEMPTS],
+        ).await?;
+
+        match self.worker_trigger.clone().try_send(()) {
+            Ok(_) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                Err(crate::Error::InternalStrStatic("Worker channel closed"))
+            }
+        }
+    }
+
+    pub async fn enqueue_tasks<T: crate::tasks::TaskDef>(
+        &self,
+        tasks: &[T],
+    ) -> Result<(), crate::Error> {
+        let db = self.db_pool.get().await?;
+
+        let tasks_param: Vec<_> = tasks.iter().map(tokio_postgres::types::Json).collect();
+
+        db.execute(
+            "INSERT INTO task (kind, max_attempts, created_at, params) SELECT $1, $3, current_timestamp, * FROM UNNEST($2::JSON[])",
+            &[&T::KIND, &tasks_param, &T::MAX_ATTEMPTS],
         ).await?;
 
         match self.worker_trigger.clone().try_send(()) {
@@ -512,12 +533,16 @@ impl Translator {
 }
 
 pub fn get_lang_for_req(req: &impl ReqParts) -> Translator {
+    get_lang_for_header(
+        req.headers()
+            .get(hyper::header::ACCEPT_LANGUAGE)
+            .and_then(|x| x.to_str().ok()),
+    )
+}
+
+pub fn get_lang_for_header(accept_language: Option<&str>) -> Translator {
     let default = unic_langid::langid!("en");
-    let languages = match req
-        .headers()
-        .get(hyper::header::ACCEPT_LANGUAGE)
-        .and_then(|x| x.to_str().ok())
-    {
+    let languages = match accept_language {
         Some(accept_language) => {
             let requested = fluent_langneg::accepted_languages::parse(accept_language);
             fluent_langneg::negotiate_languages(
@@ -798,10 +823,14 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                                 let comment_id = comment.id;
                                 crate::spawn_task(async move {
                                     let db = ctx.db_pool.get().await?;
-                                    db.execute(
-                                        "INSERT INTO notification (kind, created_at, to_user, reply, parent_reply) VALUES ('reply_reply', current_timestamp, $1, $2, $3)",
+                                    let row = db.query_one(
+                                        "INSERT INTO notification (kind, created_at, to_user, reply, parent_reply) VALUES ('reply_reply', current_timestamp, $1, $2, $3) RETURNING id",
                                         &[&parent_author_id, &comment_id.raw(), &parent_id.raw()],
                                     ).await?;
+                                    ctx.enqueue_task(&tasks::SendNotification {
+                                        notification: NotificationID(row.get(0)),
+                                    })
+                                    .await?;
 
                                     Ok(())
                                 });
@@ -818,10 +847,14 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             let comment_post = comment.post;
                             crate::spawn_task(async move {
                                 let db = ctx.db_pool.get().await?;
-                                db.execute(
-                                    "INSERT INTO notification (kind, created_at, to_user, reply, parent_post) VALUES ('post_reply', current_timestamp, $1, $2, $3)",
+                                let row = db.query_one(
+                                    "INSERT INTO notification (kind, created_at, to_user, reply, parent_post) VALUES ('post_reply', current_timestamp, $1, $2, $3) RETURNING id",
                                     &[&post_or_parent_author_local_id.raw(), &comment_id.raw(), &comment_post.raw()],
                                 ).await?;
+                                ctx.enqueue_task(&tasks::SendNotification {
+                                    notification: NotificationID(row.get(0)),
+                                })
+                                .await?;
 
                                 Ok(())
                             });
