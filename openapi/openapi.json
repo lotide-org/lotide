@@ -1062,7 +1062,7 @@
 							"application/json": {
 								"schema": {
 									"type": "object",
-									"required": ["software"],
+									"required": ["software", "description", "web_push_vapid_key"],
 									"properties": {
 										"software": {
 											"type": "object",
@@ -1071,6 +1071,12 @@
 												"name": {"type": "string", "example": "lotide"},
 												"version": {"type": "string", "example": "0.5.0-pre"}
 											}
+										},
+										"description": {
+											"type": "string"
+										},
+										"web_push_vapid_key": {
+											"type": "string"
 										}
 									}
 								}
@@ -1938,6 +1944,55 @@
 					}
 				},
 				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/users/~me/notifications:subscriptions": {
+			"post": {
+				"summary": "Create a notifications subscription",
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["type", "endpoint", "p256dh_key", "auth_key"],
+								"properties": {
+									"type": {
+										"type": "string",
+										"enum": ["web_push"]
+									},
+									"endpoint": {
+										"type": "string"
+									},
+									"p256dh_key": {
+										"type": "string"
+									},
+									"auth_key": {
+										"type": "string"
+									}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully registered subscription",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["id"],
+									"properties": {
+										"id": {
+											"type": "integer"
+										}
+									}
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 	}
