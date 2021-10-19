@@ -668,6 +668,7 @@ async fn route_unstable_instance_get(
     let description: &str = row.get(0);
 
     let body = serde_json::json!({
+        "web_push_vapid_key": ctx.vapid_public_key_base64,
         "description": description,
         "software": {
             "name": "lotide",

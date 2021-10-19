@@ -1,7 +1,8 @@
 use super::InvalidPage;
 use crate::types::{
-    CommentLocalID, CommunityLocalID, JustContentText, JustURL, MaybeIncludeYour, PostLocalID,
-    RespAvatarInfo, RespList, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    CommentLocalID, CommunityLocalID, JustContentText, JustID, JustURL, MaybeIncludeYour,
+    NotificationSubscriptionCreateQuery, NotificationSubscriptionID, PostLocalID, RespAvatarInfo,
+    RespList, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespMinimalCommunityInfo, RespMinimalPostInfo, RespNotification, RespNotificationInfo,
     RespPostCommentInfo, RespPostListPost, RespThingInfo, RespUserInfo, UserLocalID,
 };
@@ -763,6 +764,43 @@ async fn route_unstable_users_notifications_list(
     })
 }
 
+async fn route_unstable_users_notifications_subscriptions_create(
+    params: (UserIDOrMe,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (user_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let user_id = user_id.require_me(&req, &db).await?;
+
+    let (req_parts, body) = req.into_parts();
+
+    let language = req_parts
+        .headers
+        .get(hyper::header::ACCEPT_LANGUAGE)
+        .and_then(|x| x.to_str().ok());
+
+    let body = hyper::body::to_bytes(body).await?;
+    let body: NotificationSubscriptionCreateQuery = serde_json::from_slice(&body)?;
+
+    if body.type_ != "web_push" {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "Unknown subscription type",
+        )));
+    }
+
+    let row = db.query_one(
+        "INSERT INTO person_notification_subscription (person, endpoint, p256dh_key, auth_key, language) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        &[&user_id, &body.endpoint, &body.p256dh_key, &body.auth_key, &language],
+    ).await?;
+    let id = NotificationSubscriptionID(row.get(0));
+
+    crate::json_response(&JustID { id })
+}
+
 async fn route_unstable_users_get(
     params: (UserIDOrMe,),
     ctx: Arc<crate::RouteContext>,
@@ -1108,6 +1146,13 @@ pub fn route_users() -> crate::RouteNode<()> {
                     "notifications",
                     crate::RouteNode::new()
                         .with_handler_async("GET", route_unstable_users_notifications_list),
+                )
+                .with_child(
+                    "notifications:subscriptions",
+                    crate::RouteNode::new().with_handler_async(
+                        "POST",
+                        route_unstable_users_notifications_subscriptions_create,
+                    ),
                 )
                 .with_child(
                     "things",

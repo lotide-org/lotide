@@ -15,7 +15,7 @@ mod tasks;
 mod worker;
 
 use self::config::Config;
-use self::types::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
+use self::types::{CommentLocalID, CommunityLocalID, NotificationID, PostLocalID, UserLocalID};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(try_from = "url::Url")]
@@ -45,7 +45,7 @@ impl std::fmt::Display for BaseURL {
 
 impl From<BaseURL> for String {
     fn from(src: BaseURL) -> String {
-        src.0.into_string()
+        src.0.into()
     }
 }
 
@@ -152,6 +152,8 @@ pub struct BaseContext {
     pub apub_proxy_rewrites: bool,
     pub media_location: Option<std::path::PathBuf>,
     pub api_ratelimit: henry::RatelimitBucket<std::net::IpAddr>,
+    pub vapid_public_key_base64: String,
+    pub vapid_signature_builder: web_push::PartialVapidSignatureBuilder,
 
     pub local_hostname: String,
 
@@ -219,6 +221,27 @@ impl BaseContext {
         db.execute(
             "INSERT INTO task (kind, params, max_attempts, created_at) VALUES ($1, $2, $3, current_timestamp)",
             &[&T::KIND, &tokio_postgres::types::Json(task), &T::MAX_ATTEMPTS],
+        ).await?;
+
+        match self.worker_trigger.clone().try_send(()) {
+            Ok(_) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                Err(crate::Error::InternalStrStatic("Worker channel closed"))
+            }
+        }
+    }
+
+    pub async fn enqueue_tasks<T: crate::tasks::TaskDef>(
+        &self,
+        tasks: &[T],
+    ) -> Result<(), crate::Error> {
+        let db = self.db_pool.get().await?;
+
+        let tasks_param: Vec<_> = tasks.iter().map(tokio_postgres::types::Json).collect();
+
+        db.execute(
+            "INSERT INTO task (kind, max_attempts, created_at, params) SELECT $1, $3, current_timestamp, * FROM UNNEST($2::JSON[])",
+            &[&T::KIND, &tasks_param, &T::MAX_ATTEMPTS],
         ).await?;
 
         match self.worker_trigger.clone().try_send(()) {
@@ -510,12 +533,16 @@ impl Translator {
 }
 
 pub fn get_lang_for_req(req: &impl ReqParts) -> Translator {
+    get_lang_for_header(
+        req.headers()
+            .get(hyper::header::ACCEPT_LANGUAGE)
+            .and_then(|x| x.to_str().ok()),
+    )
+}
+
+pub fn get_lang_for_header(accept_language: Option<&str>) -> Translator {
     let default = unic_langid::langid!("en");
-    let languages = match req
-        .headers()
-        .get(hyper::header::ACCEPT_LANGUAGE)
-        .and_then(|x| x.to_str().ok())
-    {
+    let languages = match accept_language {
         Some(accept_language) => {
             let requested = fluent_langneg::accepted_languages::parse(accept_language);
             fluent_langneg::negotiate_languages(
@@ -796,10 +823,14 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                                 let comment_id = comment.id;
                                 crate::spawn_task(async move {
                                     let db = ctx.db_pool.get().await?;
-                                    db.execute(
-                                        "INSERT INTO notification (kind, created_at, to_user, reply, parent_reply) VALUES ('reply_reply', current_timestamp, $1, $2, $3)",
+                                    let row = db.query_one(
+                                        "INSERT INTO notification (kind, created_at, to_user, reply, parent_reply) VALUES ('reply_reply', current_timestamp, $1, $2, $3) RETURNING id",
                                         &[&parent_author_id, &comment_id.raw(), &parent_id.raw()],
                                     ).await?;
+                                    ctx.enqueue_task(&tasks::SendNotification {
+                                        notification: NotificationID(row.get(0)),
+                                    })
+                                    .await?;
 
                                     Ok(())
                                 });
@@ -816,10 +847,14 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             let comment_post = comment.post;
                             crate::spawn_task(async move {
                                 let db = ctx.db_pool.get().await?;
-                                db.execute(
-                                    "INSERT INTO notification (kind, created_at, to_user, reply, parent_post) VALUES ('post_reply', current_timestamp, $1, $2, $3)",
+                                let row = db.query_one(
+                                    "INSERT INTO notification (kind, created_at, to_user, reply, parent_post) VALUES ('post_reply', current_timestamp, $1, $2, $3) RETURNING id",
                                     &[&post_or_parent_author_local_id.raw(), &comment_id.raw(), &comment_post.raw()],
                                 ).await?;
+                                ctx.enqueue_task(&tasks::SendNotification {
+                                    notification: NotificationID(row.get(0)),
+                                })
+                                .await?;
 
                                 Ok(())
                             });
@@ -921,6 +956,38 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         16,
     );
 
+    let vapid_key: openssl::ec::EcKey<openssl::pkey::Private> = {
+        let db = db_pool.get().await?;
+        let row = db
+            .query_one("SELECT vapid_private_key FROM site WHERE local=TRUE", &[])
+            .await?;
+        match row.get(0) {
+            Some(bytes) => openssl::ec::EcKey::private_key_from_pem(bytes)?,
+            None => {
+                let key = openssl::ec::EcKey::generate(
+                    openssl::ec::EcGroup::from_curve_name(openssl::nid::Nid::X9_62_PRIME256V1)?
+                        .as_ref(),
+                )?;
+                let private_key_bytes = key.private_key_to_pem()?;
+                db.execute(
+                    "UPDATE site SET vapid_private_key=$1 WHERE local=TRUE",
+                    &[&private_key_bytes],
+                )
+                .await?;
+
+                key
+            }
+        }
+    };
+
+    let vapid_signature_builder = web_push::VapidSignatureBuilder::from_pem_no_sub::<&[u8]>(
+        vapid_key.private_key_to_pem()?.as_ref(),
+    )?;
+    let vapid_public_key_base64 = base64::encode_config(
+        vapid_signature_builder.get_public_key(),
+        base64::Config::new(base64::CharacterSet::UrlSafe, false),
+    );
+
     let host_url_apub: url::Url = config
         .host_url_activitypub
         .parse()
@@ -985,6 +1052,8 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
         apub_proxy_rewrites: config.apub_proxy_rewrites,
         api_ratelimit: henry::RatelimitBucket::new(300),
+        vapid_public_key_base64,
+        vapid_signature_builder,
 
         worker_trigger,
     });
