@@ -60,7 +60,7 @@ v_htmlescape = "0.12.0"
 config = { version = "0.11.0", default-features = false, features = ["ini"] }
 clap = "2.33.3"
 bytes = "1.0.1"
-atom_syndication = { git = "https://github.com/rust-syndication/atom", rev = "927ea48" }
+atom_syndication = "0.11.0"
 lotide_types = { path = "./types" }
 date_duration = { git = "https://git.sr.ht/~vpzom/date_duration", rev = "c675b0d7" }
 web-push = "0.9.1"
