@@ -621,7 +621,8 @@ dependencies = [
 [[package]]
 name = "date_duration"
 version = "0.1.0"
-source = "git+https://git.sr.ht/~vpzom/date_duration?rev=c675b0d7#c675b0d771e18738c9715b81f813ac98bc09c1f2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d352b2a5188c539bf8effec3f00c694e1f1218b13d008761e26178983a73ceae"
 
 [[package]]
 name = "deadpool"
