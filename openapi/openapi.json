@@ -18,12 +18,12 @@
 			},
 			"LoginUserInfo": {
 				"type": "object",
-				"required": ["id", "username", "is_site_admin", "has_unread_notification"],
+				"required": ["id", "username", "is_site_admin", "has_unread_notifications"],
 				"properties": {
 					"id": {"type": "integer"},
 					"username": {"type": "string"},
 					"is_site_admin": {"type": "boolean"},
-					"has_unread_notification": {"type": "boolean"}
+					"has_unread_notifications": {"type": "boolean"}
 				}
 			},
 			"MinimalCommentInfo": {
