@@ -534,32 +534,50 @@ async fn ingest_postlike(
     found_from: FoundFrom,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let (to, in_reply_to, obj_id) = match obj.deref() {
-        KnownObject::Page(obj) => (obj.to(), None, obj.id_unchecked()),
-        KnownObject::Image(obj) => (obj.to(), None, obj.id_unchecked()),
-        KnownObject::Article(obj) => (obj.to(), None, obj.id_unchecked()),
-        KnownObject::Note(obj) => (obj.to(), obj.in_reply_to(), obj.id_unchecked()),
-        _ => (None, None, None),
+    let (ext, to, in_reply_to, obj_id) = match obj.deref() {
+        KnownObject::Page(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
+        KnownObject::Image(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
+        KnownObject::Article(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
+        KnownObject::Note(obj) => (
+            &obj.ext_one,
+            obj.to(),
+            obj.in_reply_to(),
+            obj.id_unchecked(),
+        ),
+        _ => return Ok(None), // shouldn't happen?
     };
+    let target = &ext.target;
 
-    let community_found = match found_from {
-        FoundFrom::Announce {
-            community_local_id,
-            community_is_local,
-            ..
-        } => Some((community_local_id, community_is_local)),
-        _ => match to {
-            None => None,
-            Some(maybe) => maybe
-                .iter()
-                .filter_map(|any| {
-                    any.as_xsd_any_uri()
-                        .and_then(|uri| {
-                            super::maybe_get_local_community_id_from_uri(uri, &ctx.host_url_apub)
-                        })
-                        .map(|id| (id, true))
-                })
-                .next(),
+    let community_found = match target
+        .as_ref()
+        .and_then(|target| target.as_one().and_then(|x| x.id()))
+        .map(|target_id| {
+            super::maybe_get_local_community_id_from_outbox_uri(target_id, &ctx.host_url_apub)
+        }) {
+        Some(Some(community_local_id)) => Some((community_local_id, true)),
+        Some(None) => None,
+        None => match found_from {
+            FoundFrom::Announce {
+                community_local_id,
+                community_is_local,
+                ..
+            } => Some((community_local_id, community_is_local)),
+            _ => match to {
+                None => None,
+                Some(maybe) => maybe
+                    .iter()
+                    .filter_map(|any| {
+                        any.as_xsd_any_uri()
+                            .and_then(|uri| {
+                                super::maybe_get_local_community_id_from_uri(
+                                    uri,
+                                    &ctx.host_url_apub,
+                                )
+                            })
+                            .map(|id| (id, true))
+                    })
+                    .next(),
+            },
         },
     };
 
@@ -1033,7 +1051,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
     is_announce: Option<&url::Url>,
-    obj: Verified<activitystreams::object::Object<Kind>>,
+    obj: Verified<super::ExtendedPostlike<activitystreams::object::Object<Kind>>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<PostLocalID>, crate::Error> {
     let title = obj

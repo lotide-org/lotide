@@ -82,10 +82,10 @@ pub enum KnownObject {
             FeaturedExtension,
         >,
     ),
-    Article(activitystreams::object::Article),
-    Image(activitystreams::object::Image),
-    Page(activitystreams::object::Page),
-    Note(activitystreams::object::Note),
+    Article(ExtendedPostlike<activitystreams::object::Article>),
+    Image(ExtendedPostlike<activitystreams::object::Image>),
+    Page(ExtendedPostlike<activitystreams::object::Page>),
+    Note(ExtendedPostlike<activitystreams::object::Note>),
 }
 
 #[derive(Deserialize)]
@@ -119,6 +119,14 @@ pub struct FeaturedExtension {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub featured: Option<url::Url>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TargetExtension {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>>,
+}
+
+pub type ExtendedPostlike<T> = activitystreams_ext::Ext1<T, TargetExtension>;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -1450,6 +1458,29 @@ pub fn maybe_get_local_community_id_from_uri(
         if let Some(rest) = path.strip_prefix("/communities/") {
             if let Ok(local_community_id) = rest.parse() {
                 Some(local_community_id)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    }
+}
+
+pub fn maybe_get_local_community_id_from_outbox_uri(
+    uri: &url::Url,
+    host_url_apub: &BaseURL,
+) -> Option<CommunityLocalID> {
+    if let Some(path) = try_strip_host(uri, host_url_apub) {
+        if let Some(rest) = path.strip_prefix("/communities/") {
+            if let Some(rest) = rest.strip_suffix("/outbox") {
+                if let Ok(local_community_id) = rest.parse() {
+                    Some(local_community_id)
+                } else {
+                    None
+                }
             } else {
                 None
             }
