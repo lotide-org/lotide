@@ -1,0 +1,27 @@
+The following are URL formats used for ActivityPub objects in lotide. Frontends should serve pages or redirects at these URLs if a relevant page exists (many of these are more internal and probably won't be exposed to users).
+
+- /comments/{commentID}
+- /comments/{commentID}/create (the Create activity for the comment)
+- /comments/{commentID}/delete (the Delete activity for the comment if deleted)
+- /comments/{commentID}/likes
+- /comments/{commentID}/likes/{userID}
+- /comment\_like\_undos/{undoID}
+- /communities/{communityID}
+- /communities/{communityID}/comments/{commentID}/announce (the Announce activity for the comment)
+- /communities/{communityID}/featured (Collection of sticky posts)
+- /communities/{communityID}/followers
+- /communities/{communityID}/followers/{userID}
+- /communities/{communityID}/followers/{userID}/accept
+- /communities/{communityID}/outbox
+- /communities/{communityID}/outbox/page/{pageID}
+- /communities/{communityID}/updates/{updateID} (an Update activity for the community details)
+- /posts/{postID}
+- /posts/{postID}/create (the Create activity for the post)
+- /posts/{postID}/delete (the Delete activity for the post if deleted)
+- /posts/{postID}/likes
+- /posts/{postID}/likes/{userID}
+- /post\_like\_undos/{undoID}
+- /users/{userID}
+- /users/{userID}/inbox
+- /users/{userID}/outbox
+- /users/{userID}/outbox/page/{pageID}
