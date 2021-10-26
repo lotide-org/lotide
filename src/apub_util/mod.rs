@@ -58,6 +58,8 @@ pub enum KnownObject {
     Create(activitystreams::activity::Create),
     Delete(activitystreams::activity::Delete),
     Follow(activitystreams::activity::Follow),
+    Join(activitystreams::activity::Join),
+    Leave(activitystreams::activity::Leave),
     Like(activitystreams::activity::Like),
     Undo(activitystreams::activity::Undo),
     Update(activitystreams::activity::Update),
@@ -123,6 +125,48 @@ pub struct FeaturedExtension {
 pub enum AnyCollection {
     Unordered(activitystreams::collection::UnorderedCollection),
     Ordered(activitystreams::collection::OrderedCollection),
+}
+
+#[derive(Clone)]
+pub enum FollowLike {
+    Follow(activitystreams::activity::Follow),
+    Join(activitystreams::activity::Join),
+}
+
+impl activitystreams::markers::Base for FollowLike {}
+
+impl FollowLike {
+    pub fn id_unchecked(&self) -> Option<&url::Url> {
+        match self {
+            FollowLike::Follow(follow) => follow.id_unchecked(),
+            FollowLike::Join(join) => join.id_unchecked(),
+        }
+    }
+
+    pub fn take_id(&mut self) -> Option<url::Url> {
+        match self {
+            FollowLike::Follow(follow) => follow.take_id(),
+            FollowLike::Join(join) => join.take_id(),
+        }
+    }
+
+    pub fn object(
+        &self,
+    ) -> &activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase> {
+        match self {
+            FollowLike::Follow(follow) => follow.object(),
+            FollowLike::Join(join) => join.object(),
+        }
+    }
+
+    pub fn actor_unchecked(
+        &self,
+    ) -> &activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase> {
+        match self {
+            FollowLike::Follow(follow) => follow.actor_unchecked(),
+            FollowLike::Join(join) => join.actor_unchecked(),
+        }
+    }
 }
 
 pub fn try_strip_host<'a>(url: &'a impl AsRef<str>, host_url: &url::Url) -> Option<&'a str> {
@@ -876,7 +920,7 @@ pub fn community_follow_accept_to_ap(
 pub fn spawn_enqueue_send_community_follow_accept(
     local_community: CommunityLocalID,
     follower: UserLocalID,
-    follow: Contained<'static, activitystreams::activity::Follow>,
+    follow: Contained<'static, FollowLike>,
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
