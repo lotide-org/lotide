@@ -120,7 +120,7 @@ pub struct FeaturedExtension {
     pub featured: Option<url::Url>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct TargetExtension {
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>>,
@@ -993,15 +993,36 @@ pub fn spawn_enqueue_send_community_follow_accept(
 pub fn post_to_ap(
     post: &crate::PostInfo<'_>,
     community_ap_id: url::Url,
+    community_ap_outbox: Option<url::Url>,
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::base::AnyBase, crate::Error> {
-    fn apply_content<
+    fn apply_properties<
         K,
         O: activitystreams::object::ObjectExt<K> + activitystreams::base::BaseExt<K>,
     >(
-        props: &mut activitystreams::object::ApObject<O>,
+        props: &mut ExtendedPostlike<activitystreams::object::ApObject<O>>,
         post: &crate::PostInfo,
+        community_ap_id: url::Url,
+        community_ap_outbox: Option<url::Url>,
+        ctx: &crate::BaseContext,
     ) -> Result<(), crate::Error> {
+        props
+            .set_id(get_local_post_apub_id(post.id, &ctx.host_url_apub).into())
+            .set_context(activitystreams::context())
+            .set_attributed_to(get_local_person_apub_id(
+                post.author.unwrap(),
+                &ctx.host_url_apub,
+            ))
+            .set_published(*post.created)
+            .set_to(community_ap_id)
+            .set_cc(activitystreams::public());
+
+        if let Some(community_ap_outbox) = community_ap_outbox {
+            props.ext_one.target = Some(activitystreams::primitives::OneOrMany::from_xsd_any_uri(
+                community_ap_outbox,
+            ));
+        }
+
         if let Some(html) = post.content_html {
             props
                 .set_content(crate::clean_html(html))
@@ -1030,66 +1051,69 @@ pub fn post_to_ap(
                 let mut post_ap = activitystreams::object::Note::new();
 
                 post_ap
-                    .set_context(activitystreams::context())
-                    .set_id(get_local_post_apub_id(post.id, &ctx.host_url_apub).into())
-                    .set_attributed_to(get_local_person_apub_id(
-                        post.author.unwrap(),
-                        &ctx.host_url_apub,
-                    ))
                     .set_summary(post.title)
-                    .set_published(*post.created)
-                    .set_to(community_ap_id)
-                    .set_cc(activitystreams::public())
                     .add_attachment(attachment.into_any_base()?);
 
-                let mut post_ap = activitystreams::object::ApObject::new(post_ap);
+                let mut post_ap = ExtendedPostlike::new(
+                    activitystreams::object::ApObject::new(post_ap),
+                    Default::default(),
+                );
 
-                apply_content(&mut post_ap, post)?;
+                apply_properties(
+                    &mut post_ap,
+                    post,
+                    community_ap_id,
+                    community_ap_outbox,
+                    &ctx,
+                )?;
 
-                Ok(post_ap.into_any_base()?)
+                Ok(activitystreams::base::AnyBase::from_arbitrary_json(
+                    post_ap,
+                )?)
             } else {
                 let mut post_ap = activitystreams::object::Page::new();
 
-                post_ap
-                    .set_context(activitystreams::context())
-                    .set_id(get_local_post_apub_id(post.id, &ctx.host_url_apub).into())
-                    .set_attributed_to(get_local_person_apub_id(
-                        post.author.unwrap(),
-                        &ctx.host_url_apub,
-                    ))
-                    .set_url(href.to_owned())
-                    .set_summary(post.title)
-                    .set_published(*post.created)
-                    .set_to(community_ap_id)
-                    .set_cc(activitystreams::public());
+                post_ap.set_url(href.to_owned()).set_summary(post.title);
 
-                let mut post_ap = activitystreams::object::ApObject::new(post_ap);
+                let mut post_ap = ExtendedPostlike::new(
+                    activitystreams::object::ApObject::new(post_ap),
+                    Default::default(),
+                );
 
-                apply_content(&mut post_ap, post)?;
+                apply_properties(
+                    &mut post_ap,
+                    post,
+                    community_ap_id,
+                    community_ap_outbox,
+                    &ctx,
+                )?;
 
-                Ok(post_ap.into_any_base()?)
+                Ok(activitystreams::base::AnyBase::from_arbitrary_json(
+                    post_ap,
+                )?)
             }
         }
         None => {
             let mut post_ap = activitystreams::object::Note::new();
 
-            post_ap
-                .set_context(activitystreams::context())
-                .set_id(get_local_post_apub_id(post.id, &ctx.host_url_apub).into())
-                .set_attributed_to(Into::<url::Url>::into(get_local_person_apub_id(
-                    post.author.unwrap(),
-                    &ctx.host_url_apub,
-                )))
-                .set_summary(post.title)
-                .set_published(*post.created)
-                .set_to(community_ap_id)
-                .set_cc(activitystreams::public());
+            post_ap.set_summary(post.title);
 
-            let mut post_ap = activitystreams::object::ApObject::new(post_ap);
+            let mut post_ap = ExtendedPostlike::new(
+                activitystreams::object::ApObject::new(post_ap),
+                Default::default(),
+            );
 
-            apply_content(&mut post_ap, post)?;
+            apply_properties(
+                &mut post_ap,
+                post,
+                community_ap_id,
+                community_ap_outbox,
+                &ctx,
+            )?;
 
-            Ok(post_ap.into_any_base()?)
+            Ok(activitystreams::base::AnyBase::from_arbitrary_json(
+                post_ap,
+            )?)
         }
     }
 }
@@ -1097,9 +1121,10 @@ pub fn post_to_ap(
 pub fn local_post_to_create_ap(
     post: &crate::PostInfo<'_>,
     community_ap_id: url::Url,
+    community_ap_outbox: Option<url::Url>,
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
-    let post_ap = post_to_ap(post, community_ap_id, ctx)?;
+    let post_ap = post_to_ap(post, community_ap_id, community_ap_outbox, ctx)?;
 
     let mut create = activitystreams::activity::Create::new(
         get_local_person_apub_id(post.author.unwrap(), &ctx.host_url_apub),
@@ -1179,10 +1204,14 @@ pub fn spawn_enqueue_send_local_post_to_community(
     crate::spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
-        let (community_ap_id, community_inbox): (url::Url, url::Url) = {
+        let (community_ap_id, community_inbox, community_outbox): (
+            url::Url,
+            url::Url,
+            Option<url::Url>,
+        ) = {
             let row = db
                 .query_one(
-                    "SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox) FROM community WHERE id=$1",
+                    "SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox), ap_outbox FROM community WHERE id=$1",
                     &[&post.community],
                 )
                 .await?;
@@ -1193,10 +1222,15 @@ pub fn spawn_enqueue_send_local_post_to_community(
             } else {
                 let ap_id: Option<&str> = row.get(1);
                 let ap_inbox: Option<&str> = row.get(2);
+                let ap_outbox: Option<&str> = row.get(3);
 
                 (if let Some(ap_id) = ap_id {
                     if let Some(ap_inbox) = ap_inbox {
-                        Some((ap_id.parse()?, ap_inbox.parse()?))
+                        Some((
+                            ap_id.parse()?,
+                            ap_inbox.parse()?,
+                            ap_outbox.and_then(|x| x.parse().ok()),
+                        ))
                     } else {
                         None
                     }
@@ -1212,7 +1246,8 @@ pub fn spawn_enqueue_send_local_post_to_community(
             }
         };
 
-        let create = local_post_to_create_ap(&(&post).into(), community_ap_id, &ctx)?;
+        let create =
+            local_post_to_create_ap(&(&post).into(), community_ap_id, community_outbox, &ctx)?;
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: Cow::Owned(community_inbox),
