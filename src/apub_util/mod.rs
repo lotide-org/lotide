@@ -753,6 +753,73 @@ pub fn local_community_post_announce_ap(
     Ok(announce)
 }
 
+pub fn local_community_post_add_ap(
+    community_id: CommunityLocalID,
+    post_local_id: PostLocalID,
+    post_ap_id: url::Url,
+    host_url_apub: &BaseURL,
+) -> Result<activitystreams::activity::Add, crate::Error> {
+    let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
+
+    let mut add = activitystreams::activity::Add::new(community_ap_id.clone(), post_ap_id);
+
+    add.set_context(activitystreams::context())
+        .set_id({
+            let mut res = community_ap_id.clone();
+            res.path_segments_mut()
+                .extend(&["posts", &post_local_id.to_string(), "add"]);
+            res.into()
+        })
+        .set_target(get_local_community_outbox_apub_id(
+            community_id,
+            host_url_apub,
+        ))
+        .set_to({
+            let mut res = community_ap_id;
+            res.path_segments_mut().push("followers");
+            res
+        })
+        .set_cc(activitystreams::public());
+
+    Ok(add)
+}
+
+pub fn local_community_post_add_undo_ap(
+    community_id: CommunityLocalID,
+    post_local_id: PostLocalID,
+    post_ap_id: url::Url,
+    uuid: &uuid::Uuid,
+    host_url_apub: &BaseURL,
+) -> Result<activitystreams::activity::Undo, crate::Error> {
+    let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
+
+    let add = local_community_post_add_ap(community_id, post_local_id, post_ap_id, host_url_apub)?;
+
+    let mut undo =
+        activitystreams::activity::Undo::new(community_ap_id.clone(), add.into_any_base()?);
+
+    undo.set_context(activitystreams::context())
+        .set_id({
+            let mut res = community_ap_id.clone();
+            res.path_segments_mut().extend(&[
+                "posts",
+                &post_local_id.to_string(),
+                "add",
+                "undos",
+                &uuid.to_string(),
+            ]);
+            res.into()
+        })
+        .set_to({
+            let mut res = community_ap_id;
+            res.path_segments_mut().push("followers");
+            res
+        })
+        .set_cc(activitystreams::public());
+
+    Ok(undo)
+}
+
 pub fn local_community_post_announce_undo_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
@@ -817,15 +884,29 @@ pub fn spawn_announce_community_post(
     post_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
-    match local_community_post_announce_ap(community, post_local_id, post_ap_id, &ctx.host_url_apub)
-    {
+    match local_community_post_announce_ap(
+        community,
+        post_local_id,
+        post_ap_id.clone(),
+        &ctx.host_url_apub,
+    ) {
         Err(err) => {
             log::error!("Failed to create Announce: {:?}", err);
         }
         Ok(announce) => {
             crate::spawn_task(enqueue_send_to_community_followers(
-                community, announce, ctx,
+                community,
+                announce,
+                ctx.clone(),
             ));
+        }
+    }
+    match local_community_post_add_ap(community, post_local_id, post_ap_id, &ctx.host_url_apub) {
+        Err(err) => {
+            log::error!("Failed to create Add: {:?}", err);
+        }
+        Ok(add) => {
+            crate::spawn_task(enqueue_send_to_community_followers(community, add, ctx));
         }
     }
 }
@@ -836,8 +917,25 @@ pub fn spawn_enqueue_send_community_post_announce_undo(
     post_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
+    {
+        let ctx = ctx.clone();
+        let post_ap_id = post_ap_id.clone();
+
+        crate::spawn_task(async move {
+            let undo = local_community_post_announce_undo_ap(
+                community,
+                post,
+                post_ap_id,
+                &uuid::Uuid::new_v4(),
+                &ctx.host_url_apub,
+            )?;
+
+            enqueue_send_to_community_followers(community, undo, ctx).await
+        });
+    }
+
     crate::spawn_task(async move {
-        let undo = local_community_post_announce_undo_ap(
+        let undo = local_community_post_add_undo_ap(
             community,
             post,
             post_ap_id,
