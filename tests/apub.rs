@@ -241,7 +241,7 @@ fn community_description_update() {
             )
             .deref(),
         )
-        .json(&serde_json::json!({ "description": new_description }))
+        .json(&serde_json::json!({ "description_text": new_description }))
         .bearer_auth(token1)
         .send()
         .unwrap()
@@ -265,6 +265,9 @@ fn community_description_update() {
             .unwrap();
 
         let resp: serde_json::Value = resp.json().unwrap();
-        assert_eq!(resp["description"].as_str(), Some(new_description.as_ref()));
+        assert_eq!(
+            resp["description"]["content_text"].as_str(),
+            Some(new_description.as_ref())
+        );
     }
 }

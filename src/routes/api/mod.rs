@@ -663,13 +663,19 @@ async fn route_unstable_instance_get(
     let db = ctx.db_pool.get().await?;
 
     let row = db
-        .query_one("SELECT description FROM site WHERE local = TRUE", &[])
+        .query_one("SELECT description, description_markdown, description_html FROM site WHERE local = TRUE", &[])
         .await?;
-    let description: &str = row.get(0);
+    let description_text: Option<&str> = row.get(0);
+    let description_markdown: Option<&str> = row.get(1);
+    let description_html: Option<&str> = row.get(2);
 
     let body = serde_json::json!({
         "web_push_vapid_key": ctx.vapid_public_key_base64,
-        "description": description,
+        "description": crate::types::Content {
+            content_text: description_text.map(Cow::Borrowed),
+            content_markdown: description_markdown.map(Cow::Borrowed),
+            content_html_safe: description_html.map(|x| crate::clean_html(x)),
+        },
         "software": {
             "name": "lotide",
             "version": env!("CARGO_PKG_VERSION"),
@@ -686,7 +692,9 @@ async fn route_unstable_instance_patch(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     #[derive(Deserialize)]
     struct InstanceEditBody<'a> {
-        description: Option<Cow<'a, str>>,
+        description_text: Option<Cow<'a, str>>,
+        description_markdown: Option<Cow<'a, str>>,
+        description_html: Option<Cow<'a, str>>,
     }
 
     let lang = crate::get_lang_for_req(&req);
@@ -703,9 +711,42 @@ async fn route_unstable_instance_patch(
     let is_site_admin = crate::is_site_admin(&db, user).await?;
 
     if is_site_admin {
-        if let Some(description) = body.description {
-            db.execute("UPDATE site SET description=$1", &[&description])
-                .await?;
+        let description_conflict = if body.description_text.is_some() {
+            body.description_markdown.is_some() && body.description_html.is_some()
+        } else {
+            body.description_markdown.is_some() && body.description_html.is_some()
+        };
+
+        if description_conflict {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                lang.tr("description_content_conflict", None).into_owned(),
+            )));
+        }
+
+        if let Some(description) = body.description_text {
+            db.execute(
+                "UPDATE site SET description=$1, description_markdown=NULL, description_html=NULL",
+                &[&description],
+            )
+            .await?;
+        } else if let Some(description) = body.description_markdown {
+            let (html, md) = tokio::task::spawn_blocking(move || {
+                (crate::render_markdown(&description), description)
+            })
+            .await?;
+
+            db.execute(
+                "UPDATE site SET description=NULL, description_markdown=$1, description_html=$2",
+                &[&md, &html],
+            )
+            .await?;
+        } else if let Some(description) = body.description_html {
+            db.execute(
+                "UPDATE site SET description=NULL, description_markdown=NULL, description_html=$1",
+                &[&description],
+            )
+            .await?;
         }
 
         Ok(crate::empty_response())

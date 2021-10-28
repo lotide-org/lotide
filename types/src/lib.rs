@@ -83,13 +83,20 @@ pub struct JustContentText<'a> {
 }
 
 #[derive(Serialize, Clone)]
+pub struct Content<'a> {
+    pub content_text: Option<Cow<'a, str>>,
+    pub content_markdown: Option<Cow<'a, str>>,
+    #[serde(rename = "content_html")]
+    pub content_html_safe: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
 pub struct RespUserInfo<'a> {
     #[serde(flatten)]
     pub base: RespMinimalAuthorInfo<'a>,
 
-    pub description: &'a str,
-    pub description_html: Option<String>,
-    pub description_text: Option<&'a str>,
+    pub description: Content<'a>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suspended: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -288,9 +295,7 @@ pub struct RespCommunityInfo<'a> {
     #[serde(flatten)]
     pub base: RespMinimalCommunityInfo<'a>,
 
-    pub description: &'a str,
-    pub description_html: Option<String>,
-    pub description_text: Option<&'a str>,
+    pub description: Content<'a>,
     pub feeds: RespCommunityFeeds,
 
     #[serde(skip_serializing_if = "Option::is_none")]

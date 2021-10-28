@@ -16,6 +16,15 @@
 				"type": "string",
 				"enum": ["hot", "new"]
 			},
+			"Content": {
+				"type": "object",
+				"required": ["content_text", "content_markdown", "content_html"],
+				"properties": {
+					"content_text": {"type": "string"},
+					"content_markdown": {"type": "string"},
+					"content_html": {"type": "string"}
+				}
+			},
 			"LoginUserInfo": {
 				"type": "object",
 				"required": ["id", "username", "is_site_admin", "has_unread_notifications"],
@@ -107,22 +116,10 @@
 			"UserInfo": {
 				"allOf": [{"$ref": "#/components/schemas/MinimalUserInfo"}],
 				"type": "object",
-				"required": ["description", "description_html", "description_text"],
+				"required": ["description"],
 				"properties": {
 					"description": {
-						"type": "string",
-						"deprecated": true,
-						"description": "Old field for description. Should not be used."
-					},
-					"description_html": {
-						"type": "string",
-						"nullable": true,
-						"description": "Description as HTML, if available"
-					},
-					"description_text": {
-						"type": "string",
-						"nullable": true,
-						"description": "Description as text, if available"
+						"$ref": "#/components/schemas/Content"
 					},
 					"your_note": {
 						"type": "string",
@@ -138,22 +135,10 @@
 			"CommunityInfo": {
 				"allOf": [{"$ref": "#/components/schemas/MinimalCommunityInfo"}],
 				"type": "object",
-				"required": ["description", "feeds", "description_html", "description_text"],
+				"required": ["description", "feeds"],
 				"properties": {
 					"description": {
-						"type": "string",
-						"deprecated": true,
-						"description": "Old field for description. Should not be used."
-					},
-					"description_html": {
-						"type": "string",
-						"nullable": true,
-						"description": "Description as HTML, if available"
-					},
-					"description_text": {
-						"type": "string",
-						"nullable": true,
-						"description": "Description as text, if available"
+						"$ref": "#/components/schemas/Content"
 					},
 					"feeds": {
 						"type": "object",
@@ -784,7 +769,9 @@
 							"schema": {
 								"type": "object",
 								"properties": {
-									"description": {"type": "string"}
+									"description_text": {"type": "string"},
+									"description_markdown": {"type": "string"},
+									"description_html": {"type": "string"}
 								}
 							}
 						}
@@ -1073,7 +1060,7 @@
 											}
 										},
 										"description": {
-											"type": "string"
+											"$ref": "#/components/schemas/Content"
 										},
 										"web_push_vapid_key": {
 											"type": "string"
@@ -1094,7 +1081,9 @@
 							"schema": {
 								"type": "object",
 								"properties": {
-									"description": {"type": "string"}
+									"description_text": {"type": "string"},
+									"description_markdown": {"type": "string"},
+									"description_html": {"type": "string"}
 								}
 							}
 						}
@@ -1864,7 +1853,9 @@
 							"schema": {
 								"type": "object",
 								"properties": {
-									"description": {"type": "string"},
+									"description_text": {"type": "string"},
+									"description_markdown": {"type": "string"},
+									"description_html": {"type": "string"},
 									"email_address": {"type": "string", "format": "email"},
 									"password": {"type": "string", "format": "password"},
 									"avatar": {"type": "string", "description": "User profile image. Must be a `local-media://` link"}

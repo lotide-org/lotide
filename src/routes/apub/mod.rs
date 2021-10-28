@@ -129,15 +129,15 @@ async fn handler_users_get(
                     });
 
             let description = match row.get(4) {
-                Some(description_html) => description_html,
-                None => v_htmlescape::escape(row.get(3)).to_string(),
+                Some(description_html) => Some(crate::clean_html(description_html)),
+                None => row.get::<_, Option<_>>(3).map(|x| v_htmlescape::escape(x).to_string()),
             };
 
             let avatar: Option<&str> = row.get(5);
 
             let is_bot: bool = row.get(6);
 
-            fn format_user<T, K: serde::Serialize + activitystreams::base::AsBase<T> + activitystreams::object::AsObject<T> + activitystreams::markers::Actor>(mut info: K, user_id: UserLocalID, ctx: &crate::RouteContext, username: String, description: String, avatar: Option<&str>, public_key: Option<&str>) -> Result<Vec<u8>, crate::Error> {
+            fn format_user<T, K: serde::Serialize + activitystreams::base::AsBase<T> + activitystreams::object::AsObject<T> + activitystreams::markers::Actor>(mut info: K, user_id: UserLocalID, ctx: &crate::RouteContext, username: String, description: Option<String>, avatar: Option<&str>, public_key: Option<&str>) -> Result<Vec<u8>, crate::Error> {
                 let user_ap_id =
                     crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
 
@@ -146,8 +146,11 @@ async fn handler_users_get(
                     activitystreams::security(),
                 ]);
                 info.set_id(user_ap_id.deref().clone())
-                    .set_name(username.as_ref())
-                    .set_summary(description);
+                    .set_name(username.as_ref());
+
+                if let Some(description) = description {
+                    info.set_summary(description);
+                }
 
                 if let Some(avatar) = avatar {
                     let mut attachment = activitystreams::object::Image::new();

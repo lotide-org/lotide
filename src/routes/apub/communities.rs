@@ -132,8 +132,8 @@ async fn handler_communities_get(
                         }
                     });
             let description = match row.get(4) {
-                Some(description_html) => description_html,
-                None => v_htmlescape::escape(row.get(3)).to_string(),
+                Some(description_html) => Some(crate::clean_html(description_html)),
+                None => row.get::<_, Option<&str>>(3).map(|x| v_htmlescape::escape(x).to_string()),
             };
 
             let community_ap_id =
@@ -146,8 +146,11 @@ async fn handler_communities_get(
             ])
             .add_context(FEATURED_CONTEXT.clone())
             .set_id(community_ap_id.deref().clone())
-            .set_name(name.as_ref())
-            .set_summary(description);
+            .set_name(name.as_ref());
+
+            if let Some(description) = description {
+                info.set_summary(description);
+            }
 
             let inbox = {
                 let mut res = community_ap_id.clone();

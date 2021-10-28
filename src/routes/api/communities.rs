@@ -10,17 +10,22 @@ use std::convert::TryInto;
 use std::ops::Deref;
 use std::sync::Arc;
 
-fn get_community_description_fields<'a>(
-    description_text: &'a str,
+fn get_community_description_content<'a>(
+    description_text: Option<&'a str>,
+    description_markdown: Option<&'a str>,
     description_html: Option<&'a str>,
-) -> (&'a str, Option<&'a str>, Option<String>) {
-    match description_html {
-        Some(description_html) => (
-            description_html,
-            None,
-            Some(crate::clean_html(description_html)),
-        ),
-        None => (description_text, Some(description_text), None),
+) -> crate::types::Content<'a> {
+    crate::types::Content {
+        content_text: if description_text.is_none()
+            && description_markdown.is_none()
+            && description_html.is_none()
+        {
+            Some(Cow::Borrowed(""))
+        } else {
+            description_text.map(Cow::Borrowed)
+        },
+        content_markdown: description_markdown.map(Cow::Borrowed),
+        content_html_safe: description_html.map(|x| crate::clean_html(x)),
     }
 }
 
@@ -62,7 +67,9 @@ async fn route_unstable_communities_list(
 
     let query: CommunitiesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
-    let mut sql = String::from("SELECT id, name, local, ap_id, description, description_html");
+    let mut sql = String::from(
+        "SELECT id, name, local, ap_id, description, description_html, description_markdown",
+    );
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = Vec::new();
 
     let db = ctx.db_pool.get().await?;
@@ -184,9 +191,6 @@ async fn route_unstable_communities_list(
                 let local = row.get(2);
                 let ap_id = row.get(3);
 
-                let (description, description_text, description_html) =
-                    get_community_description_fields(row.get(4), row.get(5));
-
                 let host = crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname);
 
                 let remote_url = if local {
@@ -206,9 +210,11 @@ async fn route_unstable_communities_list(
                         remote_url,
                     },
 
-                    description,
-                    description_html,
-                    description_text,
+                    description: get_community_description_content(
+                        row.get(4),
+                        row.get(6),
+                        row.get(5),
+                    ),
 
                     feeds: RespCommunityFeeds {
                         atom: RespCommunityFeedsType {
@@ -217,13 +223,13 @@ async fn route_unstable_communities_list(
                     },
 
                     you_are_moderator: if query.include_your {
-                        Some(row.get(7))
+                        Some(row.get(8))
                     } else {
                         None
                     },
                     your_follow: if query.include_your {
                         Some(
-                            row.get::<_, Option<bool>>(6)
+                            row.get::<_, Option<bool>>(7)
                                 .map(|accepted| RespYourFollowInfo { accepted }),
                         )
                     } else {
@@ -332,12 +338,12 @@ async fn route_unstable_communities_get(
         (if query.include_your {
             let user = crate::require_login(&req, &db).await?;
             db.query_opt(
-                "SELECT name, local, ap_id, description, description_html, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$2) FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, description, description_html, description_markdown, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$2) FROM community WHERE id=$1",
                 &[&community_id.raw(), &user.raw()],
             ).await?
         } else {
             db.query_opt(
-                "SELECT name, local, ap_id, description, description_html FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, description, description_html, description_markdown FROM community WHERE id=$1",
                 &[&community_id.raw()],
             ).await?
         })
@@ -360,9 +366,6 @@ async fn route_unstable_communities_get(
         community_ap_id.map(Cow::Borrowed)
     };
 
-    let (description, description_text, description_html) =
-        get_community_description_fields(row.get(3), row.get(4));
-
     let info = RespCommunityInfo {
         base: RespMinimalCommunityInfo {
             id: community_id,
@@ -378,9 +381,7 @@ async fn route_unstable_communities_get(
             },
             remote_url: community_remote_url,
         },
-        description,
-        description_html,
-        description_text,
+        description: get_community_description_content(row.get(3), row.get(5), row.get(4)),
         feeds: RespCommunityFeeds {
             atom: RespCommunityFeedsType {
                 new: format!(
@@ -390,13 +391,13 @@ async fn route_unstable_communities_get(
             },
         },
         you_are_moderator: if query.include_your {
-            Some(row.get(6))
+            Some(row.get(7))
         } else {
             None
         },
         your_follow: if query.include_your {
             Some(
-                row.get::<_, Option<bool>>(5)
+                row.get::<_, Option<bool>>(6)
                     .map(|accepted| RespYourFollowInfo { accepted }),
             )
         } else {
@@ -421,11 +422,26 @@ async fn route_unstable_communities_patch(
 
     #[derive(Deserialize)]
     struct CommunitiesEditBody<'a> {
-        description: Option<Cow<'a, str>>,
+        description_text: Option<Cow<'a, str>>,
+        description_markdown: Option<Cow<'a, str>>,
+        description_html: Option<Cow<'a, str>>,
     }
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let body: CommunitiesEditBody = serde_json::from_slice(&body)?;
+
+    let too_many_description_updates = if body.description_text.is_some() {
+        body.description_markdown.is_some() || body.description_html.is_some()
+    } else {
+        body.description_markdown.is_some() && body.description_html.is_some()
+    };
+
+    if too_many_description_updates {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            lang.tr("description_content_conflict", None).into_owned(),
+        )));
+    }
 
     ({
         let row = db
@@ -443,9 +459,30 @@ async fn route_unstable_communities_patch(
         }
     })?;
 
-    if let Some(description) = body.description {
+    if let Some(description) = body.description_text {
         db.execute(
-            "UPDATE community SET description=$1 WHERE id=$2",
+            "UPDATE community SET description=$1, description_markdown=NULL, description_html=NULL WHERE id=$2",
+            &[&description, &community_id],
+        )
+        .await?;
+
+        crate::apub_util::spawn_enqueue_send_new_community_update(community_id, ctx);
+    } else if let Some(description) = body.description_markdown {
+        let (html, md) = tokio::task::spawn_blocking(move || {
+            (crate::render_markdown(&description), description)
+        })
+        .await?;
+
+        db.execute(
+            "UPDATE community SET description=NULL, description_markdown=$1, description_html=$3 WHERE id=$2",
+            &[&md, &community_id, &html],
+        )
+        .await?;
+
+        crate::apub_util::spawn_enqueue_send_new_community_update(community_id, ctx);
+    } else if let Some(description) = body.description_html {
+        db.execute(
+            "UPDATE community SET description=NULL, description_markdown=NULL, description_html=$1 WHERE id=$2",
             &[&description, &community_id],
         )
         .await?;
