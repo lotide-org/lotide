@@ -160,7 +160,7 @@ async fn route_unstable_users_list(
     let db = ctx.db_pool.get().await?;
 
     let rows = db.query(
-        "SELECT id, description, description_html, avatar, suspended, is_bot FROM person WHERE local AND username=$1",
+        "SELECT id, description, description_html, avatar, suspended, is_bot, description_markdown FROM person WHERE local AND username=$1",
         &[&username]
     )
         .await?;
@@ -192,23 +192,24 @@ async fn route_unstable_users_list(
                         }),
                     };
 
-                    let (description, description_text, description_html) = match row.get(2) {
-                        Some(description_html) => (
-                            description_html,
-                            None,
-                            Some(crate::clean_html(description_html)),
-                        ),
-                        None => {
-                            let description_text: &str = row.get(1);
-                            (description_text, Some(description_text), None)
-                        }
-                    };
+                    let description_html: Option<&str> = row.get(2);
+                    let description_markdown: Option<&str> = row.get(6);
+                    let description_text: Option<&str> = row.get(1);
 
                     RespUserInfo {
                         base: info,
-                        description,
-                        description_html,
-                        description_text,
+                        description: crate::types::Content {
+                            content_text: if description_html.is_none()
+                                && description_markdown.is_none()
+                                && description_text.is_none()
+                            {
+                                Some(Cow::Borrowed(""))
+                            } else {
+                                description_text.map(Cow::Borrowed)
+                            },
+                            content_markdown: description_markdown.map(Cow::Borrowed),
+                            content_html_safe: description_html.map(|x| crate::clean_html(x)),
+                        },
                         suspended: Some(row.get(4)),
                         your_note: None,
                     }
@@ -323,8 +324,9 @@ async fn route_unstable_users_patch(
 
     #[derive(Deserialize)]
     struct UsersEditBody<'a> {
-        #[serde(alias = "description")]
         description_text: Option<Cow<'a, str>>,
+        description_markdown: Option<Cow<'a, str>>,
+        description_html: Option<Cow<'a, str>>,
         email_address: Option<Cow<'a, str>>,
         password: Option<String>,
         avatar: Option<Cow<'a, str>>,
@@ -335,13 +337,42 @@ async fn route_unstable_users_patch(
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let body: UsersEditBody = serde_json::from_slice(&body)?;
 
+    let too_many_description_updates = if body.description_text.is_some() {
+        body.description_markdown.is_some() || body.description_html.is_some()
+    } else {
+        body.description_markdown.is_some() && body.description_html.is_some()
+    };
+
+    if too_many_description_updates {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            lang.tr("description_content_conflict", None).into_owned(),
+        )));
+    }
+
     let arena = bumpalo::Bump::new();
 
     let mut changes = Vec::<(&str, &(dyn tokio_postgres::types::ToSql + Sync))>::new();
 
     if let Some(description) = body.description_text.as_ref() {
         changes.push(("description", description));
+        changes.push(("description_markdown", &Option::<&str>::None));
+        changes.push(("description_html", &Option::<&str>::None));
+    } else if let Some(description) = body.description_markdown {
+        let (html, md) = tokio::task::spawn_blocking(move || {
+            (crate::render_markdown(&description), description)
+        })
+        .await?;
+
+        changes.push(("description", &Option::<&str>::None));
+        changes.push(("description_markdown", arena.alloc(md)));
+        changes.push(("description_html", arena.alloc(html)));
+    } else if let Some(description) = body.description_html.as_ref() {
+        changes.push(("description", &Option::<&str>::None));
+        changes.push(("description_markdown", &Option::<&str>::None));
+        changes.push(("description_html", description));
     }
+
     if let Some(email_address) = body.email_address.as_ref() {
         if !fast_chemail::is_valid_email(email_address) {
             return Err(crate::Error::UserError(crate::simple_response(
@@ -842,7 +873,7 @@ async fn route_unstable_users_get(
 
     let row = db
         .query_opt(
-            "SELECT username, local, ap_id, description, description_html, avatar, suspended, is_bot FROM person WHERE id=$1",
+            "SELECT username, local, ap_id, description, description_html, avatar, suspended, is_bot, description_markdown FROM person WHERE id=$1",
             &[&user_id],
         )
         .await?;
@@ -866,6 +897,10 @@ async fn route_unstable_users_get(
     };
     let avatar: Option<&str> = row.get(5);
 
+    let description_html: Option<&str> = row.get(4);
+    let description_markdown: Option<&str> = row.get(8);
+    let description_text: Option<&str> = row.get(3);
+
     let info = RespMinimalAuthorInfo {
         id: user_id,
         local,
@@ -878,23 +913,20 @@ async fn route_unstable_users_get(
         }),
     };
 
-    let (description, description_text, description_html) = match row.get(4) {
-        Some(description_html) => (
-            description_html,
-            None,
-            Some(crate::clean_html(description_html)),
-        ),
-        None => {
-            let description_text: &str = row.get(3);
-            (description_text, Some(description_text), None)
-        }
-    };
-
     let info = RespUserInfo {
         base: info,
-        description,
-        description_html,
-        description_text,
+        description: crate::types::Content {
+            content_text: if description_html.is_none()
+                && description_markdown.is_none()
+                && description_text.is_none()
+            {
+                Some(Cow::Borrowed(""))
+            } else {
+                description_text.map(Cow::Borrowed)
+            },
+            content_markdown: description_markdown.map(Cow::Borrowed),
+            content_html_safe: description_html.map(|x| crate::clean_html(x)),
+        },
         suspended: if local { Some(row.get(6)) } else { None },
         your_note,
     };
