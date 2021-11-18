@@ -1050,7 +1050,7 @@ pub fn local_post_to_create_ap(
     community_ap_id: url::Url,
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
-    let post_ap = post_to_ap(post, community_ap_id, ctx)?;
+    let post_ap = post_to_ap(post, community_ap_id.clone(), ctx)?;
 
     let mut create = activitystreams::activity::Create::new(
         get_local_person_apub_id(post.author.unwrap(), &ctx.host_url_apub),
@@ -1061,6 +1061,8 @@ pub fn local_post_to_create_ap(
         res.path_segments_mut().push("create");
         res.into()
     });
+    create.set_to(community_ap_id);
+    create.set_cc(activitystreams::public());
 
     Ok(create)
 }
