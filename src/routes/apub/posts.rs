@@ -169,7 +169,7 @@ async fn handler_posts_create_get(
                 content_markdown: row.get(8),
                 content_html: row.get(9),
                 id: post_id,
-                title: row.get(3),
+                title: row.get(2),
             };
 
             let body = crate::apub_util::local_post_to_create_ap(&post_info, community_ap_id.into(), &ctx)?;
