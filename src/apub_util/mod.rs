@@ -985,6 +985,7 @@ pub fn post_to_ap(
                         &ctx.host_url_apub,
                     ))
                     .set_summary(post.title)
+                    .set_name(post.title)
                     .set_published(*post.created)
                     .set_to(community_ap_id)
                     .set_cc(activitystreams::public())
@@ -1007,6 +1008,7 @@ pub fn post_to_ap(
                     ))
                     .set_url(href.to_owned())
                     .set_summary(post.title)
+                    .set_name(post.title)
                     .set_published(*post.created)
                     .set_to(community_ap_id)
                     .set_cc(activitystreams::public());
@@ -1029,6 +1031,7 @@ pub fn post_to_ap(
                     &ctx.host_url_apub,
                 )))
                 .set_summary(post.title)
+                .set_name(post.title)
                 .set_published(*post.created)
                 .set_to(community_ap_id)
                 .set_cc(activitystreams::public());

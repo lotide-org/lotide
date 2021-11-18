@@ -638,10 +638,12 @@ async fn ingest_postlike(
                     } else {
                         // not a reply, must be a top-level post
                         let summary = obj.summary();
+                        let name = obj.name();
 
-                        let title = summary
+                        let title = name
                             .as_ref()
                             .and_then(|x| x.as_single_xsd_string())
+                            .or_else(|| summary.as_ref().and_then(|x| x.as_single_xsd_string()))
                             .unwrap_or("");
 
                         // Interpret attachments (usually images) as links
@@ -984,8 +986,9 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<PostLocalID>, crate::Error> {
     let title = obj
-        .summary()
+        .name()
         .iter()
+        .chain(obj.summary().iter())
         .map(|x| x.iter())
         .flatten()
         .filter_map(|maybe| maybe.as_xsd_string())
