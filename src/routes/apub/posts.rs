@@ -34,7 +34,7 @@ async fn handler_posts_get(
 
     match db
         .query_opt(
-            "SELECT author, href, title, created, community, local, deleted, had_href, content_text, content_markdown, content_html, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
+            "SELECT post.author, post.href, post.title, post.created, post.community, post.local, post.deleted, post.had_href, post.content_text, post.content_markdown, post.content_html, community.ap_id, community.ap_outbox, community.local FROM post, community WHERE post.id=$1 AND post.community = community.id",
             &[&post_id.raw()],
         )
         .await?
@@ -77,12 +77,27 @@ async fn handler_posts_get(
             }
 
             let community_local_id = CommunityLocalID(row.get(4));
+            let community_local: bool = row.get(13);
 
             let community_ap_id = match row.get(11) {
                 Option::<&str>::Some(ap_id) => ap_id.parse()?,
                 None => {
-                    // assume local (might be a problem?)
-                    crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+                    if community_local {
+                        crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+                    } else {
+                        return Err(crate::Error::InternalStrStatic("Missing community AP id"));
+                    }
+                }
+            };
+
+            let community_ap_outbox = match row.get(12) {
+                Option::<&str>::Some(ap_outbox) => Some(ap_outbox.parse()?),
+                None => {
+                    if community_local {
+                        Some(crate::apub_util::get_local_community_outbox_apub_id(community_local_id, &ctx.host_url_apub))
+                    } else {
+                        None
+                    }
                 }
             };
 
@@ -98,7 +113,7 @@ async fn handler_posts_get(
                 title: row.get(2),
             };
 
-            let body = crate::apub_util::post_to_ap(&post_info, community_ap_id.into(), &ctx)?;
+            let body = crate::apub_util::post_to_ap(&post_info, community_ap_id.into(), community_ap_outbox.map(Into::into), &ctx)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
@@ -124,7 +139,7 @@ async fn handler_posts_create_get(
 
     match db
         .query_opt(
-            "SELECT author, href, title, created, community, local, deleted, content_text, content_markdown, content_html, (SELECT ap_id FROM community WHERE id=post.community) AS community_ap_id FROM post WHERE id=$1",
+            "SELECT post.author, post.href, post.title, post.created, post.community, post.local, post.deleted, post.content_text, post.content_markdown, post.content_html, community.ap_id, community.ap_outbox, community.local FROM post, community WHERE community.id = post.community AND id=$1",
             &[&post_id.raw()],
         )
         .await?
@@ -151,12 +166,27 @@ async fn handler_posts_create_get(
             }
 
             let community_local_id = CommunityLocalID(row.get(4));
+            let community_local: bool = row.get(12);
 
             let community_ap_id = match row.get(10) {
                 Option::<&str>::Some(ap_id) => ap_id.parse()?,
                 None => {
-                    // assume local (might be a problem?)
-                    crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+                    if community_local {
+                        crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+                    } else {
+                        return Err(crate::Error::InternalStrStatic("Missing community AP id"));
+                    }
+                }
+            };
+
+            let community_ap_outbox = match row.get(11) {
+                Option::<&str>::Some(ap_outbox) => Some(ap_outbox.parse()?),
+                None => {
+                    if community_local {
+                        Some(crate::apub_util::get_local_community_outbox_apub_id(community_local_id, &ctx.host_url_apub))
+                    } else {
+                        None
+                    }
                 }
             };
 
@@ -172,7 +202,7 @@ async fn handler_posts_create_get(
                 title: row.get(2),
             };
 
-            let body = crate::apub_util::local_post_to_create_ap(&post_info, community_ap_id.into(), &ctx)?;
+            let body = crate::apub_util::local_post_to_create_ap(&post_info, community_ap_id.into(), community_ap_outbox.map(Into::into), &ctx)?;
 
             let body = serde_json::to_vec(&body)?.into();
 
