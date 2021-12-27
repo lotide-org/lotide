@@ -91,6 +91,90 @@ pub async fn ingest_object(
 
             Ok(None)
         }
+        KnownObject::Add(activity) => {
+            let activity_id = activity
+                .id_unchecked()
+                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
+
+            let target = activity
+                .target()
+                .and_then(|x| x.as_single_id())
+                .ok_or(crate::Error::InternalStrStatic("Missing target for Add"))?;
+
+            let community_ap_id = activity
+                .actor_unchecked()
+                .as_single_id()
+                .ok_or(crate::Error::InternalStrStatic("Missing actor for Add"))?;
+
+            let res = db
+                .query_opt(
+                    "SELECT id, local, ap_outbox FROM community WHERE ap_id=$1",
+                    &[&community_ap_id.as_str()],
+                )
+                .await?;
+            let community_local_info: Option<(CommunityLocalID, bool, Option<&str>)> = res
+                .as_ref()
+                .map(|row| (CommunityLocalID(row.get(0)), row.get(1), row.get(2)));
+
+            if let Some((community_local_id, community_is_local, ap_outbox)) = community_local_info
+            {
+                let target_is_outbox = if let Some(ap_outbox) = ap_outbox {
+                    ap_outbox == target.as_str()
+                } else {
+                    let actor = crate::apub_util::fetch_actor(community_ap_id, ctx.clone()).await?;
+
+                    if let crate::apub_util::ActorLocalInfo::Community { ap_outbox, .. } = actor {
+                        if let Some(ap_outbox) = ap_outbox {
+                            ap_outbox == *target
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                if target_is_outbox {
+                    crate::apub_util::require_containment(activity_id, community_ap_id)?;
+                    crate::apub_util::require_containment(target, community_ap_id)?;
+
+                    let object_id = activity.object().as_single_id();
+
+                    if let Some(object_id) = object_id {
+                        if let Some(remaining) =
+                            crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
+                        {
+                            if let Some(remaining) = remaining.strip_prefix("/posts/") {
+                                if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
+                                    db.execute(
+                                        "UPDATE post SET approved=TRUE, approved_ap_id=$1 WHERE id=$2 AND community=$3",
+                                        &[&activity_id.as_str(), &local_post_id, &community_local_id],
+                                    ).await?;
+                                }
+                            }
+                        } else {
+                            // don't need announces for local objects
+                            let obj =
+                                crate::apub_util::fetch_ap_object(object_id, &ctx.http_client)
+                                    .await?;
+
+                            ingest_object_boxed(
+                                obj,
+                                FoundFrom::Announce {
+                                    url: activity_id.clone(),
+                                    community_local_id,
+                                    community_is_local,
+                                },
+                                ctx,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+            }
+
+            Ok(None)
+        }
         KnownObject::Announce(activity) => {
             let activity_id = activity
                 .id_unchecked()
@@ -178,7 +262,7 @@ pub async fn ingest_object(
                 .summary()
                 .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next());
             let inbox = group.inbox_unchecked().as_str();
-            let outbox = group.outbox_unchecked().map(|x| x.as_str());
+            let outbox = group.outbox_unchecked();
             let shared_inbox = group
                 .endpoints_unchecked()
                 .and_then(|endpoints| endpoints.shared_inbox)
@@ -196,8 +280,10 @@ pub async fn ingest_object(
 
             let id = CommunityLocalID(db.query_one(
                 "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html, created_local, ap_outbox) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7, current_timestamp, $8) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7, ap_outbox=$8 RETURNING id",
-                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html, &outbox],
+                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html, &outbox.map(|x| x.as_str())],
             ).await?.get(0));
+
+            let outbox = outbox.map(|x| x.to_owned());
 
             if let Some(featured_url) = group.ext_two.featured {
                 crate::apub_util::spawn_enqueue_fetch_community_featured(id, featured_url, ctx);
@@ -210,6 +296,7 @@ pub async fn ingest_object(
                         algorithm: super::get_message_digest(public_key_sigalg),
                         key: key.to_owned(),
                     }),
+                    ap_outbox: outbox,
                 },
             )))
         }

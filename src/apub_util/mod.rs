@@ -54,6 +54,7 @@ impl<'a, T: activitystreams::markers::Base + Clone> Contained<'a, T> {
 #[serde(untagged)]
 pub enum KnownObject {
     Accept(activitystreams::activity::Accept),
+    Add(activitystreams::activity::Add),
     Announce(activitystreams::activity::Announce),
     Create(activitystreams::activity::Create),
     Delete(activitystreams::activity::Delete),
@@ -367,6 +368,7 @@ pub enum ActorLocalInfo {
     Community {
         id: CommunityLocalID,
         public_key: Option<PubKeyInfo>,
+        ap_outbox: Option<url::Url>,
     },
 }
 
