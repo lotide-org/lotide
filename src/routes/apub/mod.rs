@@ -296,7 +296,7 @@ async fn handler_users_outbox_page_get(
         }
     };
 
-    let sql: &str = &format!("(SELECT TRUE, post.id, post.href, post.title, post.created, post.content_text, post.content_markdown, post.content_html, community.id, community.local, community.ap_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, community.ap_outbox FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted{}) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, parent_or_post_author.ap_id, reply.content_markdown, parent_reply.ap_id, post.id, post.local, post.ap_id, parent_reply.id, parent_reply.local, parent_or_post_author.id, parent_or_post_author.local, community.id, community.local, community.ap_id, reply.attachment_href, community.ap_outbox FROM reply INNER JOIN post ON (post.id = reply.post) INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = reply.parent) LEFT OUTER JOIN person AS parent_or_post_author ON (parent_or_post_author.id = COALESCE(parent_reply.author, post.author)) WHERE reply.author = $1 AND NOT reply.deleted{}) ORDER BY created DESC LIMIT $2", extra_conditions_posts, extra_conditions_comments);
+    let sql: &str = &format!("(SELECT TRUE, post.id, post.href, post.title, post.created, post.content_text, post.content_markdown, post.content_html, community.id, community.local, community.ap_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, community.ap_outbox, community.ap_followers FROM post, community WHERE post.community = community.id AND post.author = $1 AND NOT post.deleted{}) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, parent_or_post_author.ap_id, reply.content_markdown, parent_reply.ap_id, post.id, post.local, post.ap_id, parent_reply.id, parent_reply.local, parent_or_post_author.id, parent_or_post_author.local, community.id, community.local, community.ap_id, reply.attachment_href, community.ap_outbox, community.ap_followers FROM reply INNER JOIN post ON (post.id = reply.post) INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = reply.parent) LEFT OUTER JOIN person AS parent_or_post_author ON (parent_or_post_author.id = COALESCE(parent_reply.author, post.author)) WHERE reply.author = $1 AND NOT reply.deleted{}) ORDER BY created DESC LIMIT $2", extra_conditions_posts, extra_conditions_comments);
 
     let rows = db.query(sql, &values[..]).await?;
 
@@ -326,6 +326,17 @@ async fn handler_users_outbox_page_get(
                         .transpose()?
                 };
 
+                let community_ap_followers = if community_local {
+                    Some(crate::apub_util::get_local_community_followers_apub_id(
+                        community_id,
+                        &ctx.host_url_apub,
+                    ))
+                } else {
+                    row.get::<_, Option<&str>>(20)
+                        .map(|x| x.parse())
+                        .transpose()?
+                };
+
                 let post_info = crate::PostInfo {
                     id: PostLocalID(row.get(1)),
                     author: Some(user),
@@ -342,6 +353,7 @@ async fn handler_users_outbox_page_get(
                     &post_info,
                     community_ap_id.into(),
                     community_ap_outbox.map(Into::into),
+                    community_ap_followers.map(Into::into),
                     &ctx,
                 );
                 last_created = Some(created);

@@ -271,6 +271,15 @@ pub fn get_local_community_featured_apub_id(
     res
 }
 
+pub fn get_local_community_followers_apub_id(
+    community: CommunityLocalID,
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_community_apub_id(community, host_url_apub);
+    res.path_segments_mut().push("followers");
+    res
+}
+
 pub fn get_local_community_outbox_apub_id(
     community: CommunityLocalID,
     host_url_apub: &BaseURL,
@@ -1094,6 +1103,7 @@ pub fn post_to_ap(
     post: &crate::PostInfo<'_>,
     community_ap_id: url::Url,
     community_ap_outbox: Option<url::Url>,
+    community_ap_followers: Option<url::Url>,
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::base::AnyBase, crate::Error> {
     fn apply_properties<
@@ -1104,6 +1114,7 @@ pub fn post_to_ap(
         post: &crate::PostInfo,
         community_ap_id: url::Url,
         community_ap_outbox: Option<url::Url>,
+        community_ap_followers: Option<url::Url>,
         ctx: &crate::BaseContext,
     ) -> Result<(), crate::Error> {
         props
@@ -1116,6 +1127,10 @@ pub fn post_to_ap(
             .set_published(*post.created)
             .set_to(community_ap_id)
             .set_cc(activitystreams::public());
+
+        if let Some(community_ap_followers) = community_ap_followers {
+            props.add_to(community_ap_followers);
+        }
 
         if let Some(community_ap_outbox) = community_ap_outbox {
             props.ext_one.target = Some(activitystreams::primitives::OneOrMany::from_xsd_any_uri(
@@ -1165,6 +1180,7 @@ pub fn post_to_ap(
                     post,
                     community_ap_id,
                     community_ap_outbox,
+                    community_ap_followers,
                     &ctx,
                 )?;
 
@@ -1189,6 +1205,7 @@ pub fn post_to_ap(
                     post,
                     community_ap_id,
                     community_ap_outbox,
+                    community_ap_followers,
                     &ctx,
                 )?;
 
@@ -1212,6 +1229,7 @@ pub fn post_to_ap(
                 post,
                 community_ap_id,
                 community_ap_outbox,
+                community_ap_followers,
                 &ctx,
             )?;
 
@@ -1226,9 +1244,16 @@ pub fn local_post_to_create_ap(
     post: &crate::PostInfo<'_>,
     community_ap_id: url::Url,
     community_ap_outbox: Option<url::Url>,
+    community_ap_followers: Option<url::Url>,
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
-    let post_ap = post_to_ap(post, community_ap_id.clone(), community_ap_outbox, ctx)?;
+    let post_ap = post_to_ap(
+        post,
+        community_ap_id.clone(),
+        community_ap_outbox,
+        community_ap_followers.clone(),
+        ctx,
+    )?;
 
     let mut create = activitystreams::activity::Create::new(
         get_local_person_apub_id(post.author.unwrap(), &ctx.host_url_apub),
@@ -1241,6 +1266,10 @@ pub fn local_post_to_create_ap(
     });
     create.set_to(community_ap_id);
     create.set_cc(activitystreams::public());
+
+    if let Some(community_ap_followers) = community_ap_followers {
+        create.add_to(community_ap_followers);
+    }
 
     Ok(create)
 }
@@ -1310,14 +1339,15 @@ pub fn spawn_enqueue_send_local_post_to_community(
     crate::spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
-        let (community_ap_id, community_inbox, community_outbox): (
+        let (community_ap_id, community_inbox, community_outbox, community_followers): (
             url::Url,
             url::Url,
+            Option<url::Url>,
             Option<url::Url>,
         ) = {
             let row = db
                 .query_one(
-                    "SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox), ap_outbox FROM community WHERE id=$1",
+                    "SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox), ap_outbox, ap_followers FROM community WHERE id=$1",
                     &[&post.community],
                 )
                 .await?;
@@ -1329,6 +1359,7 @@ pub fn spawn_enqueue_send_local_post_to_community(
                 let ap_id: Option<&str> = row.get(1);
                 let ap_inbox: Option<&str> = row.get(2);
                 let ap_outbox: Option<&str> = row.get(3);
+                let ap_followers: Option<&str> = row.get(4);
 
                 (if let Some(ap_id) = ap_id {
                     if let Some(ap_inbox) = ap_inbox {
@@ -1336,6 +1367,7 @@ pub fn spawn_enqueue_send_local_post_to_community(
                             ap_id.parse()?,
                             ap_inbox.parse()?,
                             ap_outbox.and_then(|x| x.parse().ok()),
+                            ap_followers.and_then(|x| x.parse().ok()),
                         ))
                     } else {
                         None
@@ -1352,8 +1384,13 @@ pub fn spawn_enqueue_send_local_post_to_community(
             }
         };
 
-        let create =
-            local_post_to_create_ap(&(&post).into(), community_ap_id, community_outbox, &ctx)?;
+        let create = local_post_to_create_ap(
+            &(&post).into(),
+            community_ap_id,
+            community_outbox,
+            community_followers,
+            &ctx,
+        )?;
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
             inbox: Cow::Owned(community_inbox),

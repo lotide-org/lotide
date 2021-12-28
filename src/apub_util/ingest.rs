@@ -263,6 +263,7 @@ pub async fn ingest_object(
                 .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next());
             let inbox = group.inbox_unchecked().as_str();
             let outbox = group.outbox_unchecked();
+            let followers = group.followers_unchecked().map(|x| x.as_str());
             let shared_inbox = group
                 .endpoints_unchecked()
                 .and_then(|endpoints| endpoints.shared_inbox)
@@ -279,8 +280,8 @@ pub async fn ingest_object(
                 .and_then(|key| key.signature_algorithm.as_deref());
 
             let id = CommunityLocalID(db.query_one(
-                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html, created_local, ap_outbox) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7, current_timestamp, $8) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7, ap_outbox=$8 RETURNING id",
-                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html, &outbox.map(|x| x.as_str())],
+                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html, created_local, ap_outbox, ap_followers) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7, current_timestamp, $8, $9) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7, ap_outbox=$8, ap_followers=$9 RETURNING id",
+                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html, &outbox.map(|x| x.as_str()), &followers],
             ).await?.get(0));
 
             let outbox = outbox.map(|x| x.to_owned());

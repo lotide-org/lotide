@@ -182,11 +182,7 @@ async fn handler_communities_get(
                 )
                 .into(),
             )
-            .set_followers({
-                let mut res = community_ap_id.clone();
-                res.path_segments_mut().push("followers");
-                res.into()
-            })
+            .set_followers(crate::apub_util::get_local_community_followers_apub_id(community_id, &ctx.host_url_apub).into())
             .set_preferred_username(name);
 
             let featured_ext = crate::apub_util::FeaturedExtension {
