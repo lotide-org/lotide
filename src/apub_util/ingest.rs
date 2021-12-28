@@ -904,7 +904,7 @@ async fn ingest_followlike(
                 if let Some(row) = row {
                     let local: bool = row.get(0);
                     if local {
-                        db.execute("INSERT INTO community_follow (community, follower, local, ap_id, accepted) VALUES ($1, $2, FALSE, $3, TRUE) ON CONFLICT (community, follower) DO NOTHING", &[&community_id, &follower_local_id, &activity_ap_id.as_str()]).await?;
+                        db.execute("INSERT INTO community_follow (community, follower, local, ap_id, accepted) VALUES ($1, $2, FALSE, $3, TRUE) ON CONFLICT (community, follower) DO UPDATE SET ap_id = $3, accepted = TRUE", &[&community_id, &follower_local_id, &activity_ap_id.as_str()]).await?;
 
                         crate::apub_util::spawn_enqueue_send_community_follow_accept(
                             community_id,
