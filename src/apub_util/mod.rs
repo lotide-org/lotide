@@ -310,6 +310,16 @@ pub fn get_local_community_follow_apub_id(
     res
 }
 
+pub fn get_local_community_follow_join_apub_id(
+    community: CommunityLocalID,
+    follower: UserLocalID,
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = get_local_community_follow_apub_id(community, follower, host_url_apub);
+    res.path_segments_mut().push("join");
+    res
+}
+
 pub fn get_local_person_pubkey_apub_id(person: UserLocalID, host_url_apub: &BaseURL) -> BaseURL {
     let mut res = get_local_person_apub_id(person, host_url_apub);
     res.set_fragment(Some("main-key"));
@@ -322,17 +332,6 @@ pub fn get_local_community_pubkey_apub_id(
 ) -> BaseURL {
     let mut res = get_local_community_apub_id(community, host_url_apub);
     res.set_fragment(Some("main-key"));
-    res
-}
-
-pub fn get_local_follow_apub_id(
-    community: CommunityLocalID,
-    follower: UserLocalID,
-    host_url_apub: &BaseURL,
-) -> BaseURL {
-    let mut res = get_local_community_apub_id(community, host_url_apub);
-    res.path_segments_mut()
-        .extend(&["followers", &follower.to_string()]);
     res
 }
 
@@ -661,21 +660,40 @@ pub fn spawn_enqueue_send_community_follow(
         let person_ap_id = get_local_person_apub_id(local_follower, &ctx.host_url_apub);
 
         let mut follow =
-            activitystreams::activity::Follow::new(person_ap_id, community_ap_id.clone());
+            activitystreams::activity::Follow::new(person_ap_id.clone(), community_ap_id.clone());
         follow
             .set_context(activitystreams::context())
             .set_id(
                 get_local_community_follow_apub_id(community, local_follower, &ctx.host_url_apub)
                     .into(),
             )
+            .set_to(community_ap_id.clone());
+
+        let mut join = activitystreams::activity::Join::new(person_ap_id, community_ap_id.clone());
+        join.set_context(activitystreams::context())
+            .set_id(
+                get_local_community_follow_join_apub_id(
+                    community,
+                    local_follower,
+                    &ctx.host_url_apub,
+                )
+                .into(),
+            )
             .set_to(community_ap_id);
 
         std::mem::drop(db);
 
         ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: Cow::Owned(community_inbox),
+            inbox: Cow::Borrowed(&community_inbox),
             sign_as: Some(ActorLocalRef::Person(local_follower)),
             object: serde_json::to_string(&follow)?,
+        })
+        .await?;
+
+        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+            inbox: Cow::Owned(community_inbox),
+            sign_as: Some(ActorLocalRef::Person(local_follower)),
+            object: serde_json::to_string(&join)?,
         })
         .await?;
 
