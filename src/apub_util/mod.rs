@@ -1826,3 +1826,51 @@ pub async fn verify_incoming_object(
         }
     }
 }
+
+type RefRouteNode<P> = trout::Node<P, String, LocalObjectRef, ()>;
+
+lazy_static::lazy_static! {
+    static ref LOCAL_REF_ROUTES: RefRouteNode<()> = {
+        RefRouteNode::new()
+            .with_child(
+                "communities",
+                RefRouteNode::new()
+                    .with_child_parse::<CommunityLocalID, _>(
+                        RefRouteNode::new()
+                            .with_child(
+                                "followers",
+                                RefRouteNode::new()
+                                    .with_child_parse::<UserLocalID, _>(
+                                        RefRouteNode::new()
+                                            .with_handler("", |(community, follower), _, _| LocalObjectRef::CommunityFollow(community, follower))
+                                            .with_child(
+                                                "join",
+                                                RefRouteNode::new()
+                                                    .with_handler("", |(community, follower), _, _| LocalObjectRef::CommunityFollowJoin(community, follower))
+                                            )
+                                    )
+                            )
+                    )
+            )
+    };
+}
+
+#[derive(Debug)]
+pub enum LocalObjectRef {
+    CommunityFollow(CommunityLocalID, UserLocalID),
+    CommunityFollowJoin(CommunityLocalID, UserLocalID),
+}
+
+impl LocalObjectRef {
+    fn try_from_path(path: &str) -> Option<LocalObjectRef> {
+        if !path.starts_with('/') {
+            return None;
+        }
+
+        let path = path[1..].to_owned();
+        log::debug!("checking local object {}", path);
+        let res = LOCAL_REF_ROUTES.route(path, ());
+        log::debug!("found {:?}", res);
+        res.ok()
+    }
+}

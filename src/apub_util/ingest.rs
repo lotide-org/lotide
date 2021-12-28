@@ -74,17 +74,16 @@ pub async fn ingest_object(
                 if let Some(remaining) =
                     crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
                 {
-                    if let Some(remaining) = remaining.strip_prefix("/communities/") {
-                        let next_expected = format!("{}/followers/", community_local_id);
-                        if remaining.starts_with(&next_expected) {
-                            let remaining = &remaining[next_expected.len()..];
-                            let follower_local_id: UserLocalID = remaining.parse()?;
-
+                    let obj_ref = super::LocalObjectRef::try_from_path(remaining);
+                    match obj_ref {
+                        Some(super::LocalObjectRef::CommunityFollow(_, follower_local_id))
+                        | Some(super::LocalObjectRef::CommunityFollowJoin(_, follower_local_id)) => {
                             db.execute(
                                 "UPDATE community_follow SET accepted=TRUE WHERE community=$1 AND follower=$2",
                                 &[&community_local_id, &follower_local_id],
                             ).await?;
                         }
+                        _ => {}
                     }
                 }
             }
