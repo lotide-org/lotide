@@ -1,4 +1,4 @@
-use super::{KnownObject, Verified};
+use super::{FollowLike, KnownObject, Verified};
 use crate::types::{CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID};
 use activitystreams::prelude::*;
 use std::borrow::Cow;
@@ -74,16 +74,99 @@ pub async fn ingest_object(
                 if let Some(remaining) =
                     crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
                 {
-                    if let Some(remaining) = remaining.strip_prefix("/communities/") {
-                        let next_expected = format!("{}/followers/", community_local_id);
-                        if remaining.starts_with(&next_expected) {
-                            let remaining = &remaining[next_expected.len()..];
-                            let follower_local_id: UserLocalID = remaining.parse()?;
-
+                    let obj_ref = super::LocalObjectRef::try_from_path(remaining);
+                    match obj_ref {
+                        Some(super::LocalObjectRef::CommunityFollow(_, follower_local_id))
+                        | Some(super::LocalObjectRef::CommunityFollowJoin(_, follower_local_id)) => {
                             db.execute(
                                 "UPDATE community_follow SET accepted=TRUE WHERE community=$1 AND follower=$2",
                                 &[&community_local_id, &follower_local_id],
                             ).await?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            Ok(None)
+        }
+        KnownObject::Add(activity) => {
+            let activity_id = activity
+                .id_unchecked()
+                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
+
+            let target = activity
+                .target()
+                .and_then(|x| x.as_single_id())
+                .ok_or(crate::Error::InternalStrStatic("Missing target for Add"))?;
+
+            let community_ap_id = activity
+                .actor_unchecked()
+                .as_single_id()
+                .ok_or(crate::Error::InternalStrStatic("Missing actor for Add"))?;
+
+            let res = db
+                .query_opt(
+                    "SELECT id, local, ap_outbox FROM community WHERE ap_id=$1",
+                    &[&community_ap_id.as_str()],
+                )
+                .await?;
+            let community_local_info: Option<(CommunityLocalID, bool, Option<&str>)> = res
+                .as_ref()
+                .map(|row| (CommunityLocalID(row.get(0)), row.get(1), row.get(2)));
+
+            if let Some((community_local_id, community_is_local, ap_outbox)) = community_local_info
+            {
+                let target_is_outbox = if let Some(ap_outbox) = ap_outbox {
+                    ap_outbox == target.as_str()
+                } else {
+                    let actor = crate::apub_util::fetch_actor(community_ap_id, ctx.clone()).await?;
+
+                    if let crate::apub_util::ActorLocalInfo::Community { ap_outbox, .. } = actor {
+                        if let Some(ap_outbox) = ap_outbox {
+                            ap_outbox == *target
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                if target_is_outbox {
+                    crate::apub_util::require_containment(activity_id, community_ap_id)?;
+                    crate::apub_util::require_containment(target, community_ap_id)?;
+
+                    let object_id = activity.object().as_single_id();
+
+                    if let Some(object_id) = object_id {
+                        if let Some(remaining) =
+                            crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
+                        {
+                            if let Some(remaining) = remaining.strip_prefix("/posts/") {
+                                if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
+                                    db.execute(
+                                        "UPDATE post SET approved=TRUE, approved_ap_id=$1 WHERE id=$2 AND community=$3",
+                                        &[&activity_id.as_str(), &local_post_id, &community_local_id],
+                                    ).await?;
+                                }
+                            }
+                        } else {
+                            // don't need announces for local objects
+                            let obj =
+                                crate::apub_util::fetch_ap_object(object_id, &ctx.http_client)
+                                    .await?;
+
+                            ingest_object_boxed(
+                                obj,
+                                FoundFrom::Announce {
+                                    url: activity_id.clone(),
+                                    community_local_id,
+                                    community_is_local,
+                                },
+                                ctx,
+                            )
+                            .await?;
                         }
                     }
                 }
@@ -157,46 +240,7 @@ pub async fn ingest_object(
             Ok(None)
         }
         KnownObject::Follow(follow) => {
-            let follow = Verified(follow);
-            let follower_ap_id = follow.actor_unchecked().as_single_id();
-            let target = follow.object().as_single_id();
-
-            if let Some(follower_ap_id) = follower_ap_id {
-                let activity_ap_id = follow
-                    .id_unchecked()
-                    .ok_or(crate::Error::InternalStrStatic("Missing activitity ID"))?;
-
-                crate::apub_util::require_containment(activity_ap_id, follower_ap_id)?;
-                let follow = crate::apub_util::Contained(Cow::Borrowed(&follow));
-
-                let follower_local_id =
-                    crate::apub_util::get_or_fetch_user_local_id(follower_ap_id, &db, &ctx).await?;
-
-                if let Some(target) = target {
-                    if let Some(community_id) =
-                        super::maybe_get_local_community_id_from_uri(target, &ctx.host_url_apub)
-                    {
-                        let row = db
-                            .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
-                            .await?;
-                        if let Some(row) = row {
-                            let local: bool = row.get(0);
-                            if local {
-                                db.execute("INSERT INTO community_follow (community, follower, local, ap_id, accepted) VALUES ($1, $2, FALSE, $3, TRUE) ON CONFLICT (community, follower) DO NOTHING", &[&community_id, &follower_local_id, &activity_ap_id.as_str()]).await?;
-
-                                crate::apub_util::spawn_enqueue_send_community_follow_accept(
-                                    community_id,
-                                    follower_local_id,
-                                    follow.with_owned(),
-                                    ctx,
-                                );
-                            }
-                        } else {
-                            log::error!("Warning: recieved follow for unknown community");
-                        }
-                    }
-                }
-            }
+            ingest_followlike(Verified(FollowLike::Follow(follow)), ctx).await?;
 
             Ok(None)
         }
@@ -217,6 +261,8 @@ pub async fn ingest_object(
                 .summary()
                 .and_then(|maybe| maybe.iter().filter_map(|x| x.as_xsd_string()).next());
             let inbox = group.inbox_unchecked().as_str();
+            let outbox = group.outbox_unchecked();
+            let followers = group.followers_unchecked().map(|x| x.as_str());
             let shared_inbox = group
                 .endpoints_unchecked()
                 .and_then(|endpoints| endpoints.shared_inbox)
@@ -233,9 +279,11 @@ pub async fn ingest_object(
                 .and_then(|key| key.signature_algorithm.as_deref());
 
             let id = CommunityLocalID(db.query_one(
-                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html, created_local) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7, current_timestamp) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7 RETURNING id",
-                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html],
+                "INSERT INTO community (name, local, ap_id, ap_inbox, ap_shared_inbox, public_key, public_key_sigalg, description_html, created_local, ap_outbox, ap_followers) VALUES ($1, FALSE, $2, $3, $4, $5, $6, $7, current_timestamp, $8, $9) ON CONFLICT (ap_id) DO UPDATE SET ap_inbox=$3, ap_shared_inbox=$4, public_key=$5, public_key_sigalg=$6, description_html=$7, ap_outbox=$8, ap_followers=$9 RETURNING id",
+                &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html, &outbox.map(|x| x.as_str()), &followers],
             ).await?.get(0));
+
+            let outbox = outbox.map(|x| x.to_owned());
 
             if let Some(featured_url) = group.ext_two.featured {
                 crate::apub_util::spawn_enqueue_fetch_community_featured(id, featured_url, ctx);
@@ -248,11 +296,55 @@ pub async fn ingest_object(
                         algorithm: super::get_message_digest(public_key_sigalg),
                         key: key.to_owned(),
                     }),
+                    ap_outbox: outbox,
                 },
             )))
         }
         KnownObject::Image(obj) => {
             ingest_postlike(Verified(KnownObject::Image(obj)), found_from, ctx).await
+        }
+        KnownObject::Join(follow) => {
+            ingest_followlike(Verified(FollowLike::Join(follow)), ctx).await?;
+
+            Ok(None)
+        }
+        KnownObject::Leave(activity) => {
+            let activity_id = activity
+                .id_unchecked()
+                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
+
+            let actor_id = activity.actor_unchecked().as_single_id().ok_or(
+                crate::Error::InternalStrStatic("Missing actor for activity"),
+            )?;
+
+            let target_id = activity.object().as_single_id();
+
+            super::require_containment(activity_id, actor_id)?;
+
+            if let Some(target_id) = target_id {
+                if let Some(community_id) =
+                    super::maybe_get_local_community_id_from_uri(target_id, &ctx.host_url_apub)
+                {
+                    let follower_local_id = {
+                        let row = db
+                            .query_opt(
+                                "SELECT id FROM person WHERE ap_id=$1",
+                                &[&actor_id.as_str()],
+                            )
+                            .await?;
+                        row.map(|row| UserLocalID(row.get(0)))
+                    };
+                    if let Some(follower_local_id) = follower_local_id {
+                        db.execute(
+                            "DELETE FROM community_follow WHERE community=$1 AND follower=$2",
+                            &[&community_id, &follower_local_id],
+                        )
+                        .await?;
+                    }
+                }
+            }
+
+            Ok(None)
         }
         KnownObject::Like(activity) => {
             ingest_like(Verified(activity), ctx).await?;
@@ -265,6 +357,76 @@ pub async fn ingest_object(
             ingest_postlike(Verified(KnownObject::Page(obj)), found_from, ctx).await
         }
         KnownObject::Person(person) => ingest_personlike(Verified(person), false, ctx).await,
+        KnownObject::Remove(activity) => {
+            let activity_id = activity
+                .id_unchecked()
+                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
+
+            let target = activity
+                .target()
+                .and_then(|x| x.as_single_id())
+                .ok_or(crate::Error::InternalStrStatic("Missing target for Remove"))?;
+
+            let community_ap_id = activity
+                .actor_unchecked()
+                .as_single_id()
+                .ok_or(crate::Error::InternalStrStatic("Missing actor for Remove"))?;
+
+            let res = db
+                .query_opt(
+                    "SELECT id, ap_outbox FROM community WHERE ap_id=$1",
+                    &[&community_ap_id.as_str()],
+                )
+                .await?;
+            let community_local_info: Option<(CommunityLocalID, Option<&str>)> = res
+                .as_ref()
+                .map(|row| (CommunityLocalID(row.get(0)), row.get(1)));
+
+            if let Some((community_local_id, ap_outbox)) = community_local_info {
+                let target_is_outbox = if let Some(ap_outbox) = ap_outbox {
+                    ap_outbox == target.as_str()
+                } else {
+                    let actor = crate::apub_util::fetch_actor(community_ap_id, ctx.clone()).await?;
+
+                    if let crate::apub_util::ActorLocalInfo::Community { ap_outbox, .. } = actor {
+                        if let Some(ap_outbox) = ap_outbox {
+                            ap_outbox == *target
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                if target_is_outbox {
+                    crate::apub_util::require_containment(activity_id, community_ap_id)?;
+                    crate::apub_util::require_containment(target, community_ap_id)?;
+
+                    let object_id = activity.object().as_single_id();
+
+                    if let Some(object_id) = object_id {
+                        if let Some(remaining) =
+                            crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
+                        {
+                            if let Some(remaining) = remaining.strip_prefix("/posts/") {
+                                if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
+                                    db.execute(
+                                        "UPDATE post SET approved=FALSE, approved_ap_id=NULL WHERE id=$1 AND community=$2",
+                                        &[&local_post_id, &community_local_id],
+                                    ).await?;
+                                }
+                            }
+                        } else {
+                            db.execute("UPDATE post SET approved=FALSE, approved_ap_id=NULL WHERE ap_id=$1", &[&object_id.as_str()])
+                                .await?;
+                        }
+                    }
+                }
+            }
+
+            Ok(None)
+        }
         KnownObject::Service(obj) => ingest_personlike(Verified(obj), true, ctx).await,
         KnownObject::Undo(activity) => {
             ingest_undo(Verified(activity), ctx).await?;
@@ -530,32 +692,50 @@ async fn ingest_postlike(
     found_from: FoundFrom,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let (to, in_reply_to, obj_id) = match obj.deref() {
-        KnownObject::Page(obj) => (obj.to(), None, obj.id_unchecked()),
-        KnownObject::Image(obj) => (obj.to(), None, obj.id_unchecked()),
-        KnownObject::Article(obj) => (obj.to(), None, obj.id_unchecked()),
-        KnownObject::Note(obj) => (obj.to(), obj.in_reply_to(), obj.id_unchecked()),
-        _ => (None, None, None),
+    let (ext, to, in_reply_to, obj_id) = match obj.deref() {
+        KnownObject::Page(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
+        KnownObject::Image(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
+        KnownObject::Article(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
+        KnownObject::Note(obj) => (
+            &obj.ext_one,
+            obj.to(),
+            obj.in_reply_to(),
+            obj.id_unchecked(),
+        ),
+        _ => return Ok(None), // shouldn't happen?
     };
+    let target = &ext.target;
 
-    let community_found = match found_from {
-        FoundFrom::Announce {
-            community_local_id,
-            community_is_local,
-            ..
-        } => Some((community_local_id, community_is_local)),
-        _ => match to {
-            None => None,
-            Some(maybe) => maybe
-                .iter()
-                .filter_map(|any| {
-                    any.as_xsd_any_uri()
-                        .and_then(|uri| {
-                            super::maybe_get_local_community_id_from_uri(uri, &ctx.host_url_apub)
-                        })
-                        .map(|id| (id, true))
-                })
-                .next(),
+    let community_found = match target
+        .as_ref()
+        .and_then(|target| target.as_one().and_then(|x| x.id()))
+        .map(|target_id| {
+            super::maybe_get_local_community_id_from_outbox_uri(target_id, &ctx.host_url_apub)
+        }) {
+        Some(Some(community_local_id)) => Some((community_local_id, true)),
+        Some(None) => None,
+        None => match found_from {
+            FoundFrom::Announce {
+                community_local_id,
+                community_is_local,
+                ..
+            } => Some((community_local_id, community_is_local)),
+            _ => match to {
+                None => None,
+                Some(maybe) => maybe
+                    .iter()
+                    .filter_map(|any| {
+                        any.as_xsd_any_uri()
+                            .and_then(|uri| {
+                                super::maybe_get_local_community_id_from_uri(
+                                    uri,
+                                    &ctx.host_url_apub,
+                                )
+                            })
+                            .map(|id| (id, true))
+                    })
+                    .next(),
+            },
         },
     };
 
@@ -761,6 +941,55 @@ async fn ingest_postlike(
             Ok(None)
         }
     }
+}
+
+async fn ingest_followlike(
+    follow: Verified<FollowLike>,
+    ctx: Arc<crate::BaseContext>,
+) -> Result<(), crate::Error> {
+    let follower_ap_id = follow.actor_unchecked().as_single_id();
+    let target = follow.object().as_single_id();
+
+    if let Some(follower_ap_id) = follower_ap_id {
+        let activity_ap_id = follow
+            .id_unchecked()
+            .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
+
+        crate::apub_util::require_containment(activity_ap_id, follower_ap_id)?;
+        let follow = crate::apub_util::Contained(Cow::Borrowed(&follow));
+
+        let db = ctx.db_pool.get().await?;
+
+        let follower_local_id =
+            crate::apub_util::get_or_fetch_user_local_id(follower_ap_id, &db, &ctx).await?;
+
+        if let Some(target) = target {
+            if let Some(community_id) =
+                super::maybe_get_local_community_id_from_uri(target, &ctx.host_url_apub)
+            {
+                let row = db
+                    .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
+                    .await?;
+                if let Some(row) = row {
+                    let local: bool = row.get(0);
+                    if local {
+                        db.execute("INSERT INTO community_follow (community, follower, local, ap_id, accepted) VALUES ($1, $2, FALSE, $3, TRUE) ON CONFLICT (community, follower) DO UPDATE SET ap_id = $3, accepted = TRUE", &[&community_id, &follower_local_id, &activity_ap_id.as_str()]).await?;
+
+                        crate::apub_util::spawn_enqueue_send_community_follow_accept(
+                            community_id,
+                            follower_local_id,
+                            follow.with_owned(),
+                            ctx,
+                        );
+                    }
+                } else {
+                    log::error!("Warning: recieved follow for unknown community");
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn ingest_personlike<
@@ -982,7 +1211,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
     is_announce: Option<&url::Url>,
-    obj: Verified<activitystreams::object::Object<Kind>>,
+    obj: Verified<super::ExtendedPostlike<activitystreams::object::Object<Kind>>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<PostLocalID>, crate::Error> {
     let title = obj

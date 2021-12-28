@@ -3430,9 +3430,9 @@ dependencies = [
 
 [[package]]
 name = "trout"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c525ebdc306faebb8a191ad8be3fa914d7aaf8e7d724ab0471d1f9d380c4e4e2"
+checksum = "aafa917043f2f9904a717ee80a2728ee4235c81688fff511779e42d383a6f193"
 dependencies = [
  "hyper 0.13.6",
  "percent-encoding",

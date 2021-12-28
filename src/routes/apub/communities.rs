@@ -45,6 +45,13 @@ pub fn route_communities() -> crate::RouteNode<()> {
                                     "GET",
                                     handler_communities_followers_accept_get,
                                 ),
+                            )
+                            .with_child(
+                                "join",
+                                crate::RouteNode::new().with_handler_async(
+                                    "GET",
+                                    handler_communities_followers_join_get,
+                                ),
                             ),
                     ),
             )
@@ -67,20 +74,35 @@ pub fn route_communities() -> crate::RouteNode<()> {
             .with_child(
                 "posts",
                 crate::RouteNode::new().with_child_parse::<PostLocalID, _>(
-                    crate::RouteNode::new().with_child(
-                        "announce",
-                        crate::RouteNode::new()
-                            .with_handler_async("GET", handler_communities_posts_announce_get)
-                            .with_child(
-                                "undos",
-                                crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
-                                    crate::RouteNode::new().with_handler_async(
-                                        "GET",
-                                        handler_communities_posts_announce_undos_get,
+                    crate::RouteNode::new()
+                        .with_child(
+                            "announce",
+                            crate::RouteNode::new()
+                                .with_handler_async("GET", handler_communities_posts_announce_get)
+                                .with_child(
+                                    "undos",
+                                    crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
+                                        crate::RouteNode::new().with_handler_async(
+                                            "GET",
+                                            handler_communities_posts_announce_undos_get,
+                                        ),
                                     ),
                                 ),
-                            ),
-                    ),
+                        )
+                        .with_child(
+                            "add",
+                            crate::RouteNode::new()
+                                .with_handler_async("GET", handler_communities_posts_add_get)
+                                .with_child(
+                                    "undos",
+                                    crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
+                                        crate::RouteNode::new().with_handler_async(
+                                            "GET",
+                                            handler_communities_posts_add_undos_get,
+                                        ),
+                                    ),
+                                ),
+                        ),
                 ),
             )
             .with_child(
@@ -167,11 +189,7 @@ async fn handler_communities_get(
                 )
                 .into(),
             )
-            .set_followers({
-                let mut res = community_ap_id.clone();
-                res.path_segments_mut().push("followers");
-                res.into()
-            })
+            .set_followers(crate::apub_util::get_local_community_followers_apub_id(community_id, &ctx.host_url_apub).into())
             .set_preferred_username(name);
 
             let featured_ext = crate::apub_util::FeaturedExtension {
@@ -403,6 +421,75 @@ async fn handler_communities_followers_get(
     }
 }
 
+async fn handler_communities_followers_join_get(
+    params: (CommunityLocalID, UserLocalID),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, user_id) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let row = db.query_opt(
+        "SELECT person.local, community.local, community.ap_id FROM community_follow, community, person WHERE community.id=$1 AND community.id = community_follow.community AND person.id = community_follow.follower AND person.id = $2",
+        &[&community_id.raw(), &user_id.raw()],
+    ).await?;
+    match row {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such follow",
+        )),
+        Some(row) => {
+            let follower_local: bool = row.get(0);
+            if !follower_local {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested follow is not owned by this instance",
+                )));
+            }
+
+            let community_local: bool = row.get(1);
+
+            let community_ap_id = if community_local {
+                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub)
+            } else {
+                let community_ap_id: Option<&str> = row.get(2);
+                std::str::FromStr::from_str(community_ap_id.ok_or_else(|| {
+                    crate::Error::InternalStr(format!(
+                        "Missing ap_id for community {}",
+                        community_id
+                    ))
+                })?)?
+            };
+
+            let person_ap_id =
+                crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
+
+            let mut follow =
+                activitystreams::activity::Join::new(person_ap_id, community_ap_id.clone());
+
+            follow
+                .set_context(activitystreams::context())
+                .set_id({
+                    let mut res = crate::apub_util::get_local_community_apub_id(
+                        community_id,
+                        &ctx.host_url_apub,
+                    );
+                    res.path_segments_mut()
+                        .extend(&["followers", &user_id.to_string(), "join"]);
+                    res.into()
+                })
+                .set_to(community_ap_id);
+
+            let body = serde_json::to_vec(&follow)?.into();
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                .body(body)?)
+        }
+    }
+}
+
 async fn handler_communities_followers_accept_get(
     params: (CommunityLocalID, UserLocalID),
     ctx: Arc<crate::RouteContext>,
@@ -432,7 +519,7 @@ async fn handler_communities_followers_accept_get(
 
             let follower_local = row.get(3);
             let follow_ap_id = if follower_local {
-                crate::apub_util::get_local_follow_apub_id(
+                crate::apub_util::get_local_community_follow_apub_id(
                     community_id,
                     UserLocalID(row.get(2)),
                     &ctx.host_url_apub,
@@ -530,7 +617,7 @@ async fn handler_communities_outbox_page_get(
         created
     });
 
-    let items: Result<Vec<activitystreams::activity::Announce>, _> = rows
+    let items: Result<Vec<Vec<serde_json::Value>>, crate::Error> = rows
         .into_iter()
         .map(|row| {
             let post_id = PostLocalID(row.get(0));
@@ -540,16 +627,24 @@ async fn handler_communities_outbox_page_get(
                 std::str::FromStr::from_str(row.get(2))?
             };
 
-            crate::apub_util::local_community_post_announce_ap(
-                community_id,
-                post_id,
-                post_ap_id.into(),
-                &ctx.host_url_apub,
-            )
+            Ok(vec![
+                serde_json::to_value(crate::apub_util::local_community_post_announce_ap(
+                    community_id,
+                    post_id,
+                    post_ap_id.clone().into(),
+                    &ctx.host_url_apub,
+                )?)?,
+                serde_json::to_value(crate::apub_util::local_community_post_add_ap(
+                    community_id,
+                    post_id,
+                    post_ap_id.into(),
+                    &ctx.host_url_apub,
+                )?)?,
+            ])
         })
         .collect();
 
-    let items = items?;
+    let items: Vec<_> = items?.into_iter().flatten().collect();
 
     let next = last_created.map(|ts| {
         crate::apub_util::get_local_community_outbox_page_apub_id(
@@ -583,7 +678,7 @@ async fn handler_communities_posts_announce_get(
     let db = ctx.db_pool.get().await?;
 
     match db.query_opt(
-        "SELECT post.id, post.local, post.ap_id, community.local FROM post, community WHERE post.community = community.id AND id=$1 AND community=$2 AND approved",
+        "SELECT post.id, post.local, post.ap_id, community.local FROM post, community WHERE post.community = community.id AND post.id=$1 AND post.community=$2 AND post.approved",
         &[&post_id, &community_id],
     ).await? {
         None => {
@@ -655,6 +750,102 @@ async fn handler_communities_posts_announce_undos_get(
                     std::str::FromStr::from_str(row.get(1))?
                 };
                 let body = crate::apub_util::local_community_post_announce_undo_ap(community_id, post_id, post_ap_id, &undo_id, &ctx.host_url_apub)?;
+                let body = serde_json::to_vec(&body)?;
+
+                Ok(hyper::Response::builder()
+                   .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                   .body(body.into())?)
+            } else {
+                Ok(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Requested community is not owned by this instance",
+                ))
+            }
+        }
+    }
+}
+
+async fn handler_communities_posts_add_get(
+    params: (CommunityLocalID, PostLocalID),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, post_id) = params;
+    let db = ctx.db_pool.get().await?;
+
+    match db.query_opt(
+        "SELECT post.id, post.local, post.ap_id, community.local FROM post, community WHERE post.community = community.id AND post.id=$1 AND post.community=$2 AND post.approved",
+        &[&post_id, &community_id],
+    ).await? {
+        None => {
+            Ok(crate::simple_response(
+                    hyper::StatusCode::NOT_FOUND,
+                    "No such publish",
+            ))
+        },
+        Some(row) => {
+            let community_local: Option<bool> = row.get(3);
+            match community_local {
+                None => Ok(crate::simple_response(
+                        hyper::StatusCode::NOT_FOUND,
+                        "No such community",
+                        )),
+                Some(false) => Ok(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        "Requested community is not owned by this instance",
+                    )),
+                Some(true) => {
+                    let post_local_id = PostLocalID(row.get(0));
+                    let post_ap_id = if row.get(1) {
+                        crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
+                    } else {
+                        std::str::FromStr::from_str(row.get(2))?
+                    };
+
+                    let body = crate::apub_util::local_community_post_add_ap(
+                        community_id,
+                        post_local_id,
+                        post_ap_id.into(),
+                        &ctx.host_url_apub,
+                    )?;
+                    let body = serde_json::to_vec(&body)?;
+
+                    Ok(hyper::Response::builder()
+                       .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                       .body(body.into())?)
+                }
+            }
+        },
+    }
+}
+
+async fn handler_communities_posts_add_undos_get(
+    params: (CommunityLocalID, PostLocalID, uuid::Uuid),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id, post_id, undo_id) = params;
+    let db = ctx.db_pool.get().await?;
+
+    match db.query_opt(
+        "SELECT post.local, post.ap_id, community.local FROM post, community WHERE post.community = community.id AND post.id = $1 AND community.id = $2 AND NOT post.approved",
+        &[&post_id, &community_id],
+    ).await? {
+        None => {
+            Ok(crate::simple_response(
+                    hyper::StatusCode::NOT_FOUND,
+                    "No such undo",
+            ))
+        },
+        Some(row) => {
+            let community_local = row.get(2);
+            if community_local {
+                let post_ap_id = if row.get(0) {
+                    crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into()
+                } else {
+                    std::str::FromStr::from_str(row.get(1))?
+                };
+                let body = crate::apub_util::local_community_post_add_undo_ap(community_id, post_id, post_ap_id, &undo_id, &ctx.host_url_apub)?;
                 let body = serde_json::to_vec(&body)?;
 
                 Ok(hyper::Response::builder()
