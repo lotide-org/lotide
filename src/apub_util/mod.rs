@@ -70,6 +70,7 @@ pub enum KnownObject {
             PublicKeyExtension<'static>,
         >,
     ),
+    Remove(activitystreams::activity::Remove),
     Service(
         activitystreams_ext::Ext1<
             activitystreams::actor::ApActor<activitystreams::actor::Service>,

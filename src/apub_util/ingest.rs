@@ -357,6 +357,76 @@ pub async fn ingest_object(
             ingest_postlike(Verified(KnownObject::Page(obj)), found_from, ctx).await
         }
         KnownObject::Person(person) => ingest_personlike(Verified(person), false, ctx).await,
+        KnownObject::Remove(activity) => {
+            let activity_id = activity
+                .id_unchecked()
+                .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
+
+            let target = activity
+                .target()
+                .and_then(|x| x.as_single_id())
+                .ok_or(crate::Error::InternalStrStatic("Missing target for Remove"))?;
+
+            let community_ap_id = activity
+                .actor_unchecked()
+                .as_single_id()
+                .ok_or(crate::Error::InternalStrStatic("Missing actor for Remove"))?;
+
+            let res = db
+                .query_opt(
+                    "SELECT id, ap_outbox FROM community WHERE ap_id=$1",
+                    &[&community_ap_id.as_str()],
+                )
+                .await?;
+            let community_local_info: Option<(CommunityLocalID, Option<&str>)> = res
+                .as_ref()
+                .map(|row| (CommunityLocalID(row.get(0)), row.get(1)));
+
+            if let Some((community_local_id, ap_outbox)) = community_local_info {
+                let target_is_outbox = if let Some(ap_outbox) = ap_outbox {
+                    ap_outbox == target.as_str()
+                } else {
+                    let actor = crate::apub_util::fetch_actor(community_ap_id, ctx.clone()).await?;
+
+                    if let crate::apub_util::ActorLocalInfo::Community { ap_outbox, .. } = actor {
+                        if let Some(ap_outbox) = ap_outbox {
+                            ap_outbox == *target
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                if target_is_outbox {
+                    crate::apub_util::require_containment(activity_id, community_ap_id)?;
+                    crate::apub_util::require_containment(target, community_ap_id)?;
+
+                    let object_id = activity.object().as_single_id();
+
+                    if let Some(object_id) = object_id {
+                        if let Some(remaining) =
+                            crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
+                        {
+                            if let Some(remaining) = remaining.strip_prefix("/posts/") {
+                                if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
+                                    db.execute(
+                                        "UPDATE post SET approved=FALSE, approved_ap_id=NULL WHERE id=$1 AND community=$2",
+                                        &[&local_post_id, &community_local_id],
+                                    ).await?;
+                                }
+                            }
+                        } else {
+                            db.execute("UPDATE post SET approved=FALSE, approved_ap_id=NULL WHERE ap_id=$1", &[&object_id.as_str()])
+                                .await?;
+                        }
+                    }
+                }
+            }
+
+            Ok(None)
+        }
         KnownObject::Service(obj) => ingest_personlike(Verified(obj), true, ctx).await,
         KnownObject::Undo(activity) => {
             ingest_undo(Verified(activity), ctx).await?;
