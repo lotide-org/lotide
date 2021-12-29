@@ -1,0 +1,3 @@
+BEGIN;
+	DROP TABLE post_flag;
+COMMIT;

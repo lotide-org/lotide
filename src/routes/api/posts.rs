@@ -3,8 +3,8 @@ use super::{
     RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost, ValueConsumer,
 };
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, JustUser, PostLocalID, RespPostInfo,
-    UserLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, JustUser, PostFlagLocalID, PostLocalID,
+    RespPostInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -575,6 +575,156 @@ async fn route_unstable_posts_list(
     };
 
     crate::json_response(&output)
+}
+
+async fn route_unstable_posts_flags_create(
+    params: (PostLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+
+    let lang = crate::get_lang_for_req(&req);
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+
+    #[derive(Deserialize)]
+    struct PostFlagsCreateBody<'a> {
+        content_text: Option<Cow<'a, str>>,
+
+        to_community: bool,
+        to_site_admin: bool,
+
+        #[serde(default)]
+        to_remote_site_admin: bool,
+    }
+
+    let body: PostFlagsCreateBody = serde_json::from_slice(&body)?;
+
+    let post_row = db
+        .query_opt(
+            "SELECT local, ap_id, community, author FROM post WHERE id=$1 AND NOT deleted",
+            &[&post_id],
+        )
+        .await?
+        .ok_or_else(|| {
+            crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::NOT_FOUND,
+                lang.tr("no_such_post", None).into_owned(),
+            ))
+        })?;
+
+    let res_row = db.query_one(
+        "INSERT INTO post_flag (person, post, content_text, to_community, to_site_admin, to_remote_site_admin, created_local, local) VALUES ($1, $2, $3, $4, $5, $6, current_timestamp, TRUE) RETURNING id",
+        &[&user, &post_id, &body.content_text, &body.to_community, &body.to_site_admin, &body.to_remote_site_admin]
+    ).await?;
+
+    let id = PostFlagLocalID(res_row.get(0));
+
+    crate::spawn_task(async move {
+        let post_local = post_row.get(0);
+
+        let post_ap_id = if post_local {
+            Some(crate::apub_util::get_local_post_apub_id(
+                post_id,
+                &ctx.host_url_apub,
+            ))
+        } else {
+            post_row
+                .get::<_, Option<&str>>(1)
+                .map(|x| x.parse())
+                .transpose()?
+        };
+
+        let community_info = match post_row.get(2) {
+            None => None,
+            Some(community_id) => {
+                let community_id = CommunityLocalID(community_id);
+
+                let row = db.query_opt("SELECT local, ap_id, COALESCE(ap_inbox, ap_shared_inbox) FROM community WHERE id=$1 AND NOT deleted", &[&community_id]).await?;
+                if let Some(row) = row {
+                    let community_local = row.get(0);
+
+                    let community_ap_id = if community_local {
+                        Some(crate::apub_util::get_local_community_apub_id(
+                            community_id,
+                            &ctx.host_url_apub,
+                        ))
+                    } else {
+                        row.get::<_, Option<&str>>(1)
+                            .map(|x| x.parse())
+                            .transpose()?
+                    };
+
+                    Some(((community_id, community_local, community_ap_id), row.get(2)))
+                } else {
+                    None
+                }
+            }
+        };
+
+        if let Some(post_ap_id) = post_ap_id {
+            let flag_ap = crate::apub_util::local_post_flag_to_ap(
+                id,
+                body.content_text.as_deref(),
+                user,
+                post_ap_id,
+                community_info.as_ref().map(|(x, _)| x),
+                body.to_community,
+                &ctx.host_url_apub,
+            );
+            let flag_ap_str = serde_json::to_string(&flag_ap)?;
+
+            if body.to_community {
+                if let Some(((_, community_local, _), community_inbox)) = community_info {
+                    if !community_local {
+                        if let Option::<String>::Some(community_inbox) = community_inbox {
+                            let flag_ap_str = flag_ap_str.clone();
+                            let ctx = ctx.clone();
+                            crate::spawn_task(async move {
+                                ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                                    inbox: Cow::Owned(community_inbox.parse()?),
+                                    sign_as: Some(ActorLocalRef::Person(user)),
+                                    object: flag_ap_str,
+                                })
+                                .await
+                            });
+                        }
+                    }
+                }
+            }
+
+            if body.to_remote_site_admin {
+                if let Some(author_id) = post_row.get(3) {
+                    let author_id = UserLocalID(author_id);
+
+                    let row = db.query_opt("SELECT local, COALESCE(ap_shared_inbox, ap_inbox) FROM person WHERE id=$1", &[&author_id]).await?;
+                    if let Some(row) = row {
+                        let author_local: bool = row.get(0);
+                        if !author_local {
+                            if let Option::<String>::Some(inbox) = row.get(1) {
+                                crate::spawn_task(async move {
+                                    ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                                        inbox: Cow::Owned(inbox.parse()?),
+                                        sign_as: Some(ActorLocalRef::Person(user)),
+                                        object: serde_json::to_string(&flag_ap)?,
+                                    })
+                                    .await
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    });
+
+    crate::json_response(&crate::types::Empty {})
 }
 
 async fn route_unstable_posts_replies_list(
@@ -1349,6 +1499,11 @@ pub fn route_posts() -> crate::RouteNode<()> {
             crate::RouteNode::new()
                 .with_handler_async("GET", route_unstable_posts_get)
                 .with_handler_async("DELETE", route_unstable_posts_delete)
+                .with_child(
+                    "flags",
+                    crate::RouteNode::new()
+                        .with_handler_async("POST", route_unstable_posts_flags_create),
+                )
                 .with_child(
                     "replies",
                     crate::RouteNode::new()

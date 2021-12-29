@@ -1,5 +1,6 @@
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, PostFlagLocalID, PostLocalID, ThingLocalRef,
+    UserLocalID,
 };
 use crate::BaseURL;
 use activitystreams::prelude::*;
@@ -1519,6 +1520,42 @@ pub fn local_comment_to_create_ap(
     }
 
     Ok(create)
+}
+
+pub fn local_post_flag_to_ap(
+    flag_local_id: PostFlagLocalID,
+    content_text: Option<&str>,
+    user_id: UserLocalID,
+    post_ap_id: BaseURL,
+    community_info: Option<&(CommunityLocalID, bool, Option<BaseURL>)>,
+    to_community: bool,
+    host_url_apub: &BaseURL,
+) -> activitystreams::activity::Flag {
+    let mut flag = activitystreams::activity::Flag::new(
+        crate::apub_util::get_local_person_apub_id(user_id, host_url_apub),
+        post_ap_id,
+    );
+
+    flag.set_context(activitystreams::context()).set_id({
+        let mut res = host_url_apub.clone();
+        res.path_segments_mut()
+            .extend(&["post_flags", &flag_local_id.to_string()]);
+        res.into()
+    });
+
+    if let Some(content_text) = content_text {
+        flag.set_content(content_text);
+    }
+
+    if to_community {
+        if let Some((_, _, community_ap_id)) = community_info {
+            if let Some(community_ap_id) = community_ap_id {
+                flag.set_to(community_ap_id.deref().clone());
+            }
+        }
+    }
+
+    flag
 }
 
 pub fn local_post_like_to_ap(

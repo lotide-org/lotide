@@ -50,6 +50,7 @@ id_wrapper!(PostLocalID);
 id_wrapper!(UserLocalID);
 id_wrapper!(NotificationID);
 id_wrapper!(NotificationSubscriptionID);
+id_wrapper!(PostFlagLocalID);
 
 #[derive(Serialize, Default, Clone, Copy)]
 pub struct Empty {}
