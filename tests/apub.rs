@@ -35,12 +35,7 @@ impl TestServer {
 
 impl std::ops::Drop for TestServer {
     fn drop(&mut self) {
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(self.process.id() as i32),
-            nix::sys::signal::Signal::SIGINT,
-        )
-        .unwrap();
-        self.process.wait().unwrap();
+        self.process.kill().unwrap();
     }
 }
 
