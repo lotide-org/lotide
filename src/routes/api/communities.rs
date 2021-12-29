@@ -10,6 +10,32 @@ use std::convert::TryInto;
 use std::ops::Deref;
 use std::sync::Arc;
 
+async fn require_community_exists(
+    community_id: CommunityLocalID,
+    db: &tokio_postgres::Client,
+    lang: &crate::Translator,
+) -> Result<(), crate::Error> {
+    let row = db
+        .query_opt(
+            "SELECT deleted FROM community WHERE id=$1",
+            &[&community_id],
+        )
+        .await?;
+    let exists = match row {
+        None => false,
+        Some(row) => !row.get::<_, bool>(0),
+    };
+
+    if exists {
+        Ok(())
+    } else {
+        Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            lang.tr("no_such_community", None).into_owned(),
+        )))
+    }
+}
+
 fn get_community_description_content<'a>(
     description_text: Option<&'a str>,
     description_markdown: Option<&'a str>,
@@ -91,7 +117,7 @@ async fn route_unstable_communities_list(
         sql.push_str(", (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$1), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$1)");
     }
 
-    sql.push_str(" FROM community WHERE TRUE");
+    sql.push_str(" FROM community WHERE NOT deleted");
 
     if let Some(search) = &query.search {
         values.push(search);
@@ -173,6 +199,7 @@ async fn route_unstable_communities_list(
                 name,
                 local,
                 remote_url: ap_id.map(Cow::Borrowed),
+                deleted: false,
             },
             query.page.as_deref(),
         ))
@@ -208,6 +235,7 @@ async fn route_unstable_communities_list(
                         local,
                         host,
                         remote_url,
+                        deleted: false,
                     },
 
                     description: get_community_description_content(
@@ -322,6 +350,81 @@ async fn route_unstable_communities_create(
     crate::json_response(&serde_json::json!({"community": {"id": community_id}}))
 }
 
+async fn route_unstable_communities_delete(
+    params: (CommunityLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id,) = params;
+
+    let lang = crate::get_lang_for_req(&req);
+    let db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let res = {
+        let row = db
+            .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
+            .await?;
+
+        match row {
+            None => {
+                return Ok(crate::empty_response()); // already gone
+            }
+            Some(row) => {
+                if row.get(0) {
+                    Ok(())
+                } else {
+                    Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        lang.tr("community_not_local", None).into_owned(),
+                    )))
+                }
+            }
+        }
+    };
+
+    res?;
+
+    ({
+        let row = db
+            .query_opt(
+                "SELECT 1 FROM community_moderator WHERE community=$1 AND person=$2",
+                &[&community_id, &user],
+            )
+            .await?;
+        match row {
+            None => {
+                if crate::is_site_admin(&db, user).await? {
+                    Ok(())
+                } else {
+                    Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        lang.tr("community_edit_denied", None).into_owned(),
+                    )))
+                }
+            }
+            Some(_) => Ok(()),
+        }
+    })?;
+
+    let row_count = db.execute("UPDATE community SET deleted=TRUE, name='[deleted]', description=NULL, description_html=NULL, description_markdown=NULL WHERE id=$1 AND NOT deleted", &[&community_id]).await?;
+
+    if row_count > 0 {
+        // successfully deleted, inform followers
+
+        let delete_ap =
+            crate::apub_util::local_community_delete_to_ap(community_id, &ctx.host_url_apub);
+        crate::spawn_task(crate::apub_util::enqueue_forward_to_community_followers(
+            community_id,
+            serde_json::to_string(&delete_ap)?,
+            ctx,
+        ));
+    }
+
+    Ok(crate::empty_response())
+}
+
 async fn route_unstable_communities_get(
     params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
@@ -338,12 +441,12 @@ async fn route_unstable_communities_get(
         (if query.include_your {
             let user = crate::require_login(&req, &db).await?;
             db.query_opt(
-                "SELECT name, local, ap_id, description, description_html, description_markdown, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$2) FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, description, description_html, description_markdown, (SELECT accepted FROM community_follow WHERE community=community.id AND follower=$2), EXISTS(SELECT 1 FROM community_moderator WHERE community=community.id AND person=$2) FROM community WHERE id=$1 AND NOT deleted",
                 &[&community_id.raw(), &user.raw()],
             ).await?
         } else {
             db.query_opt(
-                "SELECT name, local, ap_id, description, description_html, description_markdown FROM community WHERE id=$1",
+                "SELECT name, local, ap_id, description, description_html, description_markdown FROM community WHERE id=$1 AND NOT deleted",
                 &[&community_id.raw()],
             ).await?
         })
@@ -380,6 +483,7 @@ async fn route_unstable_communities_get(
                 }
             },
             remote_url: community_remote_url,
+            deleted: false, // already should have failed if deleted
         },
         description: get_community_description_content(row.get(3), row.get(5), row.get(4)),
         feeds: RespCommunityFeeds {
@@ -417,6 +521,8 @@ async fn route_unstable_communities_patch(
 
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
+
+    require_community_exists(community_id, &db, &lang).await?;
 
     let user = crate::require_login(&req, &db).await?;
 
@@ -515,7 +621,10 @@ async fn route_unstable_communities_follow(
     let body: CommunitiesFollowBody = serde_json::from_slice(&body)?;
 
     let row = db
-        .query_opt("SELECT local FROM community WHERE id=$1", &[&community])
+        .query_opt(
+            "SELECT local, deleted FROM community WHERE id=$1",
+            &[&community],
+        )
         .await?
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
@@ -525,6 +634,15 @@ async fn route_unstable_communities_follow(
         })?;
 
     let community_local: bool = row.get(0);
+
+    if row.get(1) {
+        // deleted
+
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            lang.tr("no_such_community", None).into_owned(),
+        )));
+    }
 
     let row_count = db.execute("INSERT INTO community_follow (community, follower, local, accepted) VALUES ($1, $2, TRUE, $3) ON CONFLICT DO NOTHING", &[&community, &user.raw(), &community_local]).await?;
 
@@ -823,6 +941,8 @@ async fn route_unstable_communities_posts_patch(
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
 
+    require_community_exists(community_id, &db, &lang).await?;
+
     let user = crate::require_login(&req, &db).await?;
 
     #[derive(Deserialize)]
@@ -943,6 +1063,7 @@ pub fn route_communities() -> crate::RouteNode<()> {
         .with_handler_async("POST", route_unstable_communities_create)
         .with_child_parse::<CommunityLocalID, _>(
             crate::RouteNode::new()
+                .with_handler_async("DELETE", route_unstable_communities_delete)
                 .with_handler_async("GET", route_unstable_communities_get)
                 .with_handler_async("PATCH", route_unstable_communities_patch)
                 .with_child(

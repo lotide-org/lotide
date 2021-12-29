@@ -28,6 +28,10 @@ pub fn route_communities() -> crate::RouteNode<()> {
                 ),
             )
             .with_child(
+                "delete",
+                crate::RouteNode::new().with_handler_async("GET", handler_communities_delete_get),
+            )
+            .with_child(
                 "featured",
                 crate::RouteNode::new()
                     .with_handler_async("GET", handler_communities_featured_list),
@@ -125,7 +129,7 @@ async fn handler_communities_get(
 
     match db
         .query_opt(
-            "SELECT name, local, public_key, description, description_html FROM community WHERE id=$1",
+            "SELECT name, local, public_key, description, description_html, deleted FROM community WHERE id=$1",
             &[&community_id],
         )
         .await?
@@ -143,90 +147,109 @@ async fn handler_communities_get(
                 )));
             }
 
-            let name: String = row.get(0);
-            let public_key =
-                row.get::<_, Option<&[u8]>>(2)
-                    .and_then(|bytes| match std::str::from_utf8(bytes) {
-                        Ok(key) => Some(key),
-                        Err(err) => {
-                            log::error!("Warning: public_key is not UTF-8: {:?}", err);
-                            None
-                        }
-                    });
-            let description = match row.get(4) {
-                Some(description_html) => Some(crate::clean_html(description_html)),
-                None => row.get::<_, Option<&str>>(3).map(|x| v_htmlescape::escape(x).to_string()),
-            };
-
             let community_ap_id =
                 crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub);
 
-            let mut info = activitystreams::actor::Group::new();
-            info.set_many_contexts(vec![
-                activitystreams::context(),
-                activitystreams::security(),
-            ])
-            .add_context(FEATURED_CONTEXT.clone())
-            .set_id(community_ap_id.deref().clone())
-            .set_name(name.as_ref());
+            if row.get(5) {
+                // deleted
 
-            if let Some(description) = description {
-                info.set_summary(description);
-            }
+                let mut info = activitystreams::object::Tombstone::new();
+                info.set_former_type("Group".to_owned())
+                    .set_context(activitystreams::context())
+                    .set_id(community_ap_id.into());
 
-            let inbox = {
-                let mut res = community_ap_id.clone();
-                res.path_segments_mut().push("inbox");
-                res
-            };
+                let body = serde_json::to_vec(&info)?;
 
-            let mut info = activitystreams::actor::ApActor::new(inbox.into(), info);
+                let mut resp = hyper::Response::new(body.into());
+                resp.headers_mut().insert(
+                    hyper::header::CONTENT_TYPE,
+                    hyper::header::HeaderValue::from_static(crate::apub_util::ACTIVITY_TYPE),
+                );
 
-            info.set_outbox(
-                crate::apub_util::get_local_community_outbox_apub_id(
-                    community_id,
-                    &ctx.host_url_apub,
-                )
-                .into(),
-            )
-            .set_followers(crate::apub_util::get_local_community_followers_apub_id(community_id, &ctx.host_url_apub).into())
-            .set_preferred_username(name);
-
-            let featured_ext = crate::apub_util::FeaturedExtension {
-                featured: Some(crate::apub_util::get_local_community_featured_apub_id(community_id, &ctx.host_url_apub).into()),
-            };
-
-            let info = activitystreams_ext::Ext1::new(info, featured_ext);
-
-            let key_id = format!(
-                "{}/communities/{}#main-key",
-                ctx.host_url_apub, community_id
-            );
-
-            let body = if let Some(public_key) = public_key {
-                let public_key_ext = crate::apub_util::PublicKeyExtension {
-                    public_key: Some(crate::apub_util::PublicKey {
-                        id: (&key_id).into(),
-                        owner: community_ap_id.as_str().into(),
-                        public_key_pem: public_key.into(),
-                        signature_algorithm: Some(crate::apub_util::SIGALG_RSA_SHA256.into()),
-                    }),
+                Ok(resp)
+            } else {
+                let name: String = row.get(0);
+                let public_key =
+                    row.get::<_, Option<&[u8]>>(2)
+                        .and_then(|bytes| match std::str::from_utf8(bytes) {
+                            Ok(key) => Some(key),
+                            Err(err) => {
+                                log::error!("Warning: public_key is not UTF-8: {:?}", err);
+                                None
+                            }
+                        });
+                let description = match row.get(4) {
+                    Some(description_html) => Some(crate::clean_html(description_html)),
+                    None => row.get::<_, Option<&str>>(3).map(|x| v_htmlescape::escape(x).to_string()),
                 };
 
-                let info = activitystreams_ext::Ext1::new(info, public_key_ext);
+                let mut info = activitystreams::actor::Group::new();
+                info.set_many_contexts(vec![
+                    activitystreams::context(),
+                    activitystreams::security(),
+                ])
+                .add_context(FEATURED_CONTEXT.clone())
+                .set_id(community_ap_id.deref().clone())
+                .set_name(name.as_ref());
 
-                serde_json::to_vec(&info)
-            } else {
-                serde_json::to_vec(&info)
-            }?;
+                if let Some(description) = description {
+                    info.set_summary(description);
+                }
 
-            let mut resp = hyper::Response::new(body.into());
-            resp.headers_mut().insert(
-                hyper::header::CONTENT_TYPE,
-                hyper::header::HeaderValue::from_static("application/activity+json"),
-            );
+                let inbox = {
+                    let mut res = community_ap_id.clone();
+                    res.path_segments_mut().push("inbox");
+                    res
+                };
 
-            Ok(resp)
+                let mut info = activitystreams::actor::ApActor::new(inbox.into(), info);
+
+                info.set_outbox(
+                    crate::apub_util::get_local_community_outbox_apub_id(
+                        community_id,
+                        &ctx.host_url_apub,
+                    )
+                    .into(),
+                )
+                .set_followers(crate::apub_util::get_local_community_followers_apub_id(community_id, &ctx.host_url_apub).into())
+                .set_preferred_username(name);
+
+                let featured_ext = crate::apub_util::FeaturedExtension {
+                    featured: Some(crate::apub_util::get_local_community_featured_apub_id(community_id, &ctx.host_url_apub).into()),
+                };
+
+                let info = activitystreams_ext::Ext1::new(info, featured_ext);
+
+                let key_id = format!(
+                    "{}/communities/{}#main-key",
+                    ctx.host_url_apub, community_id
+                );
+
+                let body = if let Some(public_key) = public_key {
+                    let public_key_ext = crate::apub_util::PublicKeyExtension {
+                        public_key: Some(crate::apub_util::PublicKey {
+                            id: (&key_id).into(),
+                            owner: community_ap_id.as_str().into(),
+                            public_key_pem: public_key.into(),
+                            signature_algorithm: Some(crate::apub_util::SIGALG_RSA_SHA256.into()),
+                        }),
+                    };
+
+                    let info = activitystreams_ext::Ext1::new(info, public_key_ext);
+
+                    serde_json::to_vec(&info)
+                } else {
+                    serde_json::to_vec(&info)
+                }?;
+
+                let mut resp = hyper::Response::new(body.into());
+                resp.headers_mut().insert(
+                    hyper::header::CONTENT_TYPE,
+                    hyper::header::HeaderValue::from_static("application/activity+json"),
+                );
+
+                Ok(resp)
+            }
         }
     }
 }
@@ -272,6 +295,56 @@ async fn handler_communities_comments_announce_get(
             Ok(hyper::Response::builder()
                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
                .body(body.into())?)
+        }
+    }
+}
+
+async fn handler_communities_delete_get(
+    params: (CommunityLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+
+    let row = db
+        .query_opt(
+            "SELECT local, deleted FROM community WHERE id=$1",
+            &[&community_id],
+        )
+        .await?;
+
+    match row {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such community",
+        )),
+        Some(row) => {
+            if row.get(0) {
+                if row.get(1) {
+                    let info = crate::apub_util::local_community_delete_to_ap(
+                        community_id,
+                        &ctx.host_url_apub,
+                    );
+
+                    let body = serde_json::to_vec(&info)?.into();
+
+                    Ok(hyper::Response::builder()
+                        .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                        .body(body)?)
+                } else {
+                    Ok(crate::simple_response(
+                        hyper::StatusCode::NOT_FOUND,
+                        "Requested community is not deleted",
+                    ))
+                }
+            } else {
+                Ok(crate::simple_response(
+                    hyper::StatusCode::NOT_FOUND,
+                    "Requested community is not owned by this instance",
+                ))
+            }
         }
     }
 }

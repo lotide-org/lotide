@@ -316,7 +316,7 @@ async fn route_unstable_posts_list(
         None
     };
 
-    let mut sql = "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot, post.ap_id, post.local".to_owned();
+    let mut sql = "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot, post.ap_id, post.local, community.deleted".to_owned();
     if let Some(idx) = include_your_idx {
         write!(
             sql,
@@ -339,7 +339,7 @@ async fn route_unstable_posts_list(
         false
     };
 
-    sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND deleted=FALSE");
+    sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.deleted=FALSE");
     if query.use_aggregate_filters {
         sql.push_str(" AND community.hide_posts_from_aggregates=FALSE");
     }
@@ -518,6 +518,7 @@ async fn route_unstable_posts_list(
                 .into_owned()
                 .into(),
                 remote_url: community_remote_url,
+                deleted: row.get(22),
             };
 
             let post = RespPostListPost {
@@ -533,14 +534,14 @@ async fn route_unstable_posts_list(
                 score: row.get(16),
                 sticky: row.get(18),
                 relevance: if has_relevance {
-                    row.get(if include_your_idx.is_some() { 23 } else { 22 })
+                    row.get(if include_your_idx.is_some() { 24 } else { 23 })
                 } else {
                     None
                 },
                 remote_url,
                 replies_count_total: Some(row.get(17)),
                 your_vote: if include_your_idx.is_some() {
-                    Some(if row.get(22) {
+                    Some(if row.get(23) {
                         Some(crate::types::Empty {})
                     } else {
                         None
@@ -767,7 +768,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -867,6 +868,7 @@ async fn route_unstable_posts_get(
                     &ctx.local_hostname,
                 ),
                 remote_url: community_remote_url,
+                deleted: row.get(22),
             };
 
             let post = RespPostListPost {

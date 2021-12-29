@@ -601,6 +601,7 @@ pub async fn ingest_delete(
         super::require_containment(activity_id, actor_id)?;
         super::require_containment(object_id, actor_id)?;
 
+        // maybe it's a post or reply
         let row = db.query_opt(
             "WITH deleted_post AS (UPDATE post SET href=NULL, title='[deleted]', content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id = post.community AND community.local)), deleted_reply AS (UPDATE reply SET content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE ap_id=$1 AND deleted=FALSE RETURNING (SELECT id FROM community WHERE community.id=(SELECT community FROM post WHERE id=reply.post) AND community.local)) (SELECT * FROM deleted_post) UNION ALL (SELECT * FROM deleted_reply) LIMIT 1",
             &[&object_id.as_str()],
@@ -620,6 +621,9 @@ pub async fn ingest_delete(
                     ctx,
                 ));
             }
+        } else {
+            // maybe it's a community
+            db.execute("UPDATE community SET deleted=TRUE, name='[deleted]', description=NULL, description_html=NULL, description_markdown=NULL, created_by=NULL, public_key=NULL WHERE ap_id=$1", &[&object_id.as_str()]).await?;
         }
     }
 

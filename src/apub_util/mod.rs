@@ -1016,6 +1016,23 @@ pub fn local_community_update_to_ap(
     Ok(update)
 }
 
+pub fn local_community_delete_to_ap(
+    community_id: CommunityLocalID,
+    host_url_apub: &BaseURL,
+) -> activitystreams::activity::Delete {
+    let community_ap_id = get_local_community_apub_id(community_id, host_url_apub);
+
+    let mut delete =
+        activitystreams::activity::Delete::new(community_ap_id.clone(), community_ap_id.clone());
+    delete.set_context(activitystreams::context()).set_id({
+        let mut res = community_ap_id;
+        res.path_segments_mut().push("delete");
+        res.into()
+    });
+
+    delete
+}
+
 pub fn local_community_follow_undo_to_ap(
     undo_id: uuid::Uuid,
     community_local_id: CommunityLocalID,
