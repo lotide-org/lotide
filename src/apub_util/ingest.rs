@@ -713,8 +713,7 @@ async fn ingest_postlike(
             super::maybe_get_local_community_id_from_outbox_uri(target_id, &ctx.host_url_apub)
         }) {
         Some(Some(community_local_id)) => Some((community_local_id, true)),
-        Some(None) => None,
-        None => match found_from {
+        Some(None) | None => match found_from {
             FoundFrom::Announce {
                 community_local_id,
                 community_is_local,
