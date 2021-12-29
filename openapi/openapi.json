@@ -47,13 +47,14 @@
 			},
 			"MinimalCommunityInfo": {
 				"type": "object",
-				"required": ["id", "username", "local", "host", "remote_url"],
+				"required": ["id", "username", "local", "host", "remote_url", "deleted"],
 				"properties": {
 					"id": {"type": "integer"},
 					"name": {"type": "string"},
 					"local": {"type": "boolean"},
 					"host": {"type": "string"},
-					"remote_url": {"type": "string", "nullable": true}
+					"remote_url": {"type": "string", "nullable": true},
+					"deleted": {"type": "boolean"}
 				}
 			},
 			"MinimalPostInfo": {
@@ -779,6 +780,21 @@
 				},
 				"responses": {
 					"204": {"description": "Successfully modified."}
+				},
+				"security": [{"bearer": []}]
+			},
+			"delete": {
+				"summary": "Delete a community",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"responses": {
+					"204": {"description": "Successfully deleted."}
 				},
 				"security": [{"bearer": []}]
 			}
