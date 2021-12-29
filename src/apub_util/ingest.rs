@@ -322,8 +322,8 @@ pub async fn ingest_object(
             super::require_containment(activity_id, actor_id)?;
 
             if let Some(target_id) = target_id {
-                if let Some(community_id) =
-                    super::maybe_get_local_community_id_from_uri(target_id, &ctx.host_url_apub)
+                if let Some(super::LocalObjectRef::Community(community_id)) =
+                    super::LocalObjectRef::try_from_uri(target_id, &ctx.host_url_apub)
                 {
                     let follower_local_id = {
                         let row = db
@@ -714,7 +714,13 @@ async fn ingest_postlike(
         .as_ref()
         .and_then(|target| target.as_one().and_then(|x| x.id()))
         .map(|target_id| {
-            super::maybe_get_local_community_id_from_outbox_uri(target_id, &ctx.host_url_apub)
+            if let Some(super::LocalObjectRef::CommunityOutbox(community_local_id)) =
+                super::LocalObjectRef::try_from_uri(target_id, &ctx.host_url_apub)
+            {
+                Some(community_local_id)
+            } else {
+                None
+            }
         }) {
         Some(Some(community_local_id)) => Some((community_local_id, true)),
         Some(None) | None => match found_from {
@@ -730,10 +736,13 @@ async fn ingest_postlike(
                     .filter_map(|any| {
                         any.as_xsd_any_uri()
                             .and_then(|uri| {
-                                super::maybe_get_local_community_id_from_uri(
-                                    uri,
-                                    &ctx.host_url_apub,
-                                )
+                                if let Some(super::LocalObjectRef::Community(community_id)) =
+                                    super::LocalObjectRef::try_from_uri(uri, &ctx.host_url_apub)
+                                {
+                                    Some(community_id)
+                                } else {
+                                    None
+                                }
                             })
                             .map(|id| (id, true))
                     })
@@ -967,8 +976,8 @@ async fn ingest_followlike(
             crate::apub_util::get_or_fetch_user_local_id(follower_ap_id, &db, &ctx).await?;
 
         if let Some(target) = target {
-            if let Some(community_id) =
-                super::maybe_get_local_community_id_from_uri(target, &ctx.host_url_apub)
+            if let Some(super::LocalObjectRef::Community(community_id)) =
+                super::LocalObjectRef::try_from_uri(target, &ctx.host_url_apub)
             {
                 let row = db
                     .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])

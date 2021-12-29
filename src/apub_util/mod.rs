@@ -1664,48 +1664,6 @@ async fn enqueue_send_to_community_followers(
     .await
 }
 
-pub fn maybe_get_local_community_id_from_uri(
-    uri: &url::Url,
-    host_url_apub: &BaseURL,
-) -> Option<CommunityLocalID> {
-    if let Some(path) = try_strip_host(uri, host_url_apub) {
-        if let Some(rest) = path.strip_prefix("/communities/") {
-            if let Ok(local_community_id) = rest.parse() {
-                Some(local_community_id)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
-
-pub fn maybe_get_local_community_id_from_outbox_uri(
-    uri: &url::Url,
-    host_url_apub: &BaseURL,
-) -> Option<CommunityLocalID> {
-    if let Some(path) = try_strip_host(uri, host_url_apub) {
-        if let Some(rest) = path.strip_prefix("/communities/") {
-            if let Some(rest) = rest.strip_suffix("/outbox") {
-                if let Ok(local_community_id) = rest.parse() {
-                    Some(local_community_id)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
-
 fn get_message_digest(src: Option<&str>) -> Option<openssl::hash::MessageDigest> {
     match src {
         None | Some(SIGALG_RSA_SHA256) => Some(openssl::hash::MessageDigest::sha256()),
@@ -1855,6 +1813,7 @@ lazy_static::lazy_static! {
                 RefRouteNode::new()
                     .with_child_parse::<CommunityLocalID, _>(
                         RefRouteNode::new()
+                            .with_handler("", |(community,), _, _| LocalObjectRef::Community(community))
                             .with_child(
                                 "followers",
                                 RefRouteNode::new()
@@ -1868,6 +1827,11 @@ lazy_static::lazy_static! {
                                             )
                                     )
                             )
+                            .with_child(
+                                "outbox",
+                                RefRouteNode::new()
+                                    .with_handler("", |(community,), _, _| LocalObjectRef::CommunityOutbox(community))
+                            )
                     )
             )
     };
@@ -1875,8 +1839,10 @@ lazy_static::lazy_static! {
 
 #[derive(Debug)]
 pub enum LocalObjectRef {
+    Community(CommunityLocalID),
     CommunityFollow(CommunityLocalID, UserLocalID),
     CommunityFollowJoin(CommunityLocalID, UserLocalID),
+    CommunityOutbox(CommunityLocalID),
 }
 
 impl LocalObjectRef {
@@ -1890,5 +1856,13 @@ impl LocalObjectRef {
         let res = LOCAL_REF_ROUTES.route(path, ());
         log::debug!("found {:?}", res);
         res.ok()
+    }
+
+    fn try_from_uri(uri: &url::Url, host_url_apub: &BaseURL) -> Option<LocalObjectRef> {
+        if let Some(remaining) = try_strip_host(uri, host_url_apub) {
+            LocalObjectRef::try_from_path(remaining)
+        } else {
+            None
+        }
     }
 }
