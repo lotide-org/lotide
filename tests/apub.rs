@@ -1,3 +1,4 @@
+use rstest::*;
 use serde_derive::Deserialize;
 use std::ops::Deref;
 
@@ -34,7 +35,12 @@ impl TestServer {
 
 impl std::ops::Drop for TestServer {
     fn drop(&mut self) {
-        self.process.kill().unwrap();
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(self.process.id() as i32),
+            nix::sys::signal::Signal::SIGINT,
+        )
+        .unwrap();
+        self.process.wait().unwrap();
     }
 }
 
@@ -119,30 +125,37 @@ fn lookup_community(client: &reqwest::blocking::Client, server: &TestServer, ap_
     resp["id"].as_i64().unwrap()
 }
 
-lazy_static::lazy_static! {
-    static ref SERVER1: TestServer = TestServer::start(1);
-    static ref SERVER2: TestServer = TestServer::start(2);
+#[fixture]
+#[once]
+fn server1() -> TestServer {
+    TestServer::start(1)
 }
 
-#[test]
-fn community_fetch() {
+#[fixture]
+#[once]
+fn server2() -> TestServer {
+    TestServer::start(2)
+}
+
+#[rstest]
+fn community_fetch(server1: &TestServer, server2: &TestServer) {
     let client = reqwest::blocking::Client::builder().build().unwrap();
 
-    let token = create_account(&client, &SERVER1);
+    let token = create_account(&client, &server1);
 
-    let community = create_community(&client, &SERVER1, &token);
+    let community = create_community(&client, &server1, &token);
 
     let community_remote_id = lookup_community(
         &client,
-        &SERVER2,
-        &format!("{}/apub/communities/{}", SERVER1.host_url, community.id),
+        &server2,
+        &format!("{}/apub/communities/{}", server1.host_url, community.id),
     );
 
     let resp = client
         .get(
             format!(
                 "{}/api/unstable/communities/{}",
-                SERVER2.host_url, community_remote_id
+                server2.host_url, community_remote_id
             )
             .deref(),
         )
@@ -156,27 +169,27 @@ fn community_fetch() {
     assert_eq!(resp["local"].as_bool(), Some(false));
 }
 
-#[test]
-fn community_follow() {
+#[rstest]
+fn community_follow(server1: &TestServer, server2: &TestServer) {
     let client = reqwest::blocking::Client::builder().build().unwrap();
 
-    let token1 = create_account(&client, &SERVER1);
+    let token1 = create_account(&client, &server1);
 
-    let community = create_community(&client, &SERVER1, &token1);
+    let community = create_community(&client, &server1, &token1);
 
     let community_remote_id = lookup_community(
         &client,
-        &SERVER2,
-        &format!("{}/apub/communities/{}", SERVER1.host_url, community.id),
+        &server2,
+        &format!("{}/apub/communities/{}", server1.host_url, community.id),
     );
 
-    let token2 = create_account(&client, &SERVER2);
+    let token2 = create_account(&client, &server2);
 
     let resp = client
         .post(
             format!(
                 "{}/api/unstable/communities/{}/follow",
-                SERVER2.host_url, community_remote_id,
+                server2.host_url, community_remote_id,
             )
             .deref(),
         )
@@ -193,28 +206,28 @@ fn community_follow() {
     assert!(resp["accepted"].as_bool().unwrap());
 }
 
-#[test]
-fn community_description_update() {
+#[rstest]
+fn community_description_update(server1: &TestServer, server2: &TestServer) {
     let client = reqwest::blocking::Client::builder().build().unwrap();
 
-    let token1 = create_account(&client, &SERVER1);
+    let token1 = create_account(&client, &server1);
 
-    let community = create_community(&client, &SERVER1, &token1);
+    let community = create_community(&client, &server1, &token1);
 
     let community_remote_id = lookup_community(
         &client,
-        &SERVER2,
-        &format!("{}/apub/communities/{}", SERVER1.host_url, community.id),
+        &server2,
+        &format!("{}/apub/communities/{}", server1.host_url, community.id),
     );
 
-    let token2 = create_account(&client, &SERVER2);
+    let token2 = create_account(&client, &server2);
 
     {
         let resp = client
             .post(
                 format!(
                     "{}/api/unstable/communities/{}/follow",
-                    SERVER2.host_url, community_remote_id,
+                    server2.host_url, community_remote_id,
                 )
                 .deref(),
             )
@@ -237,7 +250,7 @@ fn community_description_update() {
         .patch(
             format!(
                 "{}/api/unstable/communities/{}",
-                SERVER1.host_url, community.id
+                server1.host_url, community.id
             )
             .deref(),
         )
@@ -255,7 +268,7 @@ fn community_description_update() {
             .get(
                 format!(
                     "{}/api/unstable/communities/{}",
-                    SERVER2.host_url, community_remote_id,
+                    server2.host_url, community_remote_id,
                 )
                 .deref(),
             )
