@@ -266,7 +266,7 @@ fn community_description_update() {
 
         let resp: serde_json::Value = resp.json().unwrap();
         assert_eq!(
-            resp["description"]["content_text"].as_str(),
+            resp["description"]["content_html"].as_str(),
             Some(new_description.as_ref())
         );
     }
