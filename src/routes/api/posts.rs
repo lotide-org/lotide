@@ -687,7 +687,7 @@ async fn route_unstable_posts_create(
 
     let community_row = db
         .query_opt(
-            "SELECT local FROM community WHERE id=$1",
+            "SELECT local FROM community WHERE id=$1 AND NOT deleted",
             &[&body.community],
         )
         .await?
