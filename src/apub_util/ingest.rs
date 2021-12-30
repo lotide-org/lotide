@@ -239,6 +239,122 @@ pub async fn ingest_object(
             ingest_delete(Verified(activity), ctx).await?;
             Ok(None)
         }
+        KnownObject::Flag(activity) => {
+            let activity_id = activity
+                .id_unchecked()
+                .ok_or(crate::Error::InternalStrStatic("Missing ID in activity"))?;
+
+            let actor_ap_id = activity.actor_unchecked().as_single_id().ok_or(
+                crate::Error::InternalStrStatic("Missing actor for activity"),
+            )?;
+
+            crate::apub_util::require_containment(activity_id, actor_ap_id)?;
+
+            let actor_local_id =
+                crate::apub_util::get_or_fetch_user_local_id(actor_ap_id, &db, &ctx).await?;
+
+            let target =
+                activity
+                    .object()
+                    .as_single_id()
+                    .ok_or(crate::Error::InternalStrStatic(
+                        "Missing target in activity",
+                    ))?;
+
+            let target_found = if let Some(remaining) =
+                super::try_strip_host(target, &ctx.host_url_apub)
+            {
+                super::LocalObjectRef::try_from_path(remaining).map(|x| (x, None))
+            } else {
+                let row = db.query_opt(
+                    "SELECT post.id, community.id, community.local, community.ap_id FROM post LEFT OUTER JOIN community ON (community.id = post.community) WHERE post.ap_id = $1",
+                    &[&target.as_str()],
+                ).await?;
+
+                row.map(|row| {
+                    let post_id = PostLocalID(row.get(0));
+
+                    let community_ap_id = if let Some(community_local) = row.get(2) {
+                        if community_local {
+                            let community_id = CommunityLocalID(row.get(1));
+
+                            Some(Some(super::get_local_community_apub_id(
+                                community_id,
+                                &ctx.host_url_apub,
+                            )))
+                        } else {
+                            Some(row.get::<_, Option<&str>>(3).and_then(|x| x.parse().ok()))
+                        }
+                    } else {
+                        Some(None)
+                    };
+
+                    (super::LocalObjectRef::Post(post_id), community_ap_id)
+                })
+            };
+
+            let content = activity
+                .content()
+                .as_ref()
+                .and_then(|x| x.as_one())
+                .and_then(|x| x.as_xsd_string());
+
+            if let Some((target_local_id, community_ap_id)) = target_found {
+                match target_local_id {
+                    super::LocalObjectRef::Post(post_id) => {
+                        let community_ap_id = match community_ap_id {
+                            Some(community_ap_id) => community_ap_id,
+                            None => {
+                                let row = db.query_opt(
+                                    "SELECT id, local, ap_id FROM community WHERE id = (SELECT community FROM post WHERE id=$1)",
+                                    &[&post_id],
+                                ).await?;
+
+                                row.and_then(|row| {
+                                    if let Some(community_local) = row.get(1) {
+                                        if community_local {
+                                            let community_id = CommunityLocalID(row.get(0));
+
+                                            Some(super::get_local_community_apub_id(
+                                                community_id,
+                                                &ctx.host_url_apub,
+                                            ))
+                                        } else {
+                                            row.get::<_, Option<&str>>(2)
+                                                .and_then(|x| x.parse().ok())
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                            }
+                        };
+
+                        let to_community = match community_ap_id {
+                            None => false,
+                            Some(community_ap_id) => {
+                                if let Some(to) = activity.to() {
+                                    to.iter()
+                                        .any(|x| x.as_xsd_any_uri() == Some(&community_ap_id))
+                                } else {
+                                    false
+                                }
+                            }
+                        };
+
+                        db.execute(
+                            "INSERT INTO post_flag (person, post, content_text, to_community, to_remote_site_admin, created_local, local, ap_id) VALUES ($1, $2, $3, $4, TRUE, current_timestamp, FALSE, $5)",
+                            &[&actor_local_id, &post_id, &content, &to_community, &activity_id.as_str()],
+                        ).await?;
+                    }
+                    _ => {
+                        log::warn!("unsupported flag target: {:?}", target_local_id);
+                    }
+                }
+            }
+
+            Ok(None)
+        }
         KnownObject::Follow(follow) => {
             ingest_followlike(Verified(FollowLike::Follow(follow)), ctx).await?;
 

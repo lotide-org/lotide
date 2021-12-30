@@ -59,6 +59,7 @@ pub enum KnownObject {
     Announce(activitystreams::activity::Announce),
     Create(activitystreams::activity::Create),
     Delete(activitystreams::activity::Delete),
+    Flag(activitystreams::activity::Flag),
     Follow(activitystreams::activity::Follow),
     Join(activitystreams::activity::Join),
     Leave(activitystreams::activity::Leave),
@@ -1871,6 +1872,14 @@ lazy_static::lazy_static! {
                             )
                     )
             )
+            .with_child(
+                "posts",
+                RefRouteNode::new()
+                    .with_child_parse::<PostLocalID, _>(
+                        RefRouteNode::new()
+                            .with_handler("", |(post,), _, _| LocalObjectRef::Post(post))
+                    )
+            )
     };
 }
 
@@ -1880,6 +1889,7 @@ pub enum LocalObjectRef {
     CommunityFollow(CommunityLocalID, UserLocalID),
     CommunityFollowJoin(CommunityLocalID, UserLocalID),
     CommunityOutbox(CommunityLocalID),
+    Post(PostLocalID),
 }
 
 impl LocalObjectRef {
