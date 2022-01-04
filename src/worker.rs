@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+const TASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 pub fn start_worker(ctx: Arc<crate::BaseContext>, rx: tokio::sync::mpsc::Receiver<()>) {
     crate::spawn_task(run_worker(ctx, rx));
 }
@@ -36,7 +38,13 @@ async fn run_worker(
             let kind: &str = row.get(1);
             let params: serde_json::Value = row.get(2);
 
-            let result = perform_task(ctx.clone(), kind, params).await;
+            let result =
+                tokio::time::timeout(TASK_TIMEOUT, perform_task(ctx.clone(), kind, params)).await;
+            let result = match result {
+                Err(_) => Err(crate::Error::InternalStrStatic("Timeout")),
+                Ok(res) => res,
+            };
+
             if let Err(err) = result {
                 let err = format!("{:?}", err);
                 db.execute(
