@@ -109,14 +109,6 @@ async fn route_stable_communities_feed_get(
             ))
         })?;
 
-    let community_local: bool = community_row.get(1);
-    if !community_local {
-        return Err(crate::Error::UserError(crate::simple_response(
-            hyper::StatusCode::BAD_REQUEST,
-            lang.tr("community_not_local", None).into_owned(),
-        )));
-    }
-
     let community_name: String = community_row.get(0);
 
     let mut builder = atom_syndication::FeedBuilder::default();
@@ -157,10 +149,13 @@ async fn route_stable_communities_feed_get(
             let href_raw: Option<&str> = row.get(2);
             let href = ctx.process_href_opt(href_raw.map(Cow::Borrowed), post_id);
 
-            let post_ap_id = if row.get(8) {
-                crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).to_string()
+            let local_url =
+                crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).to_string();
+
+            let post_ap_id: &str = if row.get(8) {
+                &local_url
             } else {
-                row.get(7)
+                row.get::<_, Option<_>>(7).unwrap_or(&local_url)
             };
 
             let author_username = row.get(9);
@@ -188,7 +183,7 @@ async fn route_stable_communities_feed_get(
             entry_builder.published(created);
             entry_builder.link(
                 atom_syndication::LinkBuilder::default()
-                    .href(post_ap_id)
+                    .href(local_url)
                     .rel("self")
                     .build(),
             );
