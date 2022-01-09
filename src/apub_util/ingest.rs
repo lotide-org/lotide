@@ -343,7 +343,7 @@ pub async fn ingest_object(
                         };
 
                         db.execute(
-                            "INSERT INTO post_flag (person, post, content_text, to_community, to_remote_site_admin, created_local, local, ap_id) VALUES ($1, $2, $3, $4, TRUE, current_timestamp, FALSE, $5)",
+                            "INSERT INTO flag (kind, person, post, content_text, to_community, to_remote_site_admin, created_local, local, ap_id) VALUES ('post', $1, $2, $3, $4, TRUE, current_timestamp, FALSE, $5)",
                             &[&actor_local_id, &post_id, &content, &to_community, &activity_id.as_str()],
                         ).await?;
                     }

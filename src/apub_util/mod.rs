@@ -1,5 +1,5 @@
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, PostFlagLocalID, PostLocalID, ThingLocalRef,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, PostLocalID, ThingLocalRef,
     UserLocalID,
 };
 use crate::BaseURL;
@@ -1524,7 +1524,7 @@ pub fn local_comment_to_create_ap(
 }
 
 pub fn local_post_flag_to_ap(
-    flag_local_id: PostFlagLocalID,
+    flag_local_id: FlagLocalID,
     content_text: Option<&str>,
     user_id: UserLocalID,
     post_ap_id: BaseURL,
@@ -1540,7 +1540,7 @@ pub fn local_post_flag_to_ap(
     flag.set_context(activitystreams::context()).set_id({
         let mut res = host_url_apub.clone();
         res.path_segments_mut()
-            .extend(&["post_flags", &flag_local_id.to_string()]);
+            .extend(&["flags", &flag_local_id.to_string()]);
         res.into()
     });
 

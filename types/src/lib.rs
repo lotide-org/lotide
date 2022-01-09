@@ -50,7 +50,7 @@ id_wrapper!(PostLocalID);
 id_wrapper!(UserLocalID);
 id_wrapper!(NotificationID);
 id_wrapper!(NotificationSubscriptionID);
-id_wrapper!(PostFlagLocalID);
+id_wrapper!(FlagLocalID);
 
 #[derive(Serialize, Default, Clone, Copy)]
 pub struct Empty {}
@@ -324,6 +324,27 @@ pub struct RespCommentInfo<'a> {
     pub base: RespPostCommentInfo<'a>,
     pub parent: Option<JustID<CommentLocalID>>,
     pub post: Option<RespMinimalPostInfo<'a>>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
+pub enum RespFlagDetails<'a> {
+    Post { post: RespPostListPost<'a> },
+}
+
+#[derive(Serialize, Clone)]
+pub struct RespFlagInfo<'a> {
+    pub id: FlagLocalID,
+
+    pub flagger: RespMinimalAuthorInfo<'a>,
+
+    pub created_local: String,
+
+    pub content: Option<JustContentText<'a>>,
+
+    #[serde(flatten)]
+    pub details: RespFlagDetails<'a>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

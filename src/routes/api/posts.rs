@@ -3,7 +3,7 @@ use super::{
     RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost, ValueConsumer,
 };
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, JustUser, PostFlagLocalID, PostLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, JustUser, PostLocalID,
     RespPostInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
@@ -618,11 +618,11 @@ async fn route_unstable_posts_flags_create(
         })?;
 
     let res_row = db.query_one(
-        "INSERT INTO post_flag (person, post, content_text, to_community, to_site_admin, to_remote_site_admin, created_local, local) VALUES ($1, $2, $3, $4, $5, $6, current_timestamp, TRUE) RETURNING id",
+        "INSERT INTO flag (kind, person, post, content_text, to_community, to_site_admin, to_remote_site_admin, created_local, local) VALUES ('post', $1, $2, $3, $4, $5, $6, current_timestamp, TRUE) RETURNING id",
         &[&user, &post_id, &body.content_text, &body.to_community, &body.to_site_admin, &body.to_remote_site_admin]
     ).await?;
 
-    let id = PostFlagLocalID(res_row.get(0));
+    let id = FlagLocalID(res_row.get(0));
 
     crate::spawn_task(async move {
         let post_local = post_row.get(0);
