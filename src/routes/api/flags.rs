@@ -74,7 +74,7 @@ async fn route_unstable_flags_list(
         .unwrap();
     }
     if let Some(value) = query.to_this_site_admin {
-        write!(sql, "AND {}((flag.to_site_admin AND flag.local) OR (flag.to_remote_site_admin AND NOT flag.local))", if value { "NOT " } else { "" }).unwrap();
+        write!(sql, " AND {}((flag.to_site_admin AND flag.local) OR (flag.to_remote_site_admin AND NOT flag.local))", if value { "" } else { "NOT " }).unwrap();
     }
 
     sql.push_str(" ORDER BY flag.id DESC LIMIT 30");
