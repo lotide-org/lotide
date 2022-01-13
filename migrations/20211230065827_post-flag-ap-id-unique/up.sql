@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE post_flag ADD UNIQUE (ap_id);
+COMMIT;

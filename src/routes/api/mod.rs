@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 mod comments;
 mod communities;
+mod flags;
 mod forgot_password;
 mod media;
 mod posts;
@@ -326,6 +327,7 @@ pub fn route_api() -> crate::RouteNode<()> {
                             .with_handler_async("GET", route_unstable_actors_lookup),
                     ),
                 )
+                .with_child("flags", flags::route_flags())
                 .with_child(
                     "logins",
                     crate::RouteNode::new()
