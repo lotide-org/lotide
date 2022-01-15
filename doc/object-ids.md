@@ -12,9 +12,15 @@ The following are URL formats used for ActivityPub objects in lotide. Frontends 
 - /communities/{communityID}/followers
 - /communities/{communityID}/followers/{userID}
 - /communities/{communityID}/followers/{userID}/accept
+- /communities/{communityID}/followers/{userID}/join
 - /communities/{communityID}/outbox
 - /communities/{communityID}/outbox/page/{pageID}
+- /communities/{communityID}/posts/{postID}/add
+- /communities/{communityID}/posts/{postID}/add/undos/{undoID}
+- /communities/{communityID}/posts/{postID}/announce
+- /communities/{communityID}/posts/{postID}/announce/undos/{undoID}
 - /communities/{communityID}/updates/{updateID} (an Update activity for the community details)
+- /community\_follow\_undos/{undoID}
 - /posts/{postID}
 - /posts/{postID}/create (the Create activity for the post)
 - /posts/{postID}/delete (the Delete activity for the post if deleted)
