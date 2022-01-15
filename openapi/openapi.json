@@ -978,6 +978,76 @@
 				"security": [{"bearer": []}]
 			}
 		},
+		"/api/unstable/flags": {
+			"get": {
+				"summary": "List flags",
+				"parameters": [
+					{
+						"name": "to_community",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "to_this_site_admin",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"allOf": [
+													{
+														"type": "object",
+														"required": ["id", "flagger", "created_local", "content"],
+														"properties": {
+															"id": {"type": "integer"},
+															"flagger": {"$ref": "#/components/schemas/MinimalUserInfo"},
+															"created_local": {"type": "string", "format": "date-time"},
+															"content": {
+																"nullable": true,
+																"required": ["content_text"],
+																"properties": {
+																	"content_text": {"type": "string"}
+																}
+															}
+														}
+													},
+													{
+														"oneOf": [
+															{
+																"type": "object",
+																"required": ["type", "post"],
+																"properties": {
+																	"type": {"type": "string", "enum": ["post"]},
+																	"post": {"$ref": "#/components/schemas/PostListPost"}
+																}
+															}
+														]
+													}
+												]
+											}
+										},
+										"next_page": {"type": "string", "nullable": true}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		"/api/unstable/forgot_password/keys": {
 			"post": {
 				"summary": "Request a password reset",
@@ -1448,6 +1518,49 @@
 				"responses": {
 					"204": {
 						"description": "Successfully deleted."
+					}
+				},
+				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/posts/{postID}/flags": {
+			"post": {
+				"summary": "Flag a post",
+				"parameters": [
+					{
+						"name": "postID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"required": ["to_community", "to_site_admin"],
+								"properties": {
+									"content_text": {"type": "string"},
+									"to_community": {"type": "boolean"},
+									"to_site_admin": {"type": "boolean"},
+									"to_remote_site_admin": {"type": "boolean"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"200": {
+						"description": "Successfully flagged.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object"
+								}
+							}
+						}
 					}
 				},
 				"security": [{"bearer": []}]
