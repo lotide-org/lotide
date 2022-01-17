@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 mod apub_util;
 mod config;
+mod lang;
 mod migrate;
 mod routes;
 mod tasks;
@@ -16,6 +17,8 @@ mod worker;
 
 use self::config::Config;
 use self::types::{CommentLocalID, CommunityLocalID, NotificationID, PostLocalID, UserLocalID};
+
+pub use self::lang::Translator;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(try_from = "url::Url")]
@@ -507,31 +510,6 @@ lazy_static::lazy_static! {
     };
 }
 
-pub struct Translator {
-    bundle: fluent::concurrent::FluentBundle<&'static fluent::FluentResource>,
-}
-impl Translator {
-    pub fn tr<'a>(&'a self, key: &'a str, args: Option<&'a fluent::FluentArgs>) -> Cow<'a, str> {
-        let mut errors = Vec::with_capacity(0);
-        let out = match self.bundle.get_message(key) {
-            Some(msg) => self.bundle.format_pattern(
-                msg.value.expect("Missing value for translation key"),
-                args,
-                &mut errors,
-            ),
-            None => {
-                log::error!("Missing translation for {}", key);
-                Cow::Borrowed(key)
-            }
-        };
-        if !errors.is_empty() {
-            log::error!("Errors in translation: {:?}", errors);
-        }
-
-        out
-    }
-}
-
 pub fn get_lang_for_req(req: &impl ReqParts) -> Translator {
     get_lang_for_header(
         req.headers()
@@ -570,7 +548,7 @@ pub fn get_lang_for_header(accept_language: Option<&str>) -> Translator {
         }
     }
 
-    Translator { bundle }
+    Translator::new(bundle)
 }
 
 pub fn get_auth_token(req: &impl ReqParts) -> Option<uuid::Uuid> {

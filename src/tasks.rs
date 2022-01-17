@@ -1,3 +1,4 @@
+use crate::lang;
 use crate::types::{
     ActorLocalRef, CommentLocalID, CommunityLocalID, NotificationID, NotificationSubscriptionID,
     PostLocalID, UserLocalID,
@@ -246,11 +247,8 @@ impl TaskDef for SendNotification {
                             subscription: id,
                             href: Cow::Owned(href.to_string()),
                             title: Cow::Owned(
-                                lang.tr(
-                                    "notification_title_post_reply",
-                                    Some(&fluent::fluent_args!["post_title" => *post_title]),
-                                )
-                                .into_owned(),
+                                lang.tr(&lang::notification_title_post_reply(*post_title))
+                                    .into_owned(),
                             ),
                             body: Cow::Borrowed(reply_content),
                         },
@@ -262,11 +260,8 @@ impl TaskDef for SendNotification {
                             subscription: id,
                             href: Cow::Owned(href.to_string()),
                             title: Cow::Owned(
-                                lang.tr(
-                                    "notification_title_reply_reply",
-                                    Some(&fluent::fluent_args!["post_title" => *post_title]),
-                                )
-                                .into_owned(),
+                                lang.tr(&lang::notification_title_reply_reply(*post_title))
+                                    .into_owned(),
                             ),
                             body: Cow::Borrowed(reply_content),
                         },

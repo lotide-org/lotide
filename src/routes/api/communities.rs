@@ -1,4 +1,5 @@
 use super::{CommunitiesSortType, ValueConsumer};
+use crate::lang;
 use crate::types::{
     CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityFeeds,
     RespCommunityFeedsType, RespCommunityInfo, RespList, RespMinimalAuthorInfo,
@@ -31,7 +32,7 @@ async fn require_community_exists(
     } else {
         Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_community", None).into_owned(),
+            lang.tr(&lang::no_such_community()).into_owned(),
         )))
     }
 }
@@ -296,7 +297,7 @@ async fn route_unstable_communities_create(
         if !super::USERNAME_ALLOWED_CHARS.contains(&ch) {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("community_name_disallowed_chars", None)
+                lang.tr(&lang::community_name_disallowed_chars())
                     .into_owned(),
             )));
         }
@@ -319,7 +320,7 @@ async fn route_unstable_communities_create(
                 if err.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
                     crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::BAD_REQUEST,
-                        lang.tr("name_in_use", None).into_owned(),
+                        lang.tr(&lang::name_in_use()).into_owned(),
                     ))
                 } else {
                     err.into()
@@ -377,7 +378,7 @@ async fn route_unstable_communities_delete(
                 } else {
                     Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::BAD_REQUEST,
-                        lang.tr("community_not_local", None).into_owned(),
+                        lang.tr(&lang::community_not_local()).into_owned(),
                     )))
                 }
             }
@@ -400,7 +401,7 @@ async fn route_unstable_communities_delete(
                 } else {
                     Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::FORBIDDEN,
-                        lang.tr("community_edit_denied", None).into_owned(),
+                        lang.tr(&lang::community_edit_denied()).into_owned(),
                     )))
                 }
             }
@@ -453,7 +454,7 @@ async fn route_unstable_communities_get(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                lang.tr("no_such_community", None).into_owned(),
+                lang.tr(&lang::no_such_community()).into_owned(),
             ))
         })?
     };
@@ -545,7 +546,7 @@ async fn route_unstable_communities_patch(
     if too_many_description_updates {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            lang.tr("description_content_conflict", None).into_owned(),
+            lang.tr(&lang::description_content_conflict()).into_owned(),
         )));
     }
 
@@ -559,7 +560,7 @@ async fn route_unstable_communities_patch(
         match row {
             None => Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
-                lang.tr("community_edit_denied", None).into_owned(),
+                lang.tr(&lang::community_edit_denied()).into_owned(),
             ))),
             Some(_) => Ok(()),
         }
@@ -629,7 +630,7 @@ async fn route_unstable_communities_follow(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                lang.tr("no_such_community", None).into_owned(),
+                lang.tr(&lang::no_such_community()).into_owned(),
             ))
         })?;
 
@@ -640,7 +641,7 @@ async fn route_unstable_communities_follow(
 
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_community", None).into_owned(),
+            lang.tr(&lang::no_such_community()).into_owned(),
         )));
     }
 
@@ -702,7 +703,7 @@ async fn route_unstable_communities_moderators_list(
         match row {
             None => Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                lang.tr("no_such_community", None).into_owned(),
+                lang.tr(&lang::no_such_community()).into_owned(),
             ))),
             Some(row) => {
                 if row.get(0) {
@@ -710,7 +711,8 @@ async fn route_unstable_communities_moderators_list(
                 } else {
                     Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::NOT_FOUND,
-                        lang.tr("community_moderators_not_local", None).into_owned(),
+                        lang.tr(&lang::community_moderators_not_local())
+                            .into_owned(),
                     )))
                 }
             }
@@ -782,7 +784,7 @@ async fn route_unstable_communities_moderators_add(
         match row {
             None => Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
-                lang.tr("must_be_moderator", None).into_owned(),
+                lang.tr(&lang::must_be_moderator()).into_owned(),
             ))),
             Some(_) => Ok(()),
         }
@@ -796,7 +798,7 @@ async fn route_unstable_communities_moderators_add(
         match row {
             None => Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
-                lang.tr("no_such_user", None).into_owned(),
+                lang.tr(&lang::no_such_user()).into_owned(),
             ))),
             Some(row) => {
                 let local: bool = row.get(0);
@@ -806,7 +808,7 @@ async fn route_unstable_communities_moderators_add(
                 } else {
                     Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::FORBIDDEN,
-                        lang.tr("moderators_only_local", None).into_owned(),
+                        lang.tr(&lang::moderators_only_local()).into_owned(),
                     )))
                 }
             }
@@ -845,7 +847,7 @@ async fn route_unstable_communities_moderators_remove(
         match self_moderator_row {
             None => Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
-                lang.tr("must_be_moderator", None).into_owned(),
+                lang.tr(&lang::must_be_moderator()).into_owned(),
             ))),
             Some(row) => Ok(row.get(0)),
         }
@@ -880,7 +882,7 @@ async fn route_unstable_communities_moderators_remove(
 
             Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
-                lang.tr("community_moderators_remove_must_be_older", None)
+                lang.tr(&lang::community_moderators_remove_must_be_older())
                     .into_owned(),
             )))
         }
@@ -964,7 +966,7 @@ async fn route_unstable_communities_posts_patch(
         match row {
             None => Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
-                lang.tr("community_edit_denied", None).into_owned(),
+                lang.tr(&lang::community_edit_denied()).into_owned(),
             ))),
             Some(_) => Ok(()),
         }
@@ -979,14 +981,14 @@ async fn route_unstable_communities_posts_patch(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                lang.tr("no_such_post", None).into_owned(),
+                lang.tr(&lang::no_such_post()).into_owned(),
             ))
         })?;
 
     if community_id != CommunityLocalID(old_row.get(0)) {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("post_not_in_community", None).into_owned(),
+            lang.tr(&lang::post_not_in_community()).into_owned(),
         )));
     }
 

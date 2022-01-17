@@ -2,6 +2,7 @@ use super::{
     InvalidPage, JustURL, RespAvatarInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespMinimalCommunityInfo, RespPostCommentInfo, RespPostListPost, ValueConsumer,
 };
+use crate::lang;
 use crate::types::{
     ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, JustUser, PostLocalID,
     RespPostInfo, UserLocalID,
@@ -424,7 +425,7 @@ async fn route_unstable_posts_list(
             } else {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::BAD_REQUEST,
-                    lang.tr("sort_relevant_not_search", None).into_owned(),
+                    lang.tr(&lang::sort_relevant_not_search()).into_owned(),
                 )));
             }
         }
@@ -613,7 +614,7 @@ async fn route_unstable_posts_flags_create(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                lang.tr("no_such_post", None).into_owned(),
+                lang.tr(&lang::no_such_post()).into_owned(),
             ))
         })?;
 
@@ -801,14 +802,14 @@ async fn route_unstable_posts_create(
     if body.href.is_none() && body.content_text.is_none() && body.content_markdown.is_none() {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            lang.tr("post_needs_content", None).into_owned(),
+            lang.tr(&lang::post_needs_content()).into_owned(),
         )));
     }
 
     if body.content_markdown.is_some() && body.content_text.is_some() {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            lang.tr("post_content_conflict", None).into_owned(),
+            lang.tr(&lang::post_content_conflict()).into_owned(),
         )));
     }
 
@@ -816,7 +817,7 @@ async fn route_unstable_posts_create(
         if url::Url::parse(href).is_err() {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("post_href_invalid", None).into_owned(),
+                lang.tr(&lang::post_href_invalid()).into_owned(),
             )));
         }
     }
@@ -844,7 +845,7 @@ async fn route_unstable_posts_create(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("no_such_community", None).into_owned(),
+                lang.tr(&lang::no_such_community()).into_owned(),
             ))
         })?;
 
@@ -939,7 +940,7 @@ async fn route_unstable_posts_get(
     match row {
         None => Ok(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_post", None).into_owned(),
+            lang.tr(&lang::no_such_post()).into_owned(),
         )),
         Some(row) => {
             let href: Option<&str> = row.get(1);
@@ -1078,7 +1079,7 @@ async fn route_unstable_posts_delete(
                 } else {
                     return Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::FORBIDDEN,
-                        lang.tr("post_not_yours", None).into_owned(),
+                        lang.tr(&lang::post_not_yours()).into_owned(),
                     )));
                 }
             }

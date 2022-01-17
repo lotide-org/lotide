@@ -1,3 +1,5 @@
+use crate::lang;
+
 mod api;
 mod apub;
 mod well_known;
@@ -8,7 +10,7 @@ pub fn route_root() -> crate::RouteNode<()> {
             let lang = crate::get_lang_for_req(&req);
             futures::future::err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::METHOD_NOT_ALLOWED,
-                lang.tr("root", None).into_owned(),
+                lang.tr(&lang::root()).into_owned(),
             )))
         })
         .with_child("apub", apub::route_apub())

@@ -1,3 +1,4 @@
+use crate::lang;
 use crate::types::{
     CommunityLocalID, FlagLocalID, JustContentText, PostLocalID, RespAvatarInfo, RespFlagDetails,
     RespFlagInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost,
@@ -42,7 +43,7 @@ async fn route_unstable_flags_list(
                     } else {
                         Err(crate::Error::UserError(crate::simple_response(
                             hyper::StatusCode::FORBIDDEN,
-                            lang.tr("must_be_moderator", None).into_owned(),
+                            lang.tr(&lang::must_be_moderator()).into_owned(),
                         )))
                     }
                 }
@@ -55,7 +56,7 @@ async fn route_unstable_flags_list(
             } else {
                 Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::FORBIDDEN,
-                    lang.tr("not_admin", None).into_owned(),
+                    lang.tr(&lang::not_admin()).into_owned(),
                 )))
             }
         }

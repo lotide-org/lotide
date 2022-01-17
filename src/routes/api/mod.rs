@@ -1,3 +1,4 @@
+use crate::lang;
 use crate::types::{
     CommentLocalID, FingerRequestQuery, FingerResponse, JustURL, RespAvatarInfo, RespList,
     RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo, RespMinimalCommunityInfo,
@@ -517,7 +518,7 @@ async fn route_unstable_logins_create(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("no_such_local_user_by_name", None).into_owned(),
+                lang.tr(&lang::no_such_local_user_by_name()).into_owned(),
             ))
         })?;
 
@@ -528,7 +529,7 @@ async fn route_unstable_logins_create(
     let passhash = passhash.ok_or_else(|| {
         crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            lang.tr("no_password", None).into_owned(),
+            lang.tr(&lang::no_password()).into_owned(),
         ))
     })?;
 
@@ -542,7 +543,7 @@ async fn route_unstable_logins_create(
         if row.get(4) {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
-                lang.tr("user_suspended_error", None).into_owned(),
+                lang.tr(&lang::user_suspended_error()).into_owned(),
             )));
         }
 
@@ -559,7 +560,7 @@ async fn route_unstable_logins_create(
     } else {
         Ok(crate::simple_response(
             hyper::StatusCode::FORBIDDEN,
-            lang.tr("password_incorrect", None).into_owned(),
+            lang.tr(&lang::password_incorrect()).into_owned(),
         ))
     }
 }
@@ -722,7 +723,7 @@ async fn route_unstable_instance_patch(
         if description_conflict {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("description_content_conflict", None).into_owned(),
+                lang.tr(&lang::description_content_conflict()).into_owned(),
             )));
         }
 
@@ -755,7 +756,7 @@ async fn route_unstable_instance_patch(
     } else {
         Ok(crate::simple_response(
             hyper::StatusCode::FORBIDDEN,
-            lang.tr("not_admin", None).into_owned(),
+            lang.tr(&lang::not_admin()).into_owned(),
         ))
     }
 }
@@ -1133,7 +1134,7 @@ pub async fn process_comment_content<'a, 'b>(
     if !(content_markdown.is_some() ^ content_text.is_some()) {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            lang.tr("comment_content_conflict", None).into_owned(),
+            lang.tr(&lang::comment_content_conflict()).into_owned(),
         )));
     }
 
@@ -1142,7 +1143,7 @@ pub async fn process_comment_content<'a, 'b>(
             if md.trim().is_empty() {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::BAD_REQUEST,
-                    lang.tr("comment_empty", None).into_owned(),
+                    lang.tr(&lang::comment_empty()).into_owned(),
                 )));
             }
 
@@ -1155,7 +1156,7 @@ pub async fn process_comment_content<'a, 'b>(
                 if text.trim().is_empty() {
                     return Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::BAD_REQUEST,
-                        lang.tr("comment_empty", None).into_owned(),
+                        lang.tr(&lang::comment_empty()).into_owned(),
                     )));
                 }
 

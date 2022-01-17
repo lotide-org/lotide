@@ -1,4 +1,5 @@
-use crate::UserLocalID;
+use crate::lang;
+use crate::types::UserLocalID;
 use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -15,7 +16,7 @@ async fn route_unstable_forgot_password_keys_create(
     if ctx.mailer.is_none() {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::INTERNAL_SERVER_ERROR,
-            lang.tr("email_not_configured", None).into_owned(),
+            lang.tr(&lang::email_not_configured()).into_owned(),
         )));
     }
 
@@ -33,7 +34,7 @@ async fn route_unstable_forgot_password_keys_create(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("no_such_local_user_by_email", None).into_owned(),
+                lang.tr(&lang::no_such_local_user_by_email()).into_owned(),
             ))
         })?;
 
@@ -51,10 +52,10 @@ async fn route_unstable_forgot_password_keys_create(
     .await?;
 
     let msg_body = lang
-        .tr(
-            "email_content_forgot_password",
-            Some(&fluent::fluent_args!["key" => key.to_string(), "username" => username]),
-        )
+        .tr(&lang::email_content_forgot_password(
+            key.to_string(),
+            username,
+        ))
         .into_owned();
 
     let msg = lettre::Message::builder()
@@ -101,7 +102,7 @@ async fn route_unstable_forgot_password_keys_get(
     } else {
         Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_forgot_password_key", None).into_owned(),
+            lang.tr(&lang::no_such_forgot_password_key()).into_owned(),
         )))
     }
 }
@@ -169,7 +170,7 @@ async fn route_unstable_forgot_password_keys_reset(
         }
         None => Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_forgot_password_key", None).into_owned(),
+            lang.tr(&lang::no_such_forgot_password_key()).into_owned(),
         ))),
     }
 }

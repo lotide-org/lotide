@@ -1,3 +1,4 @@
+use crate::lang;
 use std::sync::Arc;
 
 async fn route_unstable_media_create(
@@ -13,7 +14,7 @@ async fn route_unstable_media_create(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("missing_content_type", None).into_owned(),
+                lang.tr(&lang::missing_content_type()).into_owned(),
             ))
         })?;
     let content_type = std::str::from_utf8(content_type.as_ref())?;
@@ -22,7 +23,7 @@ async fn route_unstable_media_create(
     if content_type.type_() != mime::IMAGE {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            lang.tr("media_upload_not_image", None).into_owned(),
+            lang.tr(&lang::media_upload_not_image()).into_owned(),
         )));
     }
 
@@ -58,7 +59,7 @@ async fn route_unstable_media_create(
     } else {
         Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::INTERNAL_SERVER_ERROR,
-            lang.tr("media_upload_not_configured", None).into_owned(),
+            lang.tr(&lang::media_upload_not_configured()).into_owned(),
         )))
     }
 }

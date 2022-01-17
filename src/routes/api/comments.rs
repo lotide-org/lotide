@@ -2,6 +2,7 @@ use super::{
     JustURL, RespAvatarInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespPostCommentInfo,
 };
+use crate::lang;
 use crate::types::{
     ActorLocalRef, CommentLocalID, CommunityLocalID, JustID, JustUser, MaybeIncludeYour,
     PostLocalID, RespCommentInfo, RespMinimalPostInfo, UserLocalID,
@@ -55,7 +56,7 @@ async fn route_unstable_comments_get(
     match row {
         None => Ok(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_comment", None).into_owned(),
+            lang.tr(&lang::no_such_comment()).into_owned(),
         )),
         Some(row) => {
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(3);
@@ -200,7 +201,7 @@ async fn route_unstable_comments_delete(
                 } else {
                     return Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::FORBIDDEN,
-                        lang.tr("comment_not_yours", None).into_owned(),
+                        lang.tr(&lang::comment_not_yours()).into_owned(),
                     )));
                 }
             }
@@ -647,7 +648,7 @@ async fn route_unstable_comments_replies_create(
     {
         None => Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_comment", None).into_owned(),
+            lang.tr(&lang::no_such_comment()).into_owned(),
         ))),
         Some(row) => Ok(PostLocalID(row.get(0))),
     }?;

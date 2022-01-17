@@ -1,4 +1,5 @@
 use super::InvalidPage;
+use crate::lang;
 use crate::types::{
     CommentLocalID, CommunityLocalID, JustContentText, JustID, JustURL, MaybeIncludeYour,
     NotificationSubscriptionCreateQuery, NotificationSubscriptionID, PostLocalID, RespAvatarInfo,
@@ -32,7 +33,7 @@ impl MeOrLocalAndAdminResult {
         } else {
             Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
-                lang.tr("not_admin", None).into_owned(),
+                lang.tr(&lang::not_admin()).into_owned(),
             )))
         }
     }
@@ -247,7 +248,7 @@ async fn route_unstable_users_create(
         if !super::USERNAME_ALLOWED_CHARS.contains(&ch) {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("user_name_disallowed_chars", None).into_owned(),
+                lang.tr(&lang::user_name_disallowed_chars()).into_owned(),
             )));
         }
     }
@@ -256,7 +257,7 @@ async fn route_unstable_users_create(
         if !fast_chemail::is_valid_email(email) {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("user_email_invalid", None).into_owned(),
+                lang.tr(&lang::user_email_invalid()).into_owned(),
             )));
         }
     }
@@ -278,7 +279,7 @@ async fn route_unstable_users_create(
                 if err.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
                     crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::BAD_REQUEST,
-                        lang.tr("name_in_use", None).into_owned(),
+                        lang.tr(&lang::name_in_use()).into_owned(),
                     ))
                 } else {
                     err.into()
@@ -346,7 +347,7 @@ async fn route_unstable_users_patch(
     if too_many_description_updates {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
-            lang.tr("description_content_conflict", None).into_owned(),
+            lang.tr(&lang::description_content_conflict()).into_owned(),
         )));
     }
 
@@ -377,7 +378,7 @@ async fn route_unstable_users_patch(
         if !fast_chemail::is_valid_email(email_address) {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::BAD_REQUEST,
-                lang.tr("user_email_invalid", None).into_owned(),
+                lang.tr(&lang::user_email_invalid()).into_owned(),
             )));
         }
 
@@ -882,7 +883,7 @@ async fn route_unstable_users_get(
     let row = row.ok_or_else(|| {
         crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_user", None).into_owned(),
+            lang.tr(&lang::no_such_user()).into_owned(),
         ))
     })?;
 

@@ -1,4 +1,5 @@
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
+use crate::lang;
+use crate::types::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use futures::TryStreamExt;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -22,14 +23,14 @@ async fn route_stable_comments_attachments_0_href_get(
     match row {
         None => Ok(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_comment", None).into_owned(),
+            lang.tr(&lang::no_such_comment()).into_owned(),
         )),
         Some(row) => {
             let href: Option<String> = row.get(0);
             match href {
                 None => Ok(crate::simple_response(
                     hyper::StatusCode::NOT_FOUND,
-                    lang.tr("no_such_attachment", None).into_owned(),
+                    lang.tr(&lang::no_such_attachment()).into_owned(),
                 )),
                 Some(href) => {
                     if let Some(rest) = href.strip_prefix("local-media://") {
@@ -46,7 +47,7 @@ async fn route_stable_comments_attachments_0_href_get(
                         match media_row {
                             None => Ok(crate::simple_response(
                                 hyper::StatusCode::NOT_FOUND,
-                                lang.tr("media_upload_missing", None).into_owned(),
+                                lang.tr(&lang::media_upload_missing()).into_owned(),
                             )),
                             Some(media_row) => {
                                 let path: &str = media_row.get(0);
@@ -69,7 +70,7 @@ async fn route_stable_comments_attachments_0_href_get(
                                 } else {
                                     Ok(crate::simple_response(
                                         hyper::StatusCode::NOT_FOUND,
-                                        lang.tr("media_upload_missing", None).into_owned(),
+                                        lang.tr(&lang::media_upload_missing()).into_owned(),
                                     ))
                                 }
                             }
@@ -105,7 +106,7 @@ async fn route_stable_communities_feed_get(
         .ok_or_else(|| {
             crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::NOT_FOUND,
-                lang.tr("no_such_community", None).into_owned(),
+                lang.tr(&lang::no_such_community()).into_owned(),
             ))
         })?;
 
@@ -249,14 +250,14 @@ async fn route_stable_posts_href_get(
     match row {
         None => Ok(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_post", None).into_owned(),
+            lang.tr(&lang::no_such_post()).into_owned(),
         )),
         Some(row) => {
             let href: Option<String> = row.get(0);
             match href {
                 None => Ok(crate::simple_response(
                     hyper::StatusCode::NOT_FOUND,
-                    lang.tr("post_not_link", None).into_owned(),
+                    lang.tr(&lang::post_not_link()).into_owned(),
                 )),
                 Some(href) => {
                     if let Some(rest) = href.strip_prefix("local-media://") {
@@ -273,7 +274,7 @@ async fn route_stable_posts_href_get(
                         match media_row {
                             None => Ok(crate::simple_response(
                                 hyper::StatusCode::NOT_FOUND,
-                                lang.tr("media_upload_missing", None).into_owned(),
+                                lang.tr(&lang::media_upload_missing()).into_owned(),
                             )),
                             Some(media_row) => {
                                 let path: &str = media_row.get(0);
@@ -296,7 +297,7 @@ async fn route_stable_posts_href_get(
                                 } else {
                                     Ok(crate::simple_response(
                                         hyper::StatusCode::NOT_FOUND,
-                                        lang.tr("media_upload_missing", None).into_owned(),
+                                        lang.tr(&lang::media_upload_missing()).into_owned(),
                                     ))
                                 }
                             }
@@ -329,14 +330,14 @@ async fn route_unstable_users_avatar_href_get(
     match row {
         None => Ok(crate::simple_response(
             hyper::StatusCode::NOT_FOUND,
-            lang.tr("no_such_user", None).into_owned(),
+            lang.tr(&lang::no_such_user()).into_owned(),
         )),
         Some(row) => {
             let href: Option<String> = row.get(0);
             match href {
                 None => Ok(crate::simple_response(
                     hyper::StatusCode::NOT_FOUND,
-                    lang.tr("user_no_avatar", None).into_owned(),
+                    lang.tr(&lang::user_no_avatar()).into_owned(),
                 )),
                 Some(href) => {
                     if let Some(rest) = href.strip_prefix("local-media://") {
@@ -353,7 +354,7 @@ async fn route_unstable_users_avatar_href_get(
                         match media_row {
                             None => Ok(crate::simple_response(
                                 hyper::StatusCode::NOT_FOUND,
-                                lang.tr("media_upload_missing", None).into_owned(),
+                                lang.tr(&lang::media_upload_missing()).into_owned(),
                             )),
                             Some(media_row) => {
                                 let path: &str = media_row.get(0);
@@ -376,7 +377,7 @@ async fn route_unstable_users_avatar_href_get(
                                 } else {
                                     Ok(crate::simple_response(
                                         hyper::StatusCode::NOT_FOUND,
-                                        lang.tr("media_upload_missing", None).into_owned(),
+                                        lang.tr(&lang::media_upload_missing()).into_owned(),
                                     ))
                                 }
                             }
