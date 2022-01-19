@@ -6,7 +6,7 @@ mod well_known;
 
 pub fn route_root() -> crate::RouteNode<()> {
     crate::RouteNode::new()
-        .with_handler_async("GET", |_, _, req| {
+        .with_handler_async(hyper::Method::GET, |_, _, req| {
             let lang = crate::get_lang_for_req(&req);
             futures::future::err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::METHOD_NOT_ALLOWED,

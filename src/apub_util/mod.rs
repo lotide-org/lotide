@@ -1851,24 +1851,24 @@ lazy_static::lazy_static! {
                 RefRouteNode::new()
                     .with_child_parse::<CommunityLocalID, _>(
                         RefRouteNode::new()
-                            .with_handler("", |(community,), _, _| LocalObjectRef::Community(community))
+                            .with_handler((), |(community,), _, _| LocalObjectRef::Community(community))
                             .with_child(
                                 "followers",
                                 RefRouteNode::new()
                                     .with_child_parse::<UserLocalID, _>(
                                         RefRouteNode::new()
-                                            .with_handler("", |(community, follower), _, _| LocalObjectRef::CommunityFollow(community, follower))
+                                            .with_handler((), |(community, follower), _, _| LocalObjectRef::CommunityFollow(community, follower))
                                             .with_child(
                                                 "join",
                                                 RefRouteNode::new()
-                                                    .with_handler("", |(community, follower), _, _| LocalObjectRef::CommunityFollowJoin(community, follower))
+                                                    .with_handler((), |(community, follower), _, _| LocalObjectRef::CommunityFollowJoin(community, follower))
                                             )
                                     )
                             )
                             .with_child(
                                 "outbox",
                                 RefRouteNode::new()
-                                    .with_handler("", |(community,), _, _| LocalObjectRef::CommunityOutbox(community))
+                                    .with_handler((), |(community,), _, _| LocalObjectRef::CommunityOutbox(community))
                             )
                     )
             )
@@ -1877,7 +1877,7 @@ lazy_static::lazy_static! {
                 RefRouteNode::new()
                     .with_child_parse::<PostLocalID, _>(
                         RefRouteNode::new()
-                            .with_handler("", |(post,), _, _| LocalObjectRef::Post(post))
+                            .with_handler((), |(post,), _, _| LocalObjectRef::Post(post))
                     )
             )
     };

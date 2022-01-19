@@ -1061,44 +1061,51 @@ async fn route_unstable_communities_posts_patch(
 
 pub fn route_communities() -> crate::RouteNode<()> {
     crate::RouteNode::new()
-        .with_handler_async("GET", route_unstable_communities_list)
-        .with_handler_async("POST", route_unstable_communities_create)
+        .with_handler_async(hyper::Method::GET, route_unstable_communities_list)
+        .with_handler_async(hyper::Method::POST, route_unstable_communities_create)
         .with_child_parse::<CommunityLocalID, _>(
             crate::RouteNode::new()
-                .with_handler_async("DELETE", route_unstable_communities_delete)
-                .with_handler_async("GET", route_unstable_communities_get)
-                .with_handler_async("PATCH", route_unstable_communities_patch)
+                .with_handler_async(hyper::Method::DELETE, route_unstable_communities_delete)
+                .with_handler_async(hyper::Method::GET, route_unstable_communities_get)
+                .with_handler_async(hyper::Method::PATCH, route_unstable_communities_patch)
                 .with_child(
                     "follow",
                     crate::RouteNode::new()
-                        .with_handler_async("POST", route_unstable_communities_follow),
+                        .with_handler_async(hyper::Method::POST, route_unstable_communities_follow),
                 )
                 .with_child(
                     "moderators",
                     crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_communities_moderators_list)
+                        .with_handler_async(
+                            hyper::Method::GET,
+                            route_unstable_communities_moderators_list,
+                        )
                         .with_child_parse::<UserLocalID, _>(
                             crate::RouteNode::new()
                                 .with_handler_async(
-                                    "PUT",
+                                    hyper::Method::PUT,
                                     route_unstable_communities_moderators_add,
                                 )
                                 .with_handler_async(
-                                    "DELETE",
+                                    hyper::Method::DELETE,
                                     route_unstable_communities_moderators_remove,
                                 ),
                         ),
                 )
                 .with_child(
                     "unfollow",
-                    crate::RouteNode::new()
-                        .with_handler_async("POST", route_unstable_communities_unfollow),
+                    crate::RouteNode::new().with_handler_async(
+                        hyper::Method::POST,
+                        route_unstable_communities_unfollow,
+                    ),
                 )
                 .with_child(
                     "posts",
                     crate::RouteNode::new().with_child_parse::<PostLocalID, _>(
-                        crate::RouteNode::new()
-                            .with_handler_async("PATCH", route_unstable_communities_posts_patch),
+                        crate::RouteNode::new().with_handler_async(
+                            hyper::Method::PATCH,
+                            route_unstable_communities_posts_patch,
+                        ),
                     ),
                 ),
         )

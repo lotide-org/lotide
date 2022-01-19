@@ -1171,33 +1171,35 @@ async fn route_unstable_users_things_list(
 
 pub fn route_users() -> crate::RouteNode<()> {
     crate::RouteNode::new()
-        .with_handler_async("GET", route_unstable_users_list)
-        .with_handler_async("POST", route_unstable_users_create)
+        .with_handler_async(hyper::Method::GET, route_unstable_users_list)
+        .with_handler_async(hyper::Method::POST, route_unstable_users_create)
         .with_child_parse::<UserIDOrMe, _>(
             crate::RouteNode::new()
-                .with_handler_async("GET", route_unstable_users_get)
-                .with_handler_async("PATCH", route_unstable_users_patch)
+                .with_handler_async(hyper::Method::GET, route_unstable_users_get)
+                .with_handler_async(hyper::Method::PATCH, route_unstable_users_patch)
                 .with_child(
                     "notifications",
-                    crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_users_notifications_list),
+                    crate::RouteNode::new().with_handler_async(
+                        hyper::Method::GET,
+                        route_unstable_users_notifications_list,
+                    ),
                 )
                 .with_child(
                     "notifications:subscriptions",
                     crate::RouteNode::new().with_handler_async(
-                        "POST",
+                        hyper::Method::POST,
                         route_unstable_users_notifications_subscriptions_create,
                     ),
                 )
                 .with_child(
                     "things",
                     crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_users_things_list),
+                        .with_handler_async(hyper::Method::GET, route_unstable_users_things_list),
                 )
                 .with_child(
                     "your_note",
                     crate::RouteNode::new()
-                        .with_handler_async("PUT", route_unstable_users_your_note_put),
+                        .with_handler_async(hyper::Method::PUT, route_unstable_users_your_note_put),
                 ),
         )
 }

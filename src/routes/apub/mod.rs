@@ -13,22 +13,22 @@ pub fn route_apub() -> crate::RouteNode<()> {
             "users",
             crate::RouteNode::new().with_child_parse::<UserLocalID, _>(
                 crate::RouteNode::new()
-                    .with_handler_async("GET", handler_users_get)
+                    .with_handler_async(hyper::Method::GET, handler_users_get)
                     .with_child(
                         "inbox",
                         crate::RouteNode::new()
-                            .with_handler_async("POST", handler_users_inbox_post),
+                            .with_handler_async(hyper::Method::POST, handler_users_inbox_post),
                     )
                     .with_child(
                         "outbox",
                         crate::RouteNode::new()
-                            .with_handler_async("GET", handler_users_outbox_get)
+                            .with_handler_async(hyper::Method::GET, handler_users_outbox_get)
                             .with_child(
                                 "page",
                                 crate::RouteNode::new()
                                     .with_child_parse::<crate::TimestampOrLatest, _>(
                                         crate::RouteNode::new().with_handler_async(
-                                            "GET",
+                                            hyper::Method::GET,
                                             handler_users_outbox_page_get,
                                         ),
                                     ),
@@ -40,22 +40,22 @@ pub fn route_apub() -> crate::RouteNode<()> {
             "comments",
             crate::RouteNode::new().with_child_parse::<CommentLocalID, _>(
                 crate::RouteNode::new()
-                    .with_handler_async("GET", handler_comments_get)
+                    .with_handler_async(hyper::Method::GET, handler_comments_get)
                     .with_child(
                         "create",
                         crate::RouteNode::new()
-                            .with_handler_async("GET", handler_comments_create_get),
+                            .with_handler_async(hyper::Method::GET, handler_comments_create_get),
                     )
                     .with_child(
                         "delete",
                         crate::RouteNode::new()
-                            .with_handler_async("GET", handler_comments_delete_get),
+                            .with_handler_async(hyper::Method::GET, handler_comments_delete_get),
                     )
                     .with_child(
                         "likes",
                         crate::RouteNode::new().with_child_parse::<UserLocalID, _>(
                             crate::RouteNode::new()
-                                .with_handler_async("GET", handler_comments_likes_get),
+                                .with_handler_async(hyper::Method::GET, handler_comments_likes_get),
                         ),
                     ),
             ),
@@ -63,7 +63,8 @@ pub fn route_apub() -> crate::RouteNode<()> {
         .with_child(
             "comment_like_undos",
             crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
-                crate::RouteNode::new().with_handler_async("GET", handler_comment_like_undos_get),
+                crate::RouteNode::new()
+                    .with_handler_async(hyper::Method::GET, handler_comment_like_undos_get),
             ),
         )
         .with_child("communities", communities::route_communities())
@@ -71,7 +72,7 @@ pub fn route_apub() -> crate::RouteNode<()> {
             "community_follow_undos",
             crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
                 crate::RouteNode::new()
-                    .with_handler_async("GET", handler_community_follow_undos_get),
+                    .with_handler_async(hyper::Method::GET, handler_community_follow_undos_get),
             ),
         )
         .with_child("inbox", route_inbox())
@@ -79,13 +80,14 @@ pub fn route_apub() -> crate::RouteNode<()> {
         .with_child(
             "post_like_undos",
             crate::RouteNode::new().with_child_parse::<uuid::Uuid, _>(
-                crate::RouteNode::new().with_handler_async("GET", handler_post_like_undos_get),
+                crate::RouteNode::new()
+                    .with_handler_async(hyper::Method::GET, handler_post_like_undos_get),
             ),
         )
 }
 
 pub fn route_inbox() -> crate::RouteNode<()> {
-    crate::RouteNode::new().with_handler_async("POST", handler_inbox_post)
+    crate::RouteNode::new().with_handler_async(hyper::Method::POST, handler_inbox_post)
 }
 
 async fn handler_users_get(

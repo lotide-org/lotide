@@ -682,24 +682,27 @@ async fn route_unstable_comments_replies_create(
 pub fn route_comments() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child_parse::<CommentLocalID, _>(
         crate::RouteNode::new()
-            .with_handler_async("GET", route_unstable_comments_get)
-            .with_handler_async("DELETE", route_unstable_comments_delete)
+            .with_handler_async(hyper::Method::GET, route_unstable_comments_get)
+            .with_handler_async(hyper::Method::DELETE, route_unstable_comments_delete)
             .with_child(
                 "replies",
                 crate::RouteNode::new()
-                    .with_handler_async("GET", route_unstable_comments_replies_list)
-                    .with_handler_async("POST", route_unstable_comments_replies_create),
+                    .with_handler_async(hyper::Method::GET, route_unstable_comments_replies_list)
+                    .with_handler_async(
+                        hyper::Method::POST,
+                        route_unstable_comments_replies_create,
+                    ),
             )
             .with_child(
                 "votes",
                 crate::RouteNode::new()
-                    .with_handler_async("GET", route_unstable_comments_likes_list),
+                    .with_handler_async(hyper::Method::GET, route_unstable_comments_likes_list),
             )
             .with_child(
                 "your_vote",
                 crate::RouteNode::new()
-                    .with_handler_async("PUT", route_unstable_comments_like)
-                    .with_handler_async("DELETE", route_unstable_comments_unlike),
+                    .with_handler_async(hyper::Method::PUT, route_unstable_comments_like)
+                    .with_handler_async(hyper::Method::DELETE, route_unstable_comments_unlike),
             ),
     )
 }

@@ -65,5 +65,5 @@ async fn route_unstable_media_create(
 }
 
 pub fn route_media() -> crate::RouteNode<()> {
-    crate::RouteNode::new().with_handler_async("POST", route_unstable_media_create)
+    crate::RouteNode::new().with_handler_async(hyper::Method::POST, route_unstable_media_create)
 }

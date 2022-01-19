@@ -325,47 +325,55 @@ pub fn route_api() -> crate::RouteNode<()> {
                     "actors:lookup",
                     crate::RouteNode::new().with_child_str(
                         crate::RouteNode::new()
-                            .with_handler_async("GET", route_unstable_actors_lookup),
+                            .with_handler_async(hyper::Method::GET, route_unstable_actors_lookup),
                     ),
                 )
                 .with_child("flags", flags::route_flags())
                 .with_child(
                     "logins",
                     crate::RouteNode::new()
-                        .with_handler_async("POST", route_unstable_logins_create)
+                        .with_handler_async(hyper::Method::POST, route_unstable_logins_create)
                         .with_child(
                             "~current",
                             crate::RouteNode::new()
-                                .with_handler_async("GET", route_unstable_logins_current_get)
-                                .with_handler_async("DELETE", route_unstable_logins_current_delete),
+                                .with_handler_async(
+                                    hyper::Method::GET,
+                                    route_unstable_logins_current_get,
+                                )
+                                .with_handler_async(
+                                    hyper::Method::DELETE,
+                                    route_unstable_logins_current_delete,
+                                ),
                         ),
                 )
                 .with_child("media", media::route_media())
                 .with_child(
                     "nodeinfo/2.0",
                     crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_nodeinfo_20_get),
+                        .with_handler_async(hyper::Method::GET, route_unstable_nodeinfo_20_get),
                 )
                 .with_child(
                     "objects:lookup",
                     crate::RouteNode::new().with_child_str(
                         crate::RouteNode::new()
-                            .with_handler_async("GET", route_unstable_objects_lookup),
+                            .with_handler_async(hyper::Method::GET, route_unstable_objects_lookup),
                     ),
                 )
                 .with_child("communities", communities::route_communities())
                 .with_child(
                     "instance",
                     crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_instance_get)
-                        .with_handler_async("PATCH", route_unstable_instance_patch),
+                        .with_handler_async(hyper::Method::GET, route_unstable_instance_get)
+                        .with_handler_async(hyper::Method::PATCH, route_unstable_instance_patch),
                 )
                 .with_child(
                     "misc",
                     crate::RouteNode::new().with_child(
                         "render_markdown",
-                        crate::RouteNode::new()
-                            .with_handler_async("POST", route_unstable_misc_render_markdown),
+                        crate::RouteNode::new().with_handler_async(
+                            hyper::Method::POST,
+                            route_unstable_misc_render_markdown,
+                        ),
                     ),
                 )
                 .with_child("posts", posts::route_posts())

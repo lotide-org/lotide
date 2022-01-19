@@ -8,11 +8,11 @@ pub fn route_well_known() -> crate::RouteNode<()> {
     crate::RouteNode::new()
         .with_child(
             "nodeinfo",
-            crate::RouteNode::new().with_handler_async("GET", handler_nodeinfo_get),
+            crate::RouteNode::new().with_handler_async(hyper::Method::GET, handler_nodeinfo_get),
         )
         .with_child(
             "webfinger",
-            crate::RouteNode::new().with_handler_async("GET", handler_webfinger_get),
+            crate::RouteNode::new().with_handler_async(hyper::Method::GET, handler_webfinger_get),
         )
 }
 

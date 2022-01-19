@@ -5,19 +5,22 @@ use std::sync::Arc;
 pub fn route_posts() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child_parse::<PostLocalID, _>(
         crate::RouteNode::new()
-            .with_handler_async("GET", handler_posts_get)
+            .with_handler_async(hyper::Method::GET, handler_posts_get)
             .with_child(
                 "create",
-                crate::RouteNode::new().with_handler_async("GET", handler_posts_create_get),
+                crate::RouteNode::new()
+                    .with_handler_async(hyper::Method::GET, handler_posts_create_get),
             )
             .with_child(
                 "delete",
-                crate::RouteNode::new().with_handler_async("GET", handler_posts_delete_get),
+                crate::RouteNode::new()
+                    .with_handler_async(hyper::Method::GET, handler_posts_delete_get),
             )
             .with_child(
                 "likes",
                 crate::RouteNode::new().with_child_parse::<UserLocalID, _>(
-                    crate::RouteNode::new().with_handler_async("GET", handler_posts_likes_get),
+                    crate::RouteNode::new()
+                        .with_handler_async(hyper::Method::GET, handler_posts_likes_get),
                 ),
             ),
     )

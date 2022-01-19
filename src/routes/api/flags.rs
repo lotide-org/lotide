@@ -248,5 +248,5 @@ async fn route_unstable_flags_list(
 }
 
 pub fn route_flags() -> crate::RouteNode<()> {
-    crate::RouteNode::new().with_handler_async("GET", route_unstable_flags_list)
+    crate::RouteNode::new().with_handler_async(hyper::Method::GET, route_unstable_flags_list)
 }

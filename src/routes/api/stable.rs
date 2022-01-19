@@ -401,8 +401,10 @@ pub fn route_stable() -> crate::RouteNode<()> {
             crate::RouteNode::new().with_child_parse::<CommentLocalID, _>(
                 crate::RouteNode::new().with_child(
                     "attachments/0/href",
-                    crate::RouteNode::new()
-                        .with_handler_async("GET", route_stable_comments_attachments_0_href_get),
+                    crate::RouteNode::new().with_handler_async(
+                        hyper::Method::GET,
+                        route_stable_comments_attachments_0_href_get,
+                    ),
                 ),
             ),
         )
@@ -412,7 +414,7 @@ pub fn route_stable() -> crate::RouteNode<()> {
                 crate::RouteNode::new().with_child(
                     "feed",
                     crate::RouteNode::new()
-                        .with_handler_async("GET", route_stable_communities_feed_get),
+                        .with_handler_async(hyper::Method::GET, route_stable_communities_feed_get),
                 ),
             ),
         )
@@ -421,7 +423,8 @@ pub fn route_stable() -> crate::RouteNode<()> {
             crate::RouteNode::new().with_child_parse::<PostLocalID, _>(
                 crate::RouteNode::new().with_child(
                     "href",
-                    crate::RouteNode::new().with_handler_async("GET", route_stable_posts_href_get),
+                    crate::RouteNode::new()
+                        .with_handler_async(hyper::Method::GET, route_stable_posts_href_get),
                 ),
             ),
         )
@@ -430,8 +433,10 @@ pub fn route_stable() -> crate::RouteNode<()> {
             crate::RouteNode::new().with_child_parse::<UserLocalID, _>(
                 crate::RouteNode::new().with_child(
                     "avatar/href",
-                    crate::RouteNode::new()
-                        .with_handler_async("GET", route_unstable_users_avatar_href_get),
+                    crate::RouteNode::new().with_handler_async(
+                        hyper::Method::GET,
+                        route_unstable_users_avatar_href_get,
+                    ),
                 ),
             ),
         )

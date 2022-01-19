@@ -1356,13 +1356,13 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.2.1"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d569972648b2c512421b5f2a405ad6ac9666547189d0c5477a3f200f3e02f9"
+checksum = "31f4c6746584866f0feabcc69893c5b51beef3831656a968ed7ae254cdc4fd03"
 dependencies = [
- "bytes 0.5.5",
+ "bytes 1.0.1",
  "fnv",
- "itoa",
+ "itoa 1.0.1",
 ]
 
 [[package]]
@@ -1418,7 +1418,7 @@ dependencies = [
  "http",
  "http-body 0.3.1",
  "httparse",
- "itoa",
+ "itoa 0.4.6",
  "log",
  "pin-project 0.4.22",
  "socket2 0.3.12",
@@ -1442,7 +1442,7 @@ dependencies = [
  "http-body 0.4.2",
  "httparse",
  "httpdate",
- "itoa",
+ "itoa 0.4.6",
  "pin-project-lite 0.2.7",
  "socket2 0.4.0",
  "tokio 1.8.0",
@@ -1575,6 +1575,12 @@ name = "itoa"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6f3ad7b9d11a0c00842ff8de1b60ee58661048eb8049ed33c73594f359d7e6"
+
+[[package]]
+name = "itoa"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aab8fc367588b89dcee83ab0fd66b72b50b72fa1904d7095045ace2b0c81c35"
 
 [[package]]
 name = "js-sys"
@@ -2951,7 +2957,7 @@ version = "1.0.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3433e879a558dde8b5e8feb2a04899cf34fdde1fafb894687e52105fc1162ac3"
 dependencies = [
- "itoa",
+ "itoa 0.4.6",
  "ryu",
  "serde",
 ]
@@ -2963,7 +2969,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ec5d77e2d4c73717816afac02670d5c4f534ea95ed430442cad02e7a6e32c97"
 dependencies = [
  "dtoa",
- "itoa",
+ "itoa 0.4.6",
  "serde",
  "url",
 ]
@@ -3469,11 +3475,11 @@ dependencies = [
 
 [[package]]
 name = "trout"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aafa917043f2f9904a717ee80a2728ee4235c81688fff511779e42d383a6f193"
+checksum = "96ee463312333d0717c7707485a447605398f639e5f4d0f188856c374b02ba6a"
 dependencies = [
- "hyper 0.13.6",
+ "http",
  "percent-encoding",
 ]
 

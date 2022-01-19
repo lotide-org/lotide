@@ -179,14 +179,19 @@ pub fn route_forgot_password() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child(
         "keys",
         crate::RouteNode::new()
-            .with_handler_async("POST", route_unstable_forgot_password_keys_create)
+            .with_handler_async(
+                hyper::Method::POST,
+                route_unstable_forgot_password_keys_create,
+            )
             .with_child_parse::<ForgotPasswordKey, _>(
                 crate::RouteNode::new()
-                    .with_handler_async("GET", route_unstable_forgot_password_keys_get)
+                    .with_handler_async(hyper::Method::GET, route_unstable_forgot_password_keys_get)
                     .with_child(
                         "reset",
-                        crate::RouteNode::new()
-                            .with_handler_async("POST", route_unstable_forgot_password_keys_reset),
+                        crate::RouteNode::new().with_handler_async(
+                            hyper::Method::POST,
+                            route_unstable_forgot_password_keys_reset,
+                        ),
                     ),
             ),
     )
