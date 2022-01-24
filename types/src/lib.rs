@@ -280,6 +280,20 @@ pub struct RespPostInfo<'a> {
     pub post: &'a RespPostListPost<'a>,
     pub approved: bool,
     pub local: bool,
+    pub poll: Option<RespPollInfo<'a>>,
+}
+
+#[derive(Serialize)]
+pub struct RespPollInfo<'a> {
+    pub multiple: bool,
+    pub options: Vec<RespPollOption<'a>>,
+}
+
+#[derive(Serialize)]
+pub struct RespPollOption<'a> {
+    pub id: i64,
+    pub name: &'a str,
+    pub votes: u32,
 }
 
 #[derive(Serialize, Clone)]

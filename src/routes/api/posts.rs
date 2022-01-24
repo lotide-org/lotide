@@ -5,7 +5,7 @@ use super::{
 use crate::lang;
 use crate::types::{
     ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, JustUser, PostLocalID,
-    RespPostInfo, UserLocalID,
+    RespPollInfo, RespPollOption, RespPostInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -995,7 +995,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id) FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -1098,6 +1098,25 @@ async fn route_unstable_posts_get(
                 deleted: row.get(22),
             };
 
+            let poll = if let Some(multiple) = row.get(23) {
+                Some({
+                    let options: Vec<_> = row
+                        .get::<_, Vec<postgres_types::Json<(i64, &str, i64)>>>(24)
+                        .into_iter()
+                        .map(|x| x.0)
+                        .map(|(id, name, votes): (i64, &str, i64)| RespPollOption {
+                            id,
+                            name,
+                            votes: votes as u32,
+                        })
+                        .collect();
+
+                    RespPollInfo { multiple, options }
+                })
+            } else {
+                None
+            };
+
             let post = RespPostListPost {
                 id: post_id,
                 title: Cow::Borrowed(title),
@@ -1120,6 +1139,7 @@ async fn route_unstable_posts_get(
                 post: &post,
                 local: row.get(17),
                 approved: row.get(15),
+                poll,
             };
 
             crate::json_response(&output)
