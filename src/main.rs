@@ -339,6 +339,7 @@ pub struct PostInfo<'a> {
     created: &'a chrono::DateTime<chrono::FixedOffset>,
     #[allow(dead_code)]
     community: CommunityLocalID,
+    poll: Option<Cow<'a, PollInfo<'a>>>,
 }
 
 pub struct PostInfoOwned {
@@ -351,6 +352,7 @@ pub struct PostInfoOwned {
     title: String,
     created: chrono::DateTime<chrono::FixedOffset>,
     community: CommunityLocalID,
+    poll: Option<PollInfoOwned>,
 }
 
 impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
@@ -365,6 +367,51 @@ impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
             title: &src.title,
             created: &src.created,
             community: src.community,
+            poll: src.poll.as_ref().map(|x| Cow::Owned(x.into())),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PollInfo<'a> {
+    multiple: bool,
+    options: Cow<'a, [PollOption<'a>]>,
+}
+
+pub struct PollInfoOwned {
+    multiple: bool,
+    options: Vec<PollOptionOwned>,
+}
+
+impl<'a> From<&'a PollInfoOwned> for PollInfo<'a> {
+    fn from(src: &'a PollInfoOwned) -> Self {
+        PollInfo {
+            multiple: src.multiple,
+            options: src.options.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PollOption<'a> {
+    id: i64,
+    name: &'a str,
+    votes: u32,
+}
+
+#[derive(Clone)]
+pub struct PollOptionOwned {
+    id: i64,
+    name: String,
+    votes: u32,
+}
+
+impl<'a> From<&'a PollOptionOwned> for PollOption<'a> {
+    fn from(src: &'a PollOptionOwned) -> Self {
+        PollOption {
+            id: src.id,
+            name: &src.name,
+            votes: src.votes,
         }
     }
 }

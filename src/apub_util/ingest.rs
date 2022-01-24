@@ -1,6 +1,7 @@
 use super::{FollowLike, KnownObject, Verified};
 use crate::types::{CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID};
 use activitystreams::prelude::*;
+use serde::Deserialize;
 use std::borrow::Cow;
 use std::future::Future;
 use std::ops::Deref;
@@ -473,6 +474,9 @@ pub async fn ingest_object(
             ingest_postlike(Verified(KnownObject::Page(obj)), found_from, ctx).await
         }
         KnownObject::Person(person) => ingest_personlike(Verified(person), false, ctx).await,
+        KnownObject::Question(obj) => {
+            ingest_postlike(Verified(KnownObject::Question(obj)), found_from, ctx).await
+        }
         KnownObject::Remove(activity) => {
             let activity_id = activity
                 .id_unchecked()
@@ -806,25 +810,66 @@ pub async fn ingest_create(
     Ok(())
 }
 
+struct PollIngestInfo {
+    multiple: bool,
+    options: Vec<(String, Option<i32>)>,
+}
+
 /// Ingestion flow for Page, Image, Article, and Note. Should not be called with any other objects.
 async fn ingest_postlike(
     obj: Verified<KnownObject>,
     found_from: FoundFrom,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let (ext, to, in_reply_to, obj_id) = match obj.deref() {
-        KnownObject::Page(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
-        KnownObject::Image(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
-        KnownObject::Article(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
+    let (ext, to, in_reply_to, obj_id, poll_info) = match obj.deref() {
+        KnownObject::Page(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
+        KnownObject::Image(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
+        KnownObject::Article(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
         KnownObject::Note(obj) => (
-            &obj.ext_one,
+            Some(&obj.ext_one),
             obj.to(),
             obj.in_reply_to(),
             obj.id_unchecked(),
+            None,
+        ),
+        KnownObject::Question(obj) => (
+            None,
+            obj.to(),
+            obj.in_reply_to(),
+            obj.id_unchecked(),
+            Some({
+                #[derive(Deserialize)]
+                struct OptionObject {
+                    name: String,
+                    replies: Option<crate::apub_util::AnyCollection>,
+                }
+
+                let (multiple, options) = if let Some(any_of) = obj.any_of() {
+                    (true, any_of)
+                } else if let Some(one_of) = obj.one_of() {
+                    (false, one_of)
+                } else {
+                    return Err(crate::Error::InternalStrStatic("Invalid poll"));
+                };
+
+                let options = options
+                    .iter()
+                    .map(|value| serde_json::from_value(serde_json::to_value(value)?))
+                    .collect::<Result<Vec<OptionObject>, _>>()?;
+                let options = options
+                    .into_iter()
+                    .map(|value| {
+                        let remote_count = value.replies.and_then(|coll| coll.total_items());
+                        (value.name, remote_count.map(|x| x as i32))
+                    })
+                    .collect();
+
+                PollIngestInfo { multiple, options }
+            }),
         ),
         _ => return Ok(None), // shouldn't happen?
     };
-    let target = &ext.target;
+    let target = ext.as_ref().and_then(|x| x.target.as_ref());
 
     let community_found = match target
         .as_ref()
@@ -873,6 +918,7 @@ async fn ingest_postlike(
                 community_local_id,
                 community_is_local,
                 found_from.as_announce(),
+                poll_info,
                 Verified(obj),
                 ctx,
             )
@@ -882,6 +928,7 @@ async fn ingest_postlike(
                 community_local_id,
                 community_is_local,
                 found_from.as_announce(),
+                poll_info,
                 Verified(obj),
                 ctx,
             )
@@ -891,6 +938,7 @@ async fn ingest_postlike(
                 community_local_id,
                 community_is_local,
                 found_from.as_announce(),
+                poll_info,
                 Verified(obj),
                 ctx,
             )
@@ -992,6 +1040,7 @@ async fn ingest_postlike(
                                 community_local_id,
                                 community_is_local,
                                 found_from.as_announce(),
+                                poll_info,
                                 ctx,
                             )
                             .await?,
@@ -1339,6 +1388,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
     is_announce: Option<&url::Url>,
+    poll_info: Option<PollIngestInfo>,
     obj: Verified<super::ExtendedPostlike<activitystreams::object::Object<Kind>>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<PostLocalID>, crate::Error> {
@@ -1386,6 +1436,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
                 community_local_id,
                 community_is_local,
                 is_announce,
+                poll_info,
                 ctx,
             )
             .await?,
@@ -1406,9 +1457,10 @@ async fn handle_recieved_post(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
     is_announce: Option<&url::Url>,
+    poll_info: Option<PollIngestInfo>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<PostLocalID, crate::Error> {
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
     let author = match author {
         Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
         None => None,
@@ -1423,12 +1475,90 @@ async fn handle_recieved_post(
 
     let approved = is_announce.is_some() || community_is_local;
 
-    let row = db.query_one(
-        "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10 RETURNING id",
-        &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str())],
-    ).await?;
+    let post_local_id = {
+        let trans = db.transaction().await?;
+        let row = trans.query_one(
+            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10 RETURNING id, poll_id",
+            &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str())],
+        ).await?;
+        let post_local_id = PostLocalID(row.get(0));
+        let existing_poll_id: Option<i64> = row.get(1);
 
-    let post_local_id = PostLocalID(row.get(0));
+        if let Some(poll_id) = existing_poll_id {
+            if let Some(poll_info) = poll_info {
+                let names: Vec<&str> = poll_info
+                    .options
+                    .iter()
+                    .map(|(name, _)| name.deref())
+                    .collect();
+                let counts: Vec<Option<i32>> = poll_info
+                    .options
+                    .iter()
+                    .map(|(_, count)| count.clone())
+                    .collect();
+                let indices: Vec<i32> = (0..(poll_info.options.len() as i32)).collect();
+
+                trans
+                    .execute(
+                        "UPDATE poll SET multiple=$1 WHERE id=$2",
+                        &[&poll_info.multiple, &poll_id],
+                    )
+                    .await?;
+                trans
+                    .execute(
+                        "DELETE FROM poll_option WHERE poll_id=$1 AND NOT (name = ANY($1::TEXT[]))",
+                        &[&names],
+                    )
+                    .await?;
+
+                trans.execute("INSERT INTO poll_option (poll_id, name, position, remote_vote_count) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[], $4::INTEGER[]) ON CONFLICT (poll_id, name) DO UPDATE SET position = excluded.position, remote_vote_count = excluded.remote_vote_count", &[&poll_id, &names, &indices, &counts]).await?;
+            } else {
+                trans
+                    .execute(
+                        "UPDATE post SET poll_id=NULL WHERE id=$1",
+                        &[&post_local_id],
+                    )
+                    .await?;
+                trans
+                    .execute("DELETE FROM poll WHERE id=$1", &[&poll_id])
+                    .await?;
+            }
+        } else {
+            if let Some(poll_info) = poll_info {
+                let names: Vec<&str> = poll_info
+                    .options
+                    .iter()
+                    .map(|(name, _)| name.deref())
+                    .collect();
+                let counts: Vec<Option<i32>> = poll_info
+                    .options
+                    .iter()
+                    .map(|(_, count)| count.clone())
+                    .collect();
+                let indices: Vec<i32> = (0..(poll_info.options.len() as i32)).collect();
+
+                let row = trans
+                    .query_one(
+                        "INSERT INTO poll (multiple) VALUES ($1) RETURNING id",
+                        &[&poll_info.multiple],
+                    )
+                    .await?;
+                let poll_id: i64 = row.get(0);
+
+                trans.execute("INSERT INTO poll_option (poll_id, name, position, remote_vote_count) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[], $4::INTEGER[])", &[&poll_id, &names, &indices, &counts]).await?;
+                trans
+                    .execute(
+                        "UPDATE post SET poll_id=$1 WHERE id=$2",
+                        &[&poll_id, &post_local_id],
+                    )
+                    .await?;
+            }
+        }
+
+        trans.commit().await?;
+
+        post_local_id
+    };
 
     if community_is_local {
         crate::on_local_community_add_post(community_local_id, post_local_id, object_id, ctx);

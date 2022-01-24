@@ -1,5 +1,6 @@
 use crate::{CommunityLocalID, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 pub fn route_posts() -> crate::RouteNode<()> {
@@ -37,7 +38,7 @@ async fn handler_posts_get(
 
     match db
         .query_opt(
-            "SELECT post.author, post.href, post.title, post.created, post.community, post.local, post.deleted, post.had_href, post.content_text, post.content_markdown, post.content_html, community.ap_id, community.ap_outbox, community.local, community.ap_followers FROM post, community WHERE post.id=$1 AND post.community = community.id",
+            "SELECT post.author, post.href, post.title, post.created, post.community, post.local, post.deleted, post.had_href, post.content_text, post.content_markdown, post.content_html, community.ap_id, community.ap_outbox, community.local, community.ap_followers, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id)) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id) FROM post INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.id=$1",
             &[&post_id.raw()],
         )
         .await?
@@ -115,6 +116,29 @@ async fn handler_posts_get(
                 }
             };
 
+            let poll = if let Some(multiple) = row.get(15) {
+                Some({
+                    let options: Vec<_> = row.get::<_, Vec<postgres_types::Json<(i64, &str, i64)>>>(16)
+                        .into_iter()
+                        .map(|x| x.0)
+                        .map(|(id, name, votes): (i64, &str, i64)| {
+                            crate::PollOption {
+                                id,
+                                name,
+                                votes: votes as u32,
+                            }
+                        })
+                        .collect();
+
+                    Cow::Owned(crate::PollInfo {
+                        multiple,
+                        options: Cow::Owned(options),
+                    })
+                })
+            } else {
+                None
+            };
+
             let post_info = crate::PostInfo {
                 author: Some(UserLocalID(row.get(0))),
                 community: community_local_id,
@@ -125,6 +149,7 @@ async fn handler_posts_get(
                 content_html: row.get(10),
                 id: post_id,
                 title: row.get(2),
+                poll,
             };
 
             let body = crate::apub_util::post_to_ap(&post_info, community_ap_id.into(), community_ap_outbox.map(Into::into), community_ap_followers.map(Into::into), &ctx)?;
@@ -153,7 +178,7 @@ async fn handler_posts_create_get(
 
     match db
         .query_opt(
-            "SELECT post.author, post.href, post.title, post.created, post.community, post.local, post.deleted, post.content_text, post.content_markdown, post.content_html, community.ap_id, community.ap_outbox, community.local, community.ap_followers FROM post, community WHERE community.id = post.community AND post.id=$1",
+            "SELECT post.author, post.href, post.title, post.created, post.community, post.local, post.deleted, post.content_text, post.content_markdown, post.content_html, community.ap_id, community.ap_outbox, community.local, community.ap_followers, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id)) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id) FROM post INNER JOIN community ON (community.id = post.community) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.id=$1",
             &[&post_id.raw()],
         )
         .await?
@@ -215,6 +240,29 @@ async fn handler_posts_create_get(
                 }
             };
 
+            let poll = if let Some(multiple) = row.get(14) {
+                Some({
+                    let options: Vec<_> = row.get::<_, Vec<postgres_types::Json<(i64, &str, i64)>>>(15)
+                        .into_iter()
+                        .map(|x| x.0)
+                        .map(|(id, name, votes): (i64, &str, i64)| {
+                            crate::PollOption {
+                                id,
+                                name,
+                                votes: votes as u32,
+                            }
+                        })
+                        .collect();
+
+                    Cow::Owned(crate::PollInfo {
+                        multiple,
+                        options: Cow::Owned(options),
+                    })
+                })
+            } else {
+                None
+            };
+
             let post_info = crate::PostInfo {
                 author: Some(UserLocalID(row.get(0))),
                 community: community_local_id,
@@ -225,6 +273,7 @@ async fn handler_posts_create_get(
                 content_html: row.get(9),
                 id: post_id,
                 title: row.get(2),
+                poll,
             };
 
             let body = crate::apub_util::local_post_to_create_ap(&post_info, community_ap_id.into(), community_ap_outbox.map(Into::into), community_ap_followers.map(Into::into), &ctx)?;

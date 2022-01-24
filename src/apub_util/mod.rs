@@ -90,6 +90,7 @@ pub enum KnownObject {
     Image(ExtendedPostlike<activitystreams::object::Image>),
     Page(ExtendedPostlike<activitystreams::object::Page>),
     Note(ExtendedPostlike<activitystreams::object::Note>),
+    Question(activitystreams::activity::Question),
 }
 
 #[derive(Deserialize)]
@@ -137,6 +138,15 @@ pub type ExtendedPostlike<T> = activitystreams_ext::Ext1<T, TargetExtension>;
 pub enum AnyCollection {
     Unordered(activitystreams::collection::UnorderedCollection),
     Ordered(activitystreams::collection::OrderedCollection),
+}
+
+impl AnyCollection {
+    pub fn total_items(&self) -> Option<u64> {
+        match self {
+            AnyCollection::Unordered(coll) => coll.total_items(),
+            AnyCollection::Ordered(coll) => coll.total_items(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1195,8 +1205,52 @@ pub fn post_to_ap(
         Ok(())
     }
 
-    match post.href {
-        Some(href) => {
+    match (post.poll.as_ref(), post.href) {
+        (Some(poll), _) => {
+            // theoretically href and poll are mutually exclusive
+
+            let mut post_ap = activitystreams::activity::Question::new();
+
+            let options: Vec<activitystreams::base::AnyBase> = poll
+                .options
+                .iter()
+                .map(|option| {
+                    let mut option_ap = activitystreams::object::Note::new();
+                    option_ap.set_name(option.name);
+
+                    let mut replies_ap = activitystreams::collection::UnorderedCollection::new();
+                    replies_ap.set_total_items(option.votes);
+                    option_ap.set_reply(replies_ap.into_any_base()?);
+
+                    option_ap.into_any_base()
+                })
+                .collect::<Result<_, _>>()?;
+
+            if poll.multiple {
+                post_ap.set_many_any_ofs(options);
+            } else {
+                post_ap.set_many_one_ofs(options);
+            }
+
+            let mut post_ap = ExtendedPostlike::new(
+                activitystreams::object::ApObject::new(post_ap),
+                Default::default(),
+            );
+
+            apply_properties(
+                &mut post_ap,
+                post,
+                community_ap_id,
+                community_ap_outbox,
+                community_ap_followers,
+                &ctx,
+            )?;
+
+            Ok(activitystreams::base::AnyBase::from_arbitrary_json(
+                post_ap,
+            )?)
+        }
+        (None, Some(href)) => {
             if href.starts_with("local-media://") {
                 let mut attachment = activitystreams::object::Image::new();
                 attachment.set_url(ctx.process_href(href, post.id).into_owned());
@@ -1252,7 +1306,7 @@ pub fn post_to_ap(
                 )?)
             }
         }
-        None => {
+        (None, None) => {
             let mut post_ap = activitystreams::object::Note::new();
 
             post_ap.set_summary(post.title).set_name(post.title);

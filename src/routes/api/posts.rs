@@ -782,11 +782,17 @@ async fn route_unstable_posts_create(
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let lang = crate::get_lang_for_req(&req);
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
+
+    #[derive(Deserialize)]
+    struct PollCreateInfo {
+        multiple: bool,
+        options: Vec<String>,
+    }
 
     #[derive(Deserialize)]
     struct PostsCreateBody {
@@ -795,6 +801,7 @@ async fn route_unstable_posts_create(
         content_markdown: Option<String>,
         content_text: Option<String>,
         title: String,
+        poll: Option<PollCreateInfo>,
     }
 
     let body: PostsCreateBody = serde_json::from_slice(&body)?;
@@ -811,6 +818,22 @@ async fn route_unstable_posts_create(
             hyper::StatusCode::BAD_REQUEST,
             lang.tr(&lang::post_content_conflict()).into_owned(),
         )));
+    }
+
+    if body.href.is_some() && body.poll.is_some() {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            lang.tr(&lang::post_conflict_href_poll()).into_owned(),
+        )));
+    }
+
+    if let Some(poll) = &body.poll {
+        if poll.options.is_empty() {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                lang.tr(&lang::post_poll_empty()).into_owned(),
+            )));
+        }
     }
 
     if let Some(href) = &body.href {
@@ -852,13 +875,65 @@ async fn route_unstable_posts_create(
     let community_local: bool = community_row.get(0);
     let already_approved = community_local;
 
-    let res_row = db.query_one(
-        "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8) RETURNING id, created",
-        &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved],
-    ).await?;
+    let (id, created, poll) = {
+        let trans = db.transaction().await?;
 
-    let id = PostLocalID(res_row.get(0));
-    let created = res_row.get(1);
+        let poll_data = if let Some(poll) = body.poll {
+            Some({
+                let row = trans
+                    .query_one(
+                        "INSERT INTO poll (multiple) VALUES ($1) RETURNING id",
+                        &[&poll.multiple],
+                    )
+                    .await?;
+                let poll_id: i64 = row.get(0);
+
+                let indices: Vec<i32> = (0..(poll.options.len() as i32)).collect();
+                let mut names: Vec<Option<String>> = poll.options.into_iter().map(Some).collect();
+
+                let rows = trans.query("INSERT INTO poll_option (poll_id, name, position) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[]) RETURNING id, position", &[&poll_id, &names, &indices]).await?;
+
+                assert_eq!(names.len(), rows.len());
+
+                let mut options = vec![None; rows.len()];
+
+                for row in rows {
+                    let idx: i32 = row.get(1);
+                    let idx = idx as usize;
+
+                    options[idx] = Some(crate::PollOptionOwned {
+                        id: row.get(0),
+                        name: names[idx].take().unwrap(),
+                        votes: 0,
+                    });
+                }
+
+                (
+                    crate::PollInfoOwned {
+                        multiple: poll.multiple,
+                        options: options.into_iter().map(Option::unwrap).collect(),
+                    },
+                    poll_id,
+                )
+            })
+        } else {
+            None
+        };
+
+        let poll_id = poll_data.as_ref().map(|(_, poll_id)| *poll_id);
+
+        let res_row = trans.query_one(
+            "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved, poll_id) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8, $9) RETURNING id, created",
+            &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved, &poll_id],
+        ).await?;
+
+        let id = PostLocalID(res_row.get(0));
+        let created = res_row.get(1);
+
+        trans.commit().await?;
+
+        (id, created, poll_data.map(|(info, _)| info))
+    };
 
     let post = crate::PostInfoOwned {
         id,
@@ -870,6 +945,7 @@ async fn route_unstable_posts_create(
         title: body.title,
         created,
         community: body.community,
+        poll,
     };
 
     crate::spawn_task(async move {
