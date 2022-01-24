@@ -44,7 +44,7 @@ pub async fn ingest_object(
     found_from: FoundFrom,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
     match object.into_inner() {
         KnownObject::Accept(activity) => {
             let activity_id = activity
@@ -468,6 +468,58 @@ pub async fn ingest_object(
             Ok(None)
         }
         KnownObject::Note(obj) => {
+            // try to handle poll response
+            if let Some(in_reply_to) = obj.in_reply_to().and_then(|x| x.as_single_id()) {
+                if let Some(crate::apub_util::LocalObjectRef::Post(post_id)) =
+                    crate::apub_util::LocalObjectRef::try_from_uri(in_reply_to, &ctx.host_url_apub)
+                {
+                    if let Some(name) = obj
+                        .name()
+                        .as_ref()
+                        .and_then(|x| x.as_one())
+                        .and_then(|x| x.as_xsd_string())
+                    {
+                        if let Some(actor_id) = obj.attributed_to().and_then(|x| x.as_single_id()) {
+                            super::require_containment(
+                                obj.id_unchecked().ok_or(crate::Error::InternalStrStatic(
+                                    "Missing activity ID",
+                                ))?,
+                                actor_id,
+                            )?;
+
+                            let row = db.query_opt("SELECT id, poll_id, (SELECT multiple FROM poll WHERE poll.id=poll_id) FROM poll_option WHERE poll_id=(SELECT poll_id FROM post WHERE id=$1 AND local) AND name=$2", &[&post_id, &name]).await?;
+                            if let Some(row) = row {
+                                let option_id: i64 = row.get(0);
+                                let poll_id: i64 = row.get(1);
+                                let multiple: bool = row.get(2);
+
+                                let actor_local_id =
+                                    super::get_or_fetch_user_local_id(&actor_id, &db, &ctx).await?;
+
+                                {
+                                    let trans = db.transaction().await?;
+
+                                    if !multiple {
+                                        trans
+                                            .execute(
+                                                "DELETE FROM poll_vote WHERE person=$1",
+                                                &[&actor_local_id],
+                                            )
+                                            .await?;
+                                    }
+
+                                    trans.execute("INSERT INTO poll_vote (poll_id, option_id, person) VALUES ($1, $2, $3)", &[&poll_id, &option_id, &actor_local_id]).await?;
+
+                                    trans.commit().await?;
+                                }
+
+                                return Ok(None);
+                            }
+                        }
+                    }
+                }
+            }
+
             ingest_postlike(Verified(KnownObject::Note(obj)), found_from, ctx).await
         }
         KnownObject::Page(obj) => {
@@ -801,7 +853,15 @@ pub async fn ingest_create(
         let object_id = req_obj.id();
 
         if let Some(object_id) = object_id {
-            let obj = crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?;
+            let obj = if if let Some(activity_id) = activity.id_unchecked() {
+                crate::apub_util::is_contained(activity_id, object_id)
+            } else {
+                false
+            } {
+                Verified(serde_json::from_value(serde_json::to_value(&req_obj)?)?)
+            } else {
+                crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?
+            };
 
             ingest_object_boxed(obj, FoundFrom::Other, ctx.clone()).await?;
         }

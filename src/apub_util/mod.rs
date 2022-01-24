@@ -413,8 +413,12 @@ impl ActorLocalInfo {
 #[error("Incoming object failed containment check")]
 pub struct NotContained;
 
+pub fn is_contained(object_id: &url::Url, actor_id: &url::Url) -> bool {
+    object_id.host() == actor_id.host() && object_id.port() == actor_id.port()
+}
+
 pub fn require_containment(object_id: &url::Url, actor_id: &url::Url) -> Result<(), NotContained> {
-    if object_id.host() == actor_id.host() && object_id.port() == actor_id.port() {
+    if is_contained(object_id, actor_id) {
         Ok(())
     } else {
         Err(NotContained)
