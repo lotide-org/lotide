@@ -46,6 +46,8 @@ macro_rules! id_wrapper {
 
 id_wrapper!(CommentLocalID);
 id_wrapper!(CommunityLocalID);
+id_wrapper!(PollLocalID);
+id_wrapper!(PollOptionLocalID);
 id_wrapper!(PostLocalID);
 id_wrapper!(UserLocalID);
 id_wrapper!(NotificationID);
@@ -384,4 +386,11 @@ pub struct NotificationSubscriptionCreateQuery<'a> {
     pub endpoint: Cow<'a, str>,
     pub p256dh_key: Cow<'a, str>,
     pub auth_key: Cow<'a, str>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum PollVoteBody {
+    Multiple { options: Vec<PollOptionLocalID> },
+    Single { option: PollOptionLocalID },
 }

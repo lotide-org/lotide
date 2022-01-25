@@ -1,6 +1,6 @@
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, PostLocalID, ThingLocalRef,
-    UserLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, PollLocalID, PollOptionLocalID,
+    PostLocalID, ThingLocalRef, UserLocalID,
 };
 use crate::BaseURL;
 use activitystreams::prelude::*;
@@ -239,6 +239,24 @@ pub fn get_local_comment_like_apub_id(
     let mut res = crate::apub_util::get_local_comment_apub_id(comment_local_id, host_url_apub);
     res.path_segments_mut()
         .extend(&["likes", &user.to_string()]);
+    res
+}
+
+pub fn get_local_poll_vote_apub_id(
+    poll_id: PollLocalID,
+    user: UserLocalID,
+    option_id: PollOptionLocalID,
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = host_url_apub.clone();
+    res.path_segments_mut().extend(&[
+        "polls",
+        &poll_id.to_string(),
+        "voters",
+        &user.to_string(),
+        "votes",
+        &option_id.to_string(),
+    ]);
     res
 }
 
@@ -1687,6 +1705,59 @@ pub fn local_comment_like_undo_to_ap(
         let mut res = host_url_apub.clone();
         res.path_segments_mut()
             .extend(&["comment_like_undos", &undo_id.to_string()]);
+        res.into()
+    });
+
+    Ok(undo)
+}
+
+pub fn local_poll_vote_to_ap(
+    poll_id: PollLocalID,
+    poll_ap_id: BaseURL,
+    user: UserLocalID,
+    option_id: PollOptionLocalID,
+    option_name: String,
+    host_url_apub: &BaseURL,
+) -> Result<activitystreams::activity::Create, crate::Error> {
+    let id = get_local_poll_vote_apub_id(poll_id, user, option_id, host_url_apub);
+    let note_id = {
+        let mut res = id.clone();
+        res.path_segments_mut().push("note");
+        res
+    };
+
+    let mut note = activitystreams::object::Note::new();
+    note.set_id(note_id.into())
+        .set_in_reply_to(poll_ap_id)
+        .set_name(option_name);
+
+    let mut create = activitystreams::activity::Create::new(
+        crate::apub_util::get_local_person_apub_id(user, host_url_apub),
+        note.into_any_base()?,
+    );
+    create
+        .set_context(activitystreams::context())
+        .set_id(id.into());
+
+    Ok(create)
+}
+
+pub fn local_poll_vote_undo_to_ap(
+    poll_id: PollLocalID,
+    user: UserLocalID,
+    option_id: PollOptionLocalID,
+    host_url_apub: &BaseURL,
+) -> Result<activitystreams::activity::Undo, crate::Error> {
+    let undo_id = uuid::Uuid::new_v4(); // activity is temporary
+
+    let mut undo = activitystreams::activity::Undo::new(
+        get_local_person_apub_id(user, host_url_apub),
+        get_local_poll_vote_apub_id(poll_id, user, option_id, host_url_apub),
+    );
+    undo.set_context(activitystreams::context()).set_id({
+        let mut res = host_url_apub.clone();
+        res.path_segments_mut()
+            .extend(&["tmp_objects", &undo_id.to_string()]);
         res.into()
     });
 

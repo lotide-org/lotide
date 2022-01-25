@@ -4,9 +4,11 @@ use super::{
 };
 use crate::lang;
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, JustUser, PostLocalID,
-    RespPollInfo, RespPollOption, RespPostInfo, UserLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, JustUser, PollLocalID,
+    PollOptionLocalID, PollVoteBody, PostLocalID, RespPollInfo, RespPollOption, RespPostInfo,
+    UserLocalID,
 };
+use crate::BaseURL;
 use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -726,6 +728,130 @@ async fn route_unstable_posts_flags_create(
     });
 
     crate::json_response(&crate::types::Empty {})
+}
+
+async fn route_unstable_posts_poll_your_vote_set(
+    params: (PostLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+
+    let mut db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: PollVoteBody = serde_json::from_slice(&body)?;
+
+    let row = db.query_opt("SELECT poll.multiple, poll.id, author.local, COALESCE(author.ap_inbox, author.ap_shared_inbox), post.ap_id FROM post INNER JOIN poll ON (poll.id = post.poll_id) LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE post.id = $1", &[&post_id]).await?.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "No such poll")))?;
+
+    let multiple: bool = row.get(0);
+    let poll_id = PollLocalID(row.get(1));
+
+    let tmp;
+    let options: Result<&[PollOptionLocalID], _> = if multiple {
+        match &body {
+            PollVoteBody::Multiple { options } => Ok(&options),
+            PollVoteBody::Single { .. } => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Cannot use `option` for multiple-choice poll",
+            ))),
+        }
+    } else {
+        match &body {
+            PollVoteBody::Single { option } => {
+                tmp = [*option];
+                Ok(&tmp[..])
+            }
+            PollVoteBody::Multiple { .. } => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Cannot use `options` for single-choice poll",
+            ))),
+        }
+    };
+    let options = options?;
+
+    let (removed, added) = {
+        let trans = db.transaction().await?;
+
+        let removed: Vec<PollOptionLocalID> = {
+            let rows = trans.query("DELETE FROM poll_vote WHERE poll_id=$1 AND (NOT option_id = ANY($2::BIGINT[])) AND person=$3 RETURNING option_id", &[&poll_id, &options, &user]).await?;
+
+            rows.into_iter()
+                .map(|row| PollOptionLocalID(row.get(0)))
+                .collect()
+        };
+
+        let added: Vec<(PollOptionLocalID, String)> = {
+            let added_rows = trans.query("INSERT INTO poll_vote (poll_id, person, option_id) SELECT $1, $3, * FROM UNNEST($2::BIGINT[]) RETURNING option_id, (SELECT name FROM poll_option WHERE id=option_id)", &[&poll_id, &options, &user]).await?;
+
+            added_rows
+                .into_iter()
+                .map(|row| (PollOptionLocalID(row.get(0)), row.get(1)))
+                .collect()
+        };
+
+        trans.commit().await?;
+
+        (removed, added)
+    };
+
+    if !removed.is_empty() || !added.is_empty() {
+        let author_local: bool = row.get(2);
+        if !author_local {
+            let inbox: Option<&str> = row.get(3);
+            let post_ap_id: Option<String> = row.get(4);
+            if let (Some(inbox), Some(post_ap_id)) = (inbox, post_ap_id) {
+                let inbox = inbox.parse();
+                let post_ap_id: Result<BaseURL, _> = post_ap_id.parse();
+                crate::spawn_task(async move {
+                    let inbox = inbox?;
+                    let post_ap_id = post_ap_id?;
+
+                    for option_id in removed {
+                        let activity = crate::apub_util::local_poll_vote_undo_to_ap(
+                            poll_id,
+                            user,
+                            option_id,
+                            &ctx.host_url_apub,
+                        )?;
+                        let body = serde_json::to_string(&activity)?;
+
+                        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                            inbox: Cow::Borrowed(&inbox),
+                            sign_as: Some(ActorLocalRef::Person(user)),
+                            object: (&body).into(),
+                        })
+                        .await?;
+                    }
+
+                    for (option_id, name) in added {
+                        let activity = crate::apub_util::local_poll_vote_to_ap(
+                            poll_id,
+                            post_ap_id.clone(),
+                            user,
+                            option_id,
+                            name,
+                            &ctx.host_url_apub,
+                        )?;
+                        let body = serde_json::to_string(&activity)?;
+
+                        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                            inbox: Cow::Borrowed(&inbox),
+                            sign_as: Some(ActorLocalRef::Person(user)),
+                            object: (&body).into(),
+                        })
+                        .await?;
+                    }
+
+                    Ok(())
+                })
+            }
+        }
+    }
+
+    Ok(crate::empty_response())
 }
 
 async fn route_unstable_posts_replies_list(
@@ -1600,6 +1726,16 @@ pub fn route_posts() -> crate::RouteNode<()> {
                     "flags",
                     crate::RouteNode::new()
                         .with_handler_async(hyper::Method::POST, route_unstable_posts_flags_create),
+                )
+                .with_child(
+                    "poll",
+                    crate::RouteNode::new().with_child(
+                        "your_vote",
+                        crate::RouteNode::new().with_handler_async(
+                            hyper::Method::PUT,
+                            route_unstable_posts_poll_your_vote_set,
+                        ),
+                    ),
                 )
                 .with_child(
                     "replies",
