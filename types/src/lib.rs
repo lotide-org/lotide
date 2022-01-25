@@ -289,6 +289,8 @@ pub struct RespPostInfo<'a> {
 pub struct RespPollInfo<'a> {
     pub multiple: bool,
     pub options: Vec<RespPollOption<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub your_vote: Option<Option<RespPollYourVote>>,
 }
 
 #[derive(Serialize)]
@@ -393,4 +395,9 @@ pub struct NotificationSubscriptionCreateQuery<'a> {
 pub enum PollVoteBody {
     Multiple { options: Vec<PollOptionLocalID> },
     Single { option: PollOptionLocalID },
+}
+
+#[derive(Serialize)]
+pub struct RespPollYourVote {
+    pub options: Vec<JustID<PollOptionLocalID>>,
 }

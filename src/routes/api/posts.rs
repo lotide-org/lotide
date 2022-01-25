@@ -4,9 +4,9 @@ use super::{
 };
 use crate::lang;
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, JustUser, PollLocalID,
-    PollOptionLocalID, PollVoteBody, PostLocalID, RespPollInfo, RespPollOption, RespPostInfo,
-    UserLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, JustID, JustUser, PollLocalID,
+    PollOptionLocalID, PollVoteBody, PostLocalID, RespPollInfo, RespPollOption, RespPollYourVote,
+    RespPostInfo, UserLocalID,
 };
 use crate::BaseURL;
 use serde_derive::Deserialize;
@@ -1121,7 +1121,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id) FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -1237,7 +1237,32 @@ async fn route_unstable_posts_get(
                         })
                         .collect();
 
-                    RespPollInfo { multiple, options }
+                    let your_vote = if let Some(user) = include_your_for {
+                        let poll_id = PollLocalID(row.get(25));
+                        Some({
+                            let rows = db.query("SELECT option_id FROM poll_vote WHERE poll_id=$1 AND person=$2", &[&poll_id, &user]).await?;
+                            if rows.is_empty() {
+                                None
+                            } else {
+                                Some(RespPollYourVote {
+                                    options: rows
+                                        .into_iter()
+                                        .map(|row| JustID {
+                                            id: PollOptionLocalID(row.get(0)),
+                                        })
+                                        .collect(),
+                                })
+                            }
+                        })
+                    } else {
+                        None
+                    };
+
+                    RespPollInfo {
+                        multiple,
+                        options,
+                        your_vote,
+                    }
                 })
             } else {
                 None
