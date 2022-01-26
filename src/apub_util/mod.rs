@@ -36,6 +36,12 @@ impl<T: Clone> Verified<T> {
     }
 }
 
+impl<T: Clone, U: Clone> From<Verified<activitystreams_ext::Ext1<T, U>>> for Verified<T> {
+    fn from(src: Verified<activitystreams_ext::Ext1<T, U>>) -> Self {
+        Verified(src.0.inner)
+    }
+}
+
 pub struct Contained<'a, T: activitystreams::markers::Base + Clone>(pub Cow<'a, Verified<T>>);
 impl<'a, T: activitystreams::markers::Base + Clone> std::ops::Deref for Contained<'a, T> {
     type Target = Verified<T>;
@@ -1241,6 +1247,8 @@ pub fn post_to_ap(
             // theoretically href and poll are mutually exclusive
 
             let mut post_ap = activitystreams::activity::Question::new();
+
+            post_ap.set_summary(post.title).set_name(post.title);
 
             let options: Vec<activitystreams::base::AnyBase> = poll
                 .options

@@ -5,6 +5,7 @@ use crate::types::{
 use activitystreams::prelude::*;
 use serde::Deserialize;
 use std::borrow::Cow;
+use std::convert::TryInto;
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -988,7 +989,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
-                Verified(obj),
+                Verified(obj).into(),
                 ctx,
             )
             .await?
@@ -998,7 +999,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
-                Verified(obj),
+                Verified(obj).into(),
                 ctx,
             )
             .await?
@@ -1008,7 +1009,17 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
-                Verified(obj),
+                Verified(obj).into(),
+                ctx,
+            )
+            .await?
+            .map(IngestResult::Post)),
+            KnownObject::Question(obj) => Ok(handle_received_page_for_community(
+                community_local_id,
+                community_is_local,
+                found_from.as_announce(),
+                poll_info,
+                Verified(obj.try_into()?),
                 ctx,
             )
             .await?
@@ -1458,7 +1469,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     community_is_local: bool,
     is_announce: Option<&url::Url>,
     poll_info: Option<PollIngestInfo>,
-    obj: Verified<super::ExtendedPostlike<activitystreams::object::Object<Kind>>>,
+    obj: Verified<activitystreams::object::Object<Kind>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<PostIngestResult>, crate::Error> {
     let title = obj
@@ -1575,8 +1586,8 @@ async fn handle_recieved_post(
                     .await?;
                 trans
                     .execute(
-                        "DELETE FROM poll_option WHERE poll_id=$1 AND NOT (name = ANY($1::TEXT[]))",
-                        &[&names],
+                        "DELETE FROM poll_option WHERE poll_id=$1 AND NOT (name = ANY($2::TEXT[]))",
+                        &[&poll_id, &names],
                     )
                     .await?;
 
