@@ -18,6 +18,8 @@ pub const ACTIVITY_TYPE: &str = "application/activity+json";
 pub const SIGALG_RSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
 pub const SIGALG_RSA_SHA512: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512";
 
+pub const INTERACTIVE_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
 pub struct Verified<T: Clone>(pub T);
@@ -491,12 +493,19 @@ pub async fn fetch_ap_object(
     Ok(Verified(value))
 }
 
+pub async fn fetch_and_ingest(
+    req_ap_id: &url::Url,
+    ctx: Arc<crate::BaseContext>,
+) -> Result<Option<ingest::IngestResult>, crate::Error> {
+    let obj = fetch_ap_object(req_ap_id, &ctx.http_client).await?;
+    ingest::ingest_object_boxed(obj, ingest::FoundFrom::Other, ctx).await
+}
+
 pub async fn fetch_actor(
     req_ap_id: &url::Url,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<ActorLocalInfo, crate::Error> {
-    let obj = fetch_ap_object(req_ap_id, &ctx.http_client).await?;
-    match ingest::ingest_object_boxed(obj, ingest::FoundFrom::Other, ctx).await? {
+    match fetch_and_ingest(req_ap_id, ctx).await? {
         Some(ingest::IngestResult::Actor(info)) => Ok(info),
         _ => Err(crate::Error::InternalStrStatic("Unrecognized actor type")),
     }

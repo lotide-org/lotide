@@ -1,5 +1,7 @@
 use super::{FollowLike, KnownObject, Verified};
-use crate::types::{CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID};
+use crate::types::{
+    CommentLocalID, CommunityLocalID, PollOptionLocalID, PostLocalID, ThingLocalRef, UserLocalID,
+};
 use activitystreams::prelude::*;
 use serde::Deserialize;
 use std::borrow::Cow;
@@ -27,6 +29,7 @@ impl FoundFrom {
 
 pub enum IngestResult {
     Actor(super::ActorLocalInfo),
+    Post(PostIngestResult),
     Other(ThingLocalRef),
 }
 
@@ -34,9 +37,15 @@ impl IngestResult {
     pub fn into_ref(self) -> ThingLocalRef {
         match self {
             IngestResult::Actor(info) => info.as_ref(),
+            IngestResult::Post(info) => ThingLocalRef::Post(info.id),
             IngestResult::Other(x) => x,
         }
     }
+}
+
+pub struct PostIngestResult {
+    pub id: PostLocalID,
+    pub poll: Option<crate::PollInfoOwned>,
 }
 
 pub async fn ingest_object(
@@ -870,7 +879,7 @@ pub async fn ingest_create(
     Ok(())
 }
 
-struct PollIngestInfo {
+pub struct PollIngestInfo {
     multiple: bool,
     options: Vec<(String, Option<i32>)>,
 }
@@ -983,7 +992,7 @@ async fn ingest_postlike(
                 ctx,
             )
             .await?
-            .map(|id| IngestResult::Other(ThingLocalRef::Post(id)))),
+            .map(IngestResult::Post)),
             KnownObject::Image(obj) => Ok(handle_received_page_for_community(
                 community_local_id,
                 community_is_local,
@@ -993,7 +1002,7 @@ async fn ingest_postlike(
                 ctx,
             )
             .await?
-            .map(|id| IngestResult::Other(ThingLocalRef::Post(id)))),
+            .map(IngestResult::Post)),
             KnownObject::Article(obj) => Ok(handle_received_page_for_community(
                 community_local_id,
                 community_is_local,
@@ -1003,7 +1012,7 @@ async fn ingest_postlike(
                 ctx,
             )
             .await?
-            .map(|id| IngestResult::Other(ThingLocalRef::Post(id)))),
+            .map(IngestResult::Post)),
             KnownObject::Note(obj) => {
                 let content = obj.content();
                 let content = content.as_ref().and_then(|x| x.as_single_xsd_string());
@@ -1088,7 +1097,7 @@ async fn ingest_postlike(
                             .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
                             .map(|href| href.as_str());
 
-                        Ok(Some(IngestResult::Other(ThingLocalRef::Post(
+                        Ok(Some(IngestResult::Post(
                             handle_recieved_post(
                                 object_id.clone(),
                                 title,
@@ -1104,7 +1113,7 @@ async fn ingest_postlike(
                                 ctx,
                             )
                             .await?,
-                        ))))
+                        )))
                     }
                 } else {
                     Ok(None)
@@ -1451,7 +1460,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     poll_info: Option<PollIngestInfo>,
     obj: Verified<super::ExtendedPostlike<activitystreams::object::Object<Kind>>>,
     ctx: Arc<crate::RouteContext>,
-) -> Result<Option<PostLocalID>, crate::Error> {
+) -> Result<Option<PostIngestResult>, crate::Error> {
     let title = obj
         .name()
         .iter()
@@ -1519,7 +1528,7 @@ async fn handle_recieved_post(
     is_announce: Option<&url::Url>,
     poll_info: Option<PollIngestInfo>,
     ctx: Arc<crate::RouteContext>,
-) -> Result<PostLocalID, crate::Error> {
+) -> Result<PostIngestResult, crate::Error> {
     let mut db = ctx.db_pool.get().await?;
     let author = match author {
         Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
@@ -1535,17 +1544,17 @@ async fn handle_recieved_post(
 
     let approved = is_announce.is_some() || community_is_local;
 
-    let post_local_id = {
+    let (post_local_id, poll_output) = {
         let trans = db.transaction().await?;
         let row = trans.query_one(
-            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10 RETURNING id, poll_id",
+            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10, updated_local=current_timestamp RETURNING id, poll_id",
             &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str())],
         ).await?;
         let post_local_id = PostLocalID(row.get(0));
         let existing_poll_id: Option<i64> = row.get(1);
 
-        if let Some(poll_id) = existing_poll_id {
-            if let Some(poll_info) = poll_info {
+        let poll_output = if let Some(poll_id) = existing_poll_id {
+            if let Some(poll_info) = &poll_info {
                 let names: Vec<&str> = poll_info
                     .options
                     .iter()
@@ -1571,7 +1580,15 @@ async fn handle_recieved_post(
                     )
                     .await?;
 
-                trans.execute("INSERT INTO poll_option (poll_id, name, position, remote_vote_count) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[], $4::INTEGER[]) ON CONFLICT (poll_id, name) DO UPDATE SET position = excluded.position, remote_vote_count = excluded.remote_vote_count", &[&poll_id, &names, &indices, &counts]).await?;
+                let options_rows = trans.query("INSERT INTO poll_option (poll_id, name, position, remote_vote_count) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[], $4::INTEGER[]) ON CONFLICT (poll_id, name) DO UPDATE SET position = excluded.position, remote_vote_count = excluded.remote_vote_count RETURNING id, position", &[&poll_id, &names, &indices, &counts]).await?;
+
+                let mut options: Vec<_> = options_rows
+                    .into_iter()
+                    .map(|row| (PollOptionLocalID(row.get(0)), row.get::<_, i32>(1)))
+                    .collect();
+                options.sort_unstable_by_key(|x| x.1);
+
+                Some(options)
             } else {
                 trans
                     .execute(
@@ -1582,9 +1599,11 @@ async fn handle_recieved_post(
                 trans
                     .execute("DELETE FROM poll WHERE id=$1", &[&poll_id])
                     .await?;
+
+                None
             }
         } else {
-            if let Some(poll_info) = poll_info {
+            if let Some(poll_info) = &poll_info {
                 let names: Vec<&str> = poll_info
                     .options
                     .iter()
@@ -1605,24 +1624,54 @@ async fn handle_recieved_post(
                     .await?;
                 let poll_id: i64 = row.get(0);
 
-                trans.execute("INSERT INTO poll_option (poll_id, name, position, remote_vote_count) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[], $4::INTEGER[])", &[&poll_id, &names, &indices, &counts]).await?;
+                let options_rows = trans.query("INSERT INTO poll_option (poll_id, name, position, remote_vote_count) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[], $4::INTEGER[]) RETURNING id, position", &[&poll_id, &names, &indices, &counts]).await?;
                 trans
                     .execute(
                         "UPDATE post SET poll_id=$1 WHERE id=$2",
                         &[&poll_id, &post_local_id],
                     )
                     .await?;
+
+                let mut options: Vec<_> = options_rows
+                    .into_iter()
+                    .map(|row| (PollOptionLocalID(row.get(0)), row.get::<_, i32>(1)))
+                    .collect();
+                options.sort_unstable_by_key(|x| x.1);
+
+                Some(options)
+            } else {
+                None
             }
-        }
+        };
 
         trans.commit().await?;
 
-        post_local_id
+        (post_local_id, poll_output)
     };
 
     if community_is_local {
         crate::on_local_community_add_post(community_local_id, post_local_id, object_id, ctx);
     }
 
-    Ok(post_local_id)
+    let poll = poll_output.map(|options| {
+        let info = poll_info.unwrap();
+
+        crate::PollInfoOwned {
+            multiple: info.multiple,
+            options: options
+                .into_iter()
+                .zip(info.options)
+                .map(|((id, _), (name, votes))| crate::PollOptionOwned {
+                    id,
+                    name,
+                    votes: votes.unwrap_or(0) as u32,
+                })
+                .collect(),
+        }
+    });
+
+    Ok(PostIngestResult {
+        id: post_local_id,
+        poll,
+    })
 }

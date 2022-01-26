@@ -1028,7 +1028,7 @@ async fn route_unstable_posts_create(
                     let idx = idx as usize;
 
                     options[idx] = Some(crate::PollOptionOwned {
-                        id: row.get(0),
+                        id: PollOptionLocalID(row.get(0)),
                         name: names[idx].take().unwrap(),
                         votes: 0,
                     });
@@ -1049,7 +1049,7 @@ async fn route_unstable_posts_create(
         let poll_id = poll_data.as_ref().map(|(_, poll_id)| *poll_id);
 
         let res_row = trans.query_one(
-            "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved, poll_id) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8, $9) RETURNING id, created",
+            "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved, poll_id, updated_local) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8, $9, current_timestamp) RETURNING id, created",
             &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved, &poll_id],
         ).await?;
 
@@ -1121,7 +1121,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.id, (current_timestamp - post.updated_local) > '1 MINUTE' FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -1224,18 +1224,60 @@ async fn route_unstable_posts_get(
                 deleted: row.get(22),
             };
 
+            let fetched_info;
             let poll = if let Some(multiple) = row.get(23) {
+                fetched_info = if row.get(26) && local {
+                    if let Some(ap_id) = ap_id {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+
+                        let ctx = ctx.clone();
+                        let ap_id = ap_id.parse();
+                        crate::spawn_task(async move {
+                            let ap_id = ap_id?;
+                            let result = crate::apub_util::fetch_and_ingest(&ap_id, ctx).await?;
+                            let _ = tx.send(result);
+
+                            Ok(())
+                        });
+
+                        match tokio::time::timeout(crate::apub_util::INTERACTIVE_FETCH_TIMEOUT, rx)
+                            .await
+                        {
+                            Err(_) => None,
+                            Ok(Ok(Some(crate::apub_util::ingest::IngestResult::Post(info)))) => {
+                                info.poll
+                            }
+                            Ok(Ok(_)) => None,
+                            Ok(Err(_)) => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 Some({
-                    let options: Vec<_> = row
-                        .get::<_, Vec<postgres_types::Json<(i64, &str, i64)>>>(24)
-                        .into_iter()
-                        .map(|x| x.0)
-                        .map(|(id, name, votes): (i64, &str, i64)| RespPollOption {
-                            id,
-                            name,
-                            votes: votes as u32,
-                        })
-                        .collect();
+                    let options: Vec<_> = if let Some(info) = &fetched_info {
+                        info.options
+                            .iter()
+                            .map(|info| RespPollOption {
+                                id: info.id,
+                                name: &info.name,
+                                votes: info.votes,
+                            })
+                            .collect()
+                    } else {
+                        row.get::<_, Vec<postgres_types::Json<(i64, &str, i64)>>>(24)
+                            .into_iter()
+                            .map(|x| x.0)
+                            .map(|(id, name, votes): (i64, &str, i64)| RespPollOption {
+                                id: PollOptionLocalID(id),
+                                name,
+                                votes: votes as u32,
+                            })
+                            .collect()
+                    };
 
                     let your_vote = if let Some(user) = include_your_for {
                         let poll_id = PollLocalID(row.get(25));

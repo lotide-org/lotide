@@ -16,7 +16,9 @@ mod tasks;
 mod worker;
 
 use self::config::Config;
-use self::types::{CommentLocalID, CommunityLocalID, NotificationID, PostLocalID, UserLocalID};
+use self::types::{
+    CommentLocalID, CommunityLocalID, NotificationID, PollOptionLocalID, PostLocalID, UserLocalID,
+};
 
 pub use self::lang::Translator;
 
@@ -394,14 +396,14 @@ impl<'a> From<&'a PollInfoOwned> for PollInfo<'a> {
 
 #[derive(Debug, Clone)]
 pub struct PollOption<'a> {
-    id: i64,
+    id: PollOptionLocalID,
     name: &'a str,
     votes: u32,
 }
 
 #[derive(Clone)]
 pub struct PollOptionOwned {
-    id: i64,
+    id: PollOptionLocalID,
     name: String,
     votes: u32,
 }

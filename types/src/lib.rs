@@ -295,7 +295,7 @@ pub struct RespPollInfo<'a> {
 
 #[derive(Serialize)]
 pub struct RespPollOption<'a> {
-    pub id: i64,
+    pub id: PollOptionLocalID,
     pub name: &'a str,
     pub votes: u32,
 }

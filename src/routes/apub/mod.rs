@@ -1,4 +1,4 @@
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
+use crate::{CommentLocalID, CommunityLocalID, PollOptionLocalID, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
 use std::borrow::Cow;
 use std::ops::Deref;
@@ -346,7 +346,7 @@ async fn handler_users_outbox_page_get(
                             .into_iter()
                             .map(|x| x.0)
                             .map(|(id, name, votes): (i64, &str, i64)| crate::PollOption {
-                                id,
+                                id: PollOptionLocalID(id),
                                 name,
                                 votes: votes as u32,
                             })

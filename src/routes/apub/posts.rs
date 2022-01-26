@@ -1,4 +1,4 @@
-use crate::{CommunityLocalID, PostLocalID, UserLocalID};
+use crate::{CommunityLocalID, PollOptionLocalID, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -123,7 +123,7 @@ async fn handler_posts_get(
                         .map(|x| x.0)
                         .map(|(id, name, votes): (i64, &str, i64)| {
                             crate::PollOption {
-                                id,
+                                id: PollOptionLocalID(id),
                                 name,
                                 votes: votes as u32,
                             }
@@ -247,7 +247,7 @@ async fn handler_posts_create_get(
                         .map(|x| x.0)
                         .map(|(id, name, votes): (i64, &str, i64)| {
                             crate::PollOption {
-                                id,
+                                id: PollOptionLocalID(id),
                                 name,
                                 votes: votes as u32,
                             }
