@@ -497,30 +497,36 @@ pub async fn ingest_object(
                                 actor_id,
                             )?;
 
-                            let row = db.query_opt("SELECT id, poll_id, (SELECT multiple FROM poll WHERE poll.id=poll_id) FROM poll_option WHERE poll_id=(SELECT poll_id FROM post WHERE id=$1 AND local) AND name=$2", &[&post_id, &name]).await?;
+                            let row = db.query_opt("SELECT poll_option.id, poll.id, poll.multiple, COALESCE(poll.is_closed, poll.closed_at <= current_timestamp, FALSE) FROM poll_option INNER JOIN poll ON (poll.id = poll_option.poll_id) WHERE poll_id=(SELECT poll_id FROM post WHERE id=$1 AND local) AND name=$2", &[&post_id, &name]).await?;
                             if let Some(row) = row {
                                 let option_id: i64 = row.get(0);
                                 let poll_id: i64 = row.get(1);
                                 let multiple: bool = row.get(2);
+                                let closed: bool = row.get(3);
 
-                                let actor_local_id =
-                                    super::get_or_fetch_user_local_id(&actor_id, &db, &ctx).await?;
-
-                                {
-                                    let trans = db.transaction().await?;
-
-                                    if !multiple {
-                                        trans
-                                            .execute(
-                                                "DELETE FROM poll_vote WHERE person=$1",
-                                                &[&actor_local_id],
-                                            )
+                                if closed {
+                                    // ignore
+                                } else {
+                                    let actor_local_id =
+                                        super::get_or_fetch_user_local_id(&actor_id, &db, &ctx)
                                             .await?;
+
+                                    {
+                                        let trans = db.transaction().await?;
+
+                                        if !multiple {
+                                            trans
+                                                .execute(
+                                                    "DELETE FROM poll_vote WHERE person=$1",
+                                                    &[&actor_local_id],
+                                                )
+                                                .await?;
+                                        }
+
+                                        trans.execute("INSERT INTO poll_vote (poll_id, option_id, person) VALUES ($1, $2, $3)", &[&poll_id, &option_id, &actor_local_id]).await?;
+
+                                        trans.commit().await?;
                                     }
-
-                                    trans.execute("INSERT INTO poll_vote (poll_id, option_id, person) VALUES ($1, $2, $3)", &[&poll_id, &option_id, &actor_local_id]).await?;
-
-                                    trans.commit().await?;
                                 }
 
                                 return Ok(None);
@@ -882,6 +888,8 @@ pub async fn ingest_create(
 
 pub struct PollIngestInfo {
     multiple: bool,
+    is_closed: Option<bool>,
+    closed_at: Option<chrono::DateTime<chrono::FixedOffset>>,
     options: Vec<(String, Option<i32>)>,
 }
 
@@ -934,7 +942,25 @@ async fn ingest_postlike(
                     })
                     .collect();
 
-                PollIngestInfo { multiple, options }
+                let (is_closed, closed_at) = match obj.closed() {
+                    Some(value) => match value {
+                        activitystreams::primitives::ClosedValue::ObjectOrLink(_) => (None, None),
+                        activitystreams::primitives::ClosedValue::DateTime(timestamp) => {
+                            (None, Some(timestamp.as_datetime().clone()))
+                        }
+                        activitystreams::primitives::ClosedValue::Boolean(value) => {
+                            (Some(*value), None)
+                        }
+                    },
+                    None => (None, None),
+                };
+
+                PollIngestInfo {
+                    multiple,
+                    options,
+                    is_closed,
+                    closed_at,
+                }
             }),
         ),
         _ => return Ok(None), // shouldn't happen?
@@ -1580,8 +1606,13 @@ async fn handle_recieved_post(
 
                 trans
                     .execute(
-                        "UPDATE poll SET multiple=$1 WHERE id=$2",
-                        &[&poll_info.multiple, &poll_id],
+                        "UPDATE poll SET multiple=$1, is_closed=$3, closed_at=$4 WHERE id=$2",
+                        &[
+                            &poll_info.multiple,
+                            &poll_id,
+                            &poll_info.is_closed,
+                            &poll_info.closed_at,
+                        ],
                     )
                     .await?;
                 trans
@@ -1629,8 +1660,8 @@ async fn handle_recieved_post(
 
                 let row = trans
                     .query_one(
-                        "INSERT INTO poll (multiple) VALUES ($1) RETURNING id",
-                        &[&poll_info.multiple],
+                        "INSERT INTO poll (multiple, is_closed, closed_at) VALUES ($1, $2, $3) RETURNING id",
+                        &[&poll_info.multiple, &poll_info.is_closed, &poll_info.closed_at],
                     )
                     .await?;
                 let poll_id: i64 = row.get(0);

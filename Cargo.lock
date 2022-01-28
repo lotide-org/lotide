@@ -5,8 +5,7 @@ version = 3
 [[package]]
 name = "activitystreams"
 version = "0.7.0-alpha.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a5da1d857ec9ca65ef8d0469cdd64e7b93b59d6cad26f1444bf84b62f3eadd4"
+source = "git+https://git.sr.ht/~vpzom/activitystreams?rev=01153061#01153061c7ca274ea250c6319715512715d30feb"
 dependencies = [
  "chrono",
  "mime",

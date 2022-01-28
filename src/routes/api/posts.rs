@@ -737,6 +737,7 @@ async fn route_unstable_posts_poll_your_vote_set(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (post_id,) = params;
 
+    let lang = crate::get_lang_for_req(&req);
     let mut db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
@@ -744,10 +745,18 @@ async fn route_unstable_posts_poll_your_vote_set(
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let body: PollVoteBody = serde_json::from_slice(&body)?;
 
-    let row = db.query_opt("SELECT poll.multiple, poll.id, author.local, COALESCE(author.ap_inbox, author.ap_shared_inbox), post.ap_id FROM post INNER JOIN poll ON (poll.id = post.poll_id) LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE post.id = $1", &[&post_id]).await?.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "No such poll")))?;
+    let row = db.query_opt("SELECT poll.multiple, poll.id, author.local, COALESCE(author.ap_inbox, author.ap_shared_inbox), post.ap_id, COALESCE(poll.is_closed, poll.closed_at <= current_timestamp, FALSE) FROM post INNER JOIN poll ON (poll.id = post.poll_id) LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE post.id = $1", &[&post_id]).await?.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "No such poll")))?;
 
     let multiple: bool = row.get(0);
     let poll_id = PollLocalID(row.get(1));
+    let closed: bool = row.get(5);
+
+    if closed {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::FORBIDDEN,
+            lang.tr(&lang::poll_is_closed()).into_owned(),
+        )));
+    }
 
     let tmp;
     let options: Result<&[PollOptionLocalID], _> = if multiple {
