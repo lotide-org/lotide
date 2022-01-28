@@ -1235,7 +1235,7 @@ async fn route_unstable_posts_get(
 
             let fetched_info;
             let poll = if let Some(multiple) = row.get(23) {
-                fetched_info = if row.get(26) && local {
+                fetched_info = if row.get(26) && !local {
                     if let Some(ap_id) = ap_id {
                         let (tx, rx) = tokio::sync::oneshot::channel();
 

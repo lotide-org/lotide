@@ -1743,15 +1743,15 @@ pub fn local_poll_vote_to_ap(
         res
     };
 
+    let actor = crate::apub_util::get_local_person_apub_id(user, host_url_apub);
+
     let mut note = activitystreams::object::Note::new();
     note.set_id(note_id.into())
         .set_in_reply_to(poll_ap_id)
-        .set_name(option_name);
+        .set_name(option_name)
+        .set_attributed_to(actor.clone());
 
-    let mut create = activitystreams::activity::Create::new(
-        crate::apub_util::get_local_person_apub_id(user, host_url_apub),
-        note.into_any_base()?,
-    );
+    let mut create = activitystreams::activity::Create::new(actor, note.into_any_base()?);
     create
         .set_context(activitystreams::context())
         .set_id(id.into());
