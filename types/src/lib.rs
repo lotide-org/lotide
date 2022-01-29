@@ -291,6 +291,8 @@ pub struct RespPollInfo<'a> {
     pub options: Vec<RespPollOption<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub your_vote: Option<Option<RespPollYourVote>>,
+    pub closed_at: Option<String>,
+    pub is_closed: bool,
 }
 
 #[derive(Serialize)]

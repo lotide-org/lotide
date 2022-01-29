@@ -378,11 +378,14 @@ impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
 pub struct PollInfo<'a> {
     multiple: bool,
     options: Cow<'a, [PollOption<'a>]>,
+    closed_at: Option<&'a chrono::DateTime<chrono::FixedOffset>>,
 }
 
 pub struct PollInfoOwned {
     multiple: bool,
     options: Vec<PollOptionOwned>,
+    is_closed: bool,
+    closed_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
 impl<'a> From<&'a PollInfoOwned> for PollInfo<'a> {
@@ -390,6 +393,7 @@ impl<'a> From<&'a PollInfoOwned> for PollInfo<'a> {
         PollInfo {
             multiple: src.multiple,
             options: src.options.iter().map(Into::into).collect(),
+            closed_at: src.closed_at.as_ref(),
         }
     }
 }

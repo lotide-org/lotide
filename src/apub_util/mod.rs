@@ -1271,6 +1271,10 @@ pub fn post_to_ap(
                 post_ap.set_many_one_ofs(options);
             }
 
+            if let Some(closed_at) = poll.closed_at {
+                post_ap.set_closed(closed_at.clone());
+            }
+
             let mut post_ap = ExtendedPostlike::new(
                 activitystreams::object::ApObject::new(post_ap),
                 Default::default(),

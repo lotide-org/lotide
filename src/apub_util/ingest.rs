@@ -1604,9 +1604,9 @@ async fn handle_recieved_post(
                     .collect();
                 let indices: Vec<i32> = (0..(poll_info.options.len() as i32)).collect();
 
-                trans
-                    .execute(
-                        "UPDATE poll SET multiple=$1, is_closed=$3, closed_at=$4 WHERE id=$2",
+                let is_closed: bool = trans
+                    .query_one(
+                        "UPDATE poll SET multiple=$1, is_closed=$3, closed_at=$4 WHERE id=$2 RETURNING COALESCE(is_closed, closed_at < current_timestamp, FALSE)",
                         &[
                             &poll_info.multiple,
                             &poll_id,
@@ -1614,7 +1614,8 @@ async fn handle_recieved_post(
                             &poll_info.closed_at,
                         ],
                     )
-                    .await?;
+                    .await?
+                    .get(0);
                 trans
                     .execute(
                         "DELETE FROM poll_option WHERE poll_id=$1 AND NOT (name = ANY($2::TEXT[]))",
@@ -1630,7 +1631,7 @@ async fn handle_recieved_post(
                     .collect();
                 options.sort_unstable_by_key(|x| x.1);
 
-                Some(options)
+                Some((options, is_closed))
             } else {
                 trans
                     .execute(
@@ -1660,11 +1661,12 @@ async fn handle_recieved_post(
 
                 let row = trans
                     .query_one(
-                        "INSERT INTO poll (multiple, is_closed, closed_at) VALUES ($1, $2, $3) RETURNING id",
+                        "INSERT INTO poll (multiple, is_closed, closed_at) VALUES ($1, $2, $3) RETURNING id, COALESCE(is_closed, closed_at < current_timestamp, FALSE)",
                         &[&poll_info.multiple, &poll_info.is_closed, &poll_info.closed_at],
                     )
                     .await?;
                 let poll_id: i64 = row.get(0);
+                let is_closed: bool = row.get(1);
 
                 let options_rows = trans.query("INSERT INTO poll_option (poll_id, name, position, remote_vote_count) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[], $4::INTEGER[]) RETURNING id, position", &[&poll_id, &names, &indices, &counts]).await?;
                 trans
@@ -1680,7 +1682,7 @@ async fn handle_recieved_post(
                     .collect();
                 options.sort_unstable_by_key(|x| x.1);
 
-                Some(options)
+                Some((options, is_closed))
             } else {
                 None
             }
@@ -1695,7 +1697,7 @@ async fn handle_recieved_post(
         crate::on_local_community_add_post(community_local_id, post_local_id, object_id, ctx);
     }
 
-    let poll = poll_output.map(|options| {
+    let poll = poll_output.map(|(options, is_closed)| {
         let info = poll_info.unwrap();
 
         crate::PollInfoOwned {
@@ -1709,6 +1711,8 @@ async fn handle_recieved_post(
                     votes: votes.unwrap_or(0) as u32,
                 })
                 .collect(),
+            is_closed,
+            closed_at: info.closed_at,
         }
     });
 

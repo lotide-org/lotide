@@ -924,19 +924,20 @@ async fn route_unstable_posts_create(
     let body = hyper::body::to_bytes(req.into_body()).await?;
 
     #[derive(Deserialize)]
-    struct PollCreateInfo {
+    struct PollCreateInfo<'a> {
         multiple: bool,
         options: Vec<String>,
+        closed_in: Cow<'a, str>,
     }
 
     #[derive(Deserialize)]
-    struct PostsCreateBody {
+    struct PostsCreateBody<'a> {
         community: CommunityLocalID,
         href: Option<String>,
         content_markdown: Option<String>,
         content_text: Option<String>,
         title: String,
-        poll: Option<PollCreateInfo>,
+        poll: Option<PollCreateInfo<'a>>,
     }
 
     let body: PostsCreateBody = serde_json::from_slice(&body)?;
@@ -1014,14 +1015,24 @@ async fn route_unstable_posts_create(
         let trans = db.transaction().await?;
 
         let poll_data = if let Some(poll) = body.poll {
+            let closed_in = date_duration::DateDuration::parse_iso8601(&poll.closed_in)
+                .map_err(|_| {
+                    crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        "Invalid duration for closed_in",
+                    ))
+                })?
+                .to_iso8601_long();
+
             Some({
                 let row = trans
                     .query_one(
-                        "INSERT INTO poll (multiple) VALUES ($1) RETURNING id",
-                        &[&poll.multiple],
+                        "INSERT INTO poll (multiple, closed_at) VALUES ($1, current_timestamp + $2::TEXT::INTERVAL) RETURNING id, closed_at",
+                        &[&poll.multiple, &closed_in],
                     )
                     .await?;
                 let poll_id: i64 = row.get(0);
+                let closed_at: chrono::DateTime<chrono::FixedOffset> = row.get(1);
 
                 let indices: Vec<i32> = (0..(poll.options.len() as i32)).collect();
                 let mut names: Vec<Option<String>> = poll.options.into_iter().map(Some).collect();
@@ -1047,6 +1058,8 @@ async fn route_unstable_posts_create(
                     crate::PollInfoOwned {
                         multiple: poll.multiple,
                         options: options.into_iter().map(Option::unwrap).collect(),
+                        is_closed: false,
+                        closed_at: Some(closed_at),
                     },
                     poll_id,
                 )
@@ -1130,7 +1143,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.id, (current_timestamp - post.updated_local) > '1 MINUTE' FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.id, (NOT post.local AND (current_timestamp - post.updated_local) > '1 MINUTE' AND COALESCE(post.updated_local < poll.closed_at, TRUE)), COALESCE(poll.is_closed, poll.closed_at < current_timestamp, FALSE), poll.closed_at FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -1235,7 +1248,7 @@ async fn route_unstable_posts_get(
 
             let fetched_info;
             let poll = if let Some(multiple) = row.get(23) {
-                fetched_info = if row.get(26) && !local {
+                fetched_info = if row.get(26) {
                     if let Some(ap_id) = ap_id {
                         let (tx, rx) = tokio::sync::oneshot::channel();
 
@@ -1267,25 +1280,37 @@ async fn route_unstable_posts_get(
                 };
 
                 Some({
-                    let options: Vec<_> = if let Some(info) = &fetched_info {
-                        info.options
-                            .iter()
-                            .map(|info| RespPollOption {
-                                id: info.id,
-                                name: &info.name,
-                                votes: info.votes,
-                            })
-                            .collect()
+                    let (options, is_closed, closed_at): (
+                        Vec<_>,
+                        bool,
+                        Option<chrono::DateTime<chrono::FixedOffset>>,
+                    ) = if let Some(info) = &fetched_info {
+                        (
+                            info.options
+                                .iter()
+                                .map(|info| RespPollOption {
+                                    id: info.id,
+                                    name: &info.name,
+                                    votes: info.votes,
+                                })
+                                .collect(),
+                            info.is_closed,
+                            info.closed_at,
+                        )
                     } else {
-                        row.get::<_, Vec<postgres_types::Json<(i64, &str, i64)>>>(24)
-                            .into_iter()
-                            .map(|x| x.0)
-                            .map(|(id, name, votes): (i64, &str, i64)| RespPollOption {
-                                id: PollOptionLocalID(id),
-                                name,
-                                votes: votes as u32,
-                            })
-                            .collect()
+                        (
+                            row.get::<_, Vec<postgres_types::Json<(i64, &str, i64)>>>(24)
+                                .into_iter()
+                                .map(|x| x.0)
+                                .map(|(id, name, votes): (i64, &str, i64)| RespPollOption {
+                                    id: PollOptionLocalID(id),
+                                    name,
+                                    votes: votes as u32,
+                                })
+                                .collect(),
+                            row.get(27),
+                            row.get(28),
+                        )
                     };
 
                     let your_vote = if let Some(user) = include_your_for {
@@ -1313,6 +1338,8 @@ async fn route_unstable_posts_get(
                         multiple,
                         options,
                         your_vote,
+                        is_closed,
+                        closed_at: closed_at.map(|x| x.to_rfc3339()),
                     }
                 })
             } else {
