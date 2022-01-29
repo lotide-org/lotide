@@ -342,7 +342,7 @@ async fn route_unstable_posts_list(
         false
     };
 
-    sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.deleted=FALSE");
+    sql.push_str( " FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.deleted=FALSE AND post.approved");
     if query.use_aggregate_filters {
         sql.push_str(" AND community.hide_posts_from_aggregates=FALSE");
     }
@@ -352,7 +352,7 @@ async fn route_unstable_posts_list(
     if let Some(value) = query.in_any_local_community {
         write!(
             sql,
-            " AND {}(community.local AND post.approved)",
+            " AND {}(community.local)",
             if value { "" } else { "NOT " }
         )
         .unwrap();
@@ -378,7 +378,7 @@ async fn route_unstable_posts_list(
     }
     if let Some(value) = &query.community {
         values.push(value);
-        write!(sql, " AND community.id=${} AND post.approved", values.len(),).unwrap();
+        write!(sql, " AND community.id=${}", values.len(),).unwrap();
     }
     if let Some(value) = &created_within {
         values.push(value);
