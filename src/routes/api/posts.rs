@@ -4,9 +4,11 @@ use super::{
 };
 use crate::lang;
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, JustUser, PostLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, JustID, JustUser, PollLocalID,
+    PollOptionLocalID, PollVoteBody, PostLocalID, RespPollInfo, RespPollOption, RespPollYourVote,
     RespPostInfo, UserLocalID,
 };
+use crate::BaseURL;
 use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -728,6 +730,139 @@ async fn route_unstable_posts_flags_create(
     crate::json_response(&crate::types::Empty {})
 }
 
+async fn route_unstable_posts_poll_your_vote_set(
+    params: (PostLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (post_id,) = params;
+
+    let lang = crate::get_lang_for_req(&req);
+    let mut db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+    let body: PollVoteBody = serde_json::from_slice(&body)?;
+
+    let row = db.query_opt("SELECT poll.multiple, poll.id, author.local, COALESCE(author.ap_inbox, author.ap_shared_inbox), post.ap_id, COALESCE(poll.is_closed, poll.closed_at <= current_timestamp, FALSE) FROM post INNER JOIN poll ON (poll.id = post.poll_id) LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE post.id = $1", &[&post_id]).await?.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "No such poll")))?;
+
+    let multiple: bool = row.get(0);
+    let poll_id = PollLocalID(row.get(1));
+    let closed: bool = row.get(5);
+
+    if closed {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::FORBIDDEN,
+            lang.tr(&lang::poll_is_closed()).into_owned(),
+        )));
+    }
+
+    let tmp;
+    let options: Result<&[PollOptionLocalID], _> = if multiple {
+        match &body {
+            PollVoteBody::Multiple { options } => Ok(&options),
+            PollVoteBody::Single { .. } => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Cannot use `option` for multiple-choice poll",
+            ))),
+        }
+    } else {
+        match &body {
+            PollVoteBody::Single { option } => {
+                tmp = [*option];
+                Ok(&tmp[..])
+            }
+            PollVoteBody::Multiple { .. } => Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Cannot use `options` for single-choice poll",
+            ))),
+        }
+    };
+    let options = options?;
+
+    let (removed, added) = {
+        let trans = db.transaction().await?;
+
+        let removed: Vec<PollOptionLocalID> = {
+            let rows = trans.query("DELETE FROM poll_vote WHERE poll_id=$1 AND (NOT option_id = ANY($2::BIGINT[])) AND person=$3 RETURNING option_id", &[&poll_id, &options, &user]).await?;
+
+            rows.into_iter()
+                .map(|row| PollOptionLocalID(row.get(0)))
+                .collect()
+        };
+
+        let added: Vec<(PollOptionLocalID, String)> = {
+            let added_rows = trans.query("INSERT INTO poll_vote (poll_id, person, option_id) SELECT $1, $3, * FROM UNNEST($2::BIGINT[]) RETURNING option_id, (SELECT name FROM poll_option WHERE id=option_id)", &[&poll_id, &options, &user]).await?;
+
+            added_rows
+                .into_iter()
+                .map(|row| (PollOptionLocalID(row.get(0)), row.get(1)))
+                .collect()
+        };
+
+        trans.commit().await?;
+
+        (removed, added)
+    };
+
+    if !removed.is_empty() || !added.is_empty() {
+        let author_local: bool = row.get(2);
+        if !author_local {
+            let inbox: Option<&str> = row.get(3);
+            let post_ap_id: Option<String> = row.get(4);
+            if let (Some(inbox), Some(post_ap_id)) = (inbox, post_ap_id) {
+                let inbox = inbox.parse();
+                let post_ap_id: Result<BaseURL, _> = post_ap_id.parse();
+                crate::spawn_task(async move {
+                    let inbox = inbox?;
+                    let post_ap_id = post_ap_id?;
+
+                    for option_id in removed {
+                        let activity = crate::apub_util::local_poll_vote_undo_to_ap(
+                            poll_id,
+                            user,
+                            option_id,
+                            &ctx.host_url_apub,
+                        )?;
+                        let body = serde_json::to_string(&activity)?;
+
+                        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                            inbox: Cow::Borrowed(&inbox),
+                            sign_as: Some(ActorLocalRef::Person(user)),
+                            object: (&body).into(),
+                        })
+                        .await?;
+                    }
+
+                    for (option_id, name) in added {
+                        let activity = crate::apub_util::local_poll_vote_to_ap(
+                            poll_id,
+                            post_ap_id.clone(),
+                            user,
+                            option_id,
+                            name,
+                            &ctx.host_url_apub,
+                        )?;
+                        let body = serde_json::to_string(&activity)?;
+
+                        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
+                            inbox: Cow::Borrowed(&inbox),
+                            sign_as: Some(ActorLocalRef::Person(user)),
+                            object: (&body).into(),
+                        })
+                        .await?;
+                    }
+
+                    Ok(())
+                })
+            }
+        }
+    }
+
+    Ok(crate::empty_response())
+}
+
 async fn route_unstable_posts_replies_list(
     params: (PostLocalID,),
     ctx: Arc<crate::RouteContext>,
@@ -782,19 +917,27 @@ async fn route_unstable_posts_create(
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let lang = crate::get_lang_for_req(&req);
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
 
     #[derive(Deserialize)]
-    struct PostsCreateBody {
+    struct PollCreateInfo<'a> {
+        multiple: bool,
+        options: Vec<String>,
+        closed_in: Cow<'a, str>,
+    }
+
+    #[derive(Deserialize)]
+    struct PostsCreateBody<'a> {
         community: CommunityLocalID,
         href: Option<String>,
         content_markdown: Option<String>,
         content_text: Option<String>,
         title: String,
+        poll: Option<PollCreateInfo<'a>>,
     }
 
     let body: PostsCreateBody = serde_json::from_slice(&body)?;
@@ -811,6 +954,22 @@ async fn route_unstable_posts_create(
             hyper::StatusCode::BAD_REQUEST,
             lang.tr(&lang::post_content_conflict()).into_owned(),
         )));
+    }
+
+    if body.href.is_some() && body.poll.is_some() {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            lang.tr(&lang::post_conflict_href_poll()).into_owned(),
+        )));
+    }
+
+    if let Some(poll) = &body.poll {
+        if poll.options.is_empty() {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                lang.tr(&lang::post_poll_empty()).into_owned(),
+            )));
+        }
     }
 
     if let Some(href) = &body.href {
@@ -852,13 +1011,77 @@ async fn route_unstable_posts_create(
     let community_local: bool = community_row.get(0);
     let already_approved = community_local;
 
-    let res_row = db.query_one(
-        "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8) RETURNING id, created",
-        &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved],
-    ).await?;
+    let (id, created, poll) = {
+        let trans = db.transaction().await?;
 
-    let id = PostLocalID(res_row.get(0));
-    let created = res_row.get(1);
+        let poll_data = if let Some(poll) = body.poll {
+            let closed_in = date_duration::DateDuration::parse_iso8601(&poll.closed_in)
+                .map_err(|_| {
+                    crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        "Invalid duration for closed_in",
+                    ))
+                })?
+                .to_iso8601_long();
+
+            Some({
+                let row = trans
+                    .query_one(
+                        "INSERT INTO poll (multiple, closed_at) VALUES ($1, current_timestamp + $2::TEXT::INTERVAL) RETURNING id, closed_at",
+                        &[&poll.multiple, &closed_in],
+                    )
+                    .await?;
+                let poll_id: i64 = row.get(0);
+                let closed_at: chrono::DateTime<chrono::FixedOffset> = row.get(1);
+
+                let indices: Vec<i32> = (0..(poll.options.len() as i32)).collect();
+                let mut names: Vec<Option<String>> = poll.options.into_iter().map(Some).collect();
+
+                let rows = trans.query("INSERT INTO poll_option (poll_id, name, position) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[]) RETURNING id, position", &[&poll_id, &names, &indices]).await?;
+
+                assert_eq!(names.len(), rows.len());
+
+                let mut options = vec![None; rows.len()];
+
+                for row in rows {
+                    let idx: i32 = row.get(1);
+                    let idx = idx as usize;
+
+                    options[idx] = Some(crate::PollOptionOwned {
+                        id: PollOptionLocalID(row.get(0)),
+                        name: names[idx].take().unwrap(),
+                        votes: 0,
+                    });
+                }
+
+                (
+                    crate::PollInfoOwned {
+                        multiple: poll.multiple,
+                        options: options.into_iter().map(Option::unwrap).collect(),
+                        is_closed: false,
+                        closed_at: Some(closed_at),
+                    },
+                    poll_id,
+                )
+            })
+        } else {
+            None
+        };
+
+        let poll_id = poll_data.as_ref().map(|(_, poll_id)| *poll_id);
+
+        let res_row = trans.query_one(
+            "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved, poll_id, updated_local) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8, $9, current_timestamp) RETURNING id, created",
+            &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved, &poll_id],
+        ).await?;
+
+        let id = PostLocalID(res_row.get(0));
+        let created = res_row.get(1);
+
+        trans.commit().await?;
+
+        (id, created, poll_data.map(|(info, _)| info))
+    };
 
     let post = crate::PostInfoOwned {
         id,
@@ -870,6 +1093,7 @@ async fn route_unstable_posts_create(
         title: body.title,
         created,
         community: body.community,
+        poll,
     };
 
     crate::spawn_task(async move {
@@ -919,7 +1143,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.id, (NOT post.local AND (current_timestamp - post.updated_local) > '1 MINUTE' AND COALESCE(post.updated_local < poll.closed_at, TRUE)), COALESCE(poll.is_closed, poll.closed_at < current_timestamp, FALSE), poll.closed_at FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -1022,6 +1246,106 @@ async fn route_unstable_posts_get(
                 deleted: row.get(22),
             };
 
+            let fetched_info;
+            let poll = if let Some(multiple) = row.get(23) {
+                fetched_info = if row.get(26) {
+                    if let Some(ap_id) = ap_id {
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+
+                        let ctx = ctx.clone();
+                        let ap_id = ap_id.parse();
+                        crate::spawn_task(async move {
+                            let ap_id = ap_id?;
+                            let result = crate::apub_util::fetch_and_ingest(&ap_id, ctx).await?;
+                            let _ = tx.send(result);
+
+                            Ok(())
+                        });
+
+                        match tokio::time::timeout(crate::apub_util::INTERACTIVE_FETCH_TIMEOUT, rx)
+                            .await
+                        {
+                            Err(_) => None,
+                            Ok(Ok(Some(crate::apub_util::ingest::IngestResult::Post(info)))) => {
+                                info.poll
+                            }
+                            Ok(Ok(_)) => None,
+                            Ok(Err(_)) => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                Some({
+                    let (options, is_closed, closed_at): (
+                        Vec<_>,
+                        bool,
+                        Option<chrono::DateTime<chrono::FixedOffset>>,
+                    ) = if let Some(info) = &fetched_info {
+                        (
+                            info.options
+                                .iter()
+                                .map(|info| RespPollOption {
+                                    id: info.id,
+                                    name: &info.name,
+                                    votes: info.votes,
+                                })
+                                .collect(),
+                            info.is_closed,
+                            info.closed_at,
+                        )
+                    } else {
+                        (
+                            row.get::<_, Vec<postgres_types::Json<(i64, &str, i64)>>>(24)
+                                .into_iter()
+                                .map(|x| x.0)
+                                .map(|(id, name, votes): (i64, &str, i64)| RespPollOption {
+                                    id: PollOptionLocalID(id),
+                                    name,
+                                    votes: votes as u32,
+                                })
+                                .collect(),
+                            row.get(27),
+                            row.get(28),
+                        )
+                    };
+
+                    let your_vote = if let Some(user) = include_your_for {
+                        let poll_id = PollLocalID(row.get(25));
+                        Some({
+                            let rows = db.query("SELECT option_id FROM poll_vote WHERE poll_id=$1 AND person=$2", &[&poll_id, &user]).await?;
+                            if rows.is_empty() {
+                                None
+                            } else {
+                                Some(RespPollYourVote {
+                                    options: rows
+                                        .into_iter()
+                                        .map(|row| JustID {
+                                            id: PollOptionLocalID(row.get(0)),
+                                        })
+                                        .collect(),
+                                })
+                            }
+                        })
+                    } else {
+                        None
+                    };
+
+                    RespPollInfo {
+                        multiple,
+                        options,
+                        your_vote,
+                        is_closed,
+                        closed_at: closed_at.map(|x| x.to_rfc3339()),
+                    }
+                })
+            } else {
+                None
+            };
+
             let post = RespPostListPost {
                 id: post_id,
                 title: Cow::Borrowed(title),
@@ -1044,6 +1368,7 @@ async fn route_unstable_posts_get(
                 post: &post,
                 local: row.get(17),
                 approved: row.get(15),
+                poll,
             };
 
             crate::json_response(&output)
@@ -1504,6 +1829,16 @@ pub fn route_posts() -> crate::RouteNode<()> {
                     "flags",
                     crate::RouteNode::new()
                         .with_handler_async(hyper::Method::POST, route_unstable_posts_flags_create),
+                )
+                .with_child(
+                    "poll",
+                    crate::RouteNode::new().with_child(
+                        "your_vote",
+                        crate::RouteNode::new().with_handler_async(
+                            hyper::Method::PUT,
+                            route_unstable_posts_poll_your_vote_set,
+                        ),
+                    ),
                 )
                 .with_child(
                     "replies",

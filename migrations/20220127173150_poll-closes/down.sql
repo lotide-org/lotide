@@ -1,0 +1,4 @@
+BEGIN;
+	ALTER TABLE poll DROP COLUMN is_closed;
+	ALTER TABLE poll DROP COLUMN closed_at;
+COMMIT;

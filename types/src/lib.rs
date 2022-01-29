@@ -46,6 +46,8 @@ macro_rules! id_wrapper {
 
 id_wrapper!(CommentLocalID);
 id_wrapper!(CommunityLocalID);
+id_wrapper!(PollLocalID);
+id_wrapper!(PollOptionLocalID);
 id_wrapper!(PostLocalID);
 id_wrapper!(UserLocalID);
 id_wrapper!(NotificationID);
@@ -280,6 +282,24 @@ pub struct RespPostInfo<'a> {
     pub post: &'a RespPostListPost<'a>,
     pub approved: bool,
     pub local: bool,
+    pub poll: Option<RespPollInfo<'a>>,
+}
+
+#[derive(Serialize)]
+pub struct RespPollInfo<'a> {
+    pub multiple: bool,
+    pub options: Vec<RespPollOption<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub your_vote: Option<Option<RespPollYourVote>>,
+    pub closed_at: Option<String>,
+    pub is_closed: bool,
+}
+
+#[derive(Serialize)]
+pub struct RespPollOption<'a> {
+    pub id: PollOptionLocalID,
+    pub name: &'a str,
+    pub votes: u32,
 }
 
 #[derive(Serialize, Clone)]
@@ -370,4 +390,16 @@ pub struct NotificationSubscriptionCreateQuery<'a> {
     pub endpoint: Cow<'a, str>,
     pub p256dh_key: Cow<'a, str>,
     pub auth_key: Cow<'a, str>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum PollVoteBody {
+    Multiple { options: Vec<PollOptionLocalID> },
+    Single { option: PollOptionLocalID },
+}
+
+#[derive(Serialize)]
+pub struct RespPollYourVote {
+    pub options: Vec<JustID<PollOptionLocalID>>,
 }

@@ -16,7 +16,9 @@ mod tasks;
 mod worker;
 
 use self::config::Config;
-use self::types::{CommentLocalID, CommunityLocalID, NotificationID, PostLocalID, UserLocalID};
+use self::types::{
+    CommentLocalID, CommunityLocalID, NotificationID, PollOptionLocalID, PostLocalID, UserLocalID,
+};
 
 pub use self::lang::Translator;
 
@@ -339,6 +341,7 @@ pub struct PostInfo<'a> {
     created: &'a chrono::DateTime<chrono::FixedOffset>,
     #[allow(dead_code)]
     community: CommunityLocalID,
+    poll: Option<Cow<'a, PollInfo<'a>>>,
 }
 
 pub struct PostInfoOwned {
@@ -351,6 +354,7 @@ pub struct PostInfoOwned {
     title: String,
     created: chrono::DateTime<chrono::FixedOffset>,
     community: CommunityLocalID,
+    poll: Option<PollInfoOwned>,
 }
 
 impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
@@ -365,6 +369,55 @@ impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
             title: &src.title,
             created: &src.created,
             community: src.community,
+            poll: src.poll.as_ref().map(|x| Cow::Owned(x.into())),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PollInfo<'a> {
+    multiple: bool,
+    options: Cow<'a, [PollOption<'a>]>,
+    closed_at: Option<&'a chrono::DateTime<chrono::FixedOffset>>,
+}
+
+pub struct PollInfoOwned {
+    multiple: bool,
+    options: Vec<PollOptionOwned>,
+    is_closed: bool,
+    closed_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+}
+
+impl<'a> From<&'a PollInfoOwned> for PollInfo<'a> {
+    fn from(src: &'a PollInfoOwned) -> Self {
+        PollInfo {
+            multiple: src.multiple,
+            options: src.options.iter().map(Into::into).collect(),
+            closed_at: src.closed_at.as_ref(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PollOption<'a> {
+    id: PollOptionLocalID,
+    name: &'a str,
+    votes: u32,
+}
+
+#[derive(Clone)]
+pub struct PollOptionOwned {
+    id: PollOptionLocalID,
+    name: String,
+    votes: u32,
+}
+
+impl<'a> From<&'a PollOptionOwned> for PollOption<'a> {
+    fn from(src: &'a PollOptionOwned) -> Self {
+        PollOption {
+            id: src.id,
+            name: &src.name,
+            votes: src.votes,
         }
     }
 }

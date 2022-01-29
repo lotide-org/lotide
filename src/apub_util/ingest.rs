@@ -1,7 +1,11 @@
 use super::{FollowLike, KnownObject, Verified};
-use crate::types::{CommentLocalID, CommunityLocalID, PostLocalID, ThingLocalRef, UserLocalID};
+use crate::types::{
+    CommentLocalID, CommunityLocalID, PollOptionLocalID, PostLocalID, ThingLocalRef, UserLocalID,
+};
 use activitystreams::prelude::*;
+use serde::Deserialize;
 use std::borrow::Cow;
+use std::convert::TryInto;
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -26,6 +30,7 @@ impl FoundFrom {
 
 pub enum IngestResult {
     Actor(super::ActorLocalInfo),
+    Post(PostIngestResult),
     Other(ThingLocalRef),
 }
 
@@ -33,9 +38,15 @@ impl IngestResult {
     pub fn into_ref(self) -> ThingLocalRef {
         match self {
             IngestResult::Actor(info) => info.as_ref(),
+            IngestResult::Post(info) => ThingLocalRef::Post(info.id),
             IngestResult::Other(x) => x,
         }
     }
+}
+
+pub struct PostIngestResult {
+    pub id: PostLocalID,
+    pub poll: Option<crate::PollInfoOwned>,
 }
 
 pub async fn ingest_object(
@@ -43,7 +54,7 @@ pub async fn ingest_object(
     found_from: FoundFrom,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
     match object.into_inner() {
         KnownObject::Accept(activity) => {
             let activity_id = activity
@@ -467,12 +478,73 @@ pub async fn ingest_object(
             Ok(None)
         }
         KnownObject::Note(obj) => {
+            // try to handle poll response
+            if let Some(in_reply_to) = obj.in_reply_to().and_then(|x| x.as_single_id()) {
+                if let Some(crate::apub_util::LocalObjectRef::Post(post_id)) =
+                    crate::apub_util::LocalObjectRef::try_from_uri(in_reply_to, &ctx.host_url_apub)
+                {
+                    if let Some(name) = obj
+                        .name()
+                        .as_ref()
+                        .and_then(|x| x.as_one())
+                        .and_then(|x| x.as_xsd_string())
+                    {
+                        if let Some(actor_id) = obj.attributed_to().and_then(|x| x.as_single_id()) {
+                            super::require_containment(
+                                obj.id_unchecked().ok_or(crate::Error::InternalStrStatic(
+                                    "Missing activity ID",
+                                ))?,
+                                actor_id,
+                            )?;
+
+                            let row = db.query_opt("SELECT poll_option.id, poll.id, poll.multiple, COALESCE(poll.is_closed, poll.closed_at <= current_timestamp, FALSE) FROM poll_option INNER JOIN poll ON (poll.id = poll_option.poll_id) WHERE poll_id=(SELECT poll_id FROM post WHERE id=$1 AND local) AND name=$2", &[&post_id, &name]).await?;
+                            if let Some(row) = row {
+                                let option_id: i64 = row.get(0);
+                                let poll_id: i64 = row.get(1);
+                                let multiple: bool = row.get(2);
+                                let closed: bool = row.get(3);
+
+                                if closed {
+                                    // ignore
+                                } else {
+                                    let actor_local_id =
+                                        super::get_or_fetch_user_local_id(&actor_id, &db, &ctx)
+                                            .await?;
+
+                                    {
+                                        let trans = db.transaction().await?;
+
+                                        if !multiple {
+                                            trans
+                                                .execute(
+                                                    "DELETE FROM poll_vote WHERE person=$1",
+                                                    &[&actor_local_id],
+                                                )
+                                                .await?;
+                                        }
+
+                                        trans.execute("INSERT INTO poll_vote (poll_id, option_id, person) VALUES ($1, $2, $3)", &[&poll_id, &option_id, &actor_local_id]).await?;
+
+                                        trans.commit().await?;
+                                    }
+                                }
+
+                                return Ok(None);
+                            }
+                        }
+                    }
+                }
+            }
+
             ingest_postlike(Verified(KnownObject::Note(obj)), found_from, ctx).await
         }
         KnownObject::Page(obj) => {
             ingest_postlike(Verified(KnownObject::Page(obj)), found_from, ctx).await
         }
         KnownObject::Person(person) => ingest_personlike(Verified(person), false, ctx).await,
+        KnownObject::Question(obj) => {
+            ingest_postlike(Verified(KnownObject::Question(obj)), found_from, ctx).await
+        }
         KnownObject::Remove(activity) => {
             let activity_id = activity
                 .id_unchecked()
@@ -797,7 +869,15 @@ pub async fn ingest_create(
         let object_id = req_obj.id();
 
         if let Some(object_id) = object_id {
-            let obj = crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?;
+            let obj = if if let Some(activity_id) = activity.id_unchecked() {
+                crate::apub_util::is_contained(activity_id, object_id)
+            } else {
+                false
+            } {
+                Verified(serde_json::from_value(serde_json::to_value(&req_obj)?)?)
+            } else {
+                crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?
+            };
 
             ingest_object_boxed(obj, FoundFrom::Other, ctx.clone()).await?;
         }
@@ -806,25 +886,86 @@ pub async fn ingest_create(
     Ok(())
 }
 
+pub struct PollIngestInfo {
+    multiple: bool,
+    is_closed: Option<bool>,
+    closed_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    options: Vec<(String, Option<i32>)>,
+}
+
 /// Ingestion flow for Page, Image, Article, and Note. Should not be called with any other objects.
 async fn ingest_postlike(
     obj: Verified<KnownObject>,
     found_from: FoundFrom,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let (ext, to, in_reply_to, obj_id) = match obj.deref() {
-        KnownObject::Page(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
-        KnownObject::Image(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
-        KnownObject::Article(obj) => (&obj.ext_one, obj.to(), None, obj.id_unchecked()),
+    let (ext, to, in_reply_to, obj_id, poll_info) = match obj.deref() {
+        KnownObject::Page(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
+        KnownObject::Image(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
+        KnownObject::Article(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
         KnownObject::Note(obj) => (
-            &obj.ext_one,
+            Some(&obj.ext_one),
             obj.to(),
             obj.in_reply_to(),
             obj.id_unchecked(),
+            None,
+        ),
+        KnownObject::Question(obj) => (
+            None,
+            obj.to(),
+            obj.in_reply_to(),
+            obj.id_unchecked(),
+            Some({
+                #[derive(Deserialize)]
+                struct OptionObject {
+                    name: String,
+                    replies: Option<crate::apub_util::AnyCollection>,
+                }
+
+                let (multiple, options) = if let Some(any_of) = obj.any_of() {
+                    (true, any_of)
+                } else if let Some(one_of) = obj.one_of() {
+                    (false, one_of)
+                } else {
+                    return Err(crate::Error::InternalStrStatic("Invalid poll"));
+                };
+
+                let options = options
+                    .iter()
+                    .map(|value| serde_json::from_value(serde_json::to_value(value)?))
+                    .collect::<Result<Vec<OptionObject>, _>>()?;
+                let options = options
+                    .into_iter()
+                    .map(|value| {
+                        let remote_count = value.replies.and_then(|coll| coll.total_items());
+                        (value.name, remote_count.map(|x| x as i32))
+                    })
+                    .collect();
+
+                let (is_closed, closed_at) = match obj.closed() {
+                    Some(value) => match value {
+                        activitystreams::primitives::ClosedValue::ObjectOrLink(_) => (None, None),
+                        activitystreams::primitives::ClosedValue::DateTime(timestamp) => {
+                            (None, Some(timestamp.as_datetime().clone()))
+                        }
+                        activitystreams::primitives::ClosedValue::Boolean(value) => {
+                            (Some(*value), None)
+                        }
+                    },
+                    None => (None, None),
+                };
+
+                PollIngestInfo {
+                    multiple,
+                    options,
+                    is_closed,
+                    closed_at,
+                }
+            }),
         ),
         _ => return Ok(None), // shouldn't happen?
     };
-    let target = &ext.target;
+    let target = ext.as_ref().and_then(|x| x.target.as_ref());
 
     let community_found = match target
         .as_ref()
@@ -873,29 +1014,42 @@ async fn ingest_postlike(
                 community_local_id,
                 community_is_local,
                 found_from.as_announce(),
-                Verified(obj),
+                poll_info,
+                Verified(obj).into(),
                 ctx,
             )
             .await?
-            .map(|id| IngestResult::Other(ThingLocalRef::Post(id)))),
+            .map(IngestResult::Post)),
             KnownObject::Image(obj) => Ok(handle_received_page_for_community(
                 community_local_id,
                 community_is_local,
                 found_from.as_announce(),
-                Verified(obj),
+                poll_info,
+                Verified(obj).into(),
                 ctx,
             )
             .await?
-            .map(|id| IngestResult::Other(ThingLocalRef::Post(id)))),
+            .map(IngestResult::Post)),
             KnownObject::Article(obj) => Ok(handle_received_page_for_community(
                 community_local_id,
                 community_is_local,
                 found_from.as_announce(),
-                Verified(obj),
+                poll_info,
+                Verified(obj).into(),
                 ctx,
             )
             .await?
-            .map(|id| IngestResult::Other(ThingLocalRef::Post(id)))),
+            .map(IngestResult::Post)),
+            KnownObject::Question(obj) => Ok(handle_received_page_for_community(
+                community_local_id,
+                community_is_local,
+                found_from.as_announce(),
+                poll_info,
+                Verified(obj.try_into()?),
+                ctx,
+            )
+            .await?
+            .map(IngestResult::Post)),
             KnownObject::Note(obj) => {
                 let content = obj.content();
                 let content = content.as_ref().and_then(|x| x.as_single_xsd_string());
@@ -980,7 +1134,7 @@ async fn ingest_postlike(
                             .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
                             .map(|href| href.as_str());
 
-                        Ok(Some(IngestResult::Other(ThingLocalRef::Post(
+                        Ok(Some(IngestResult::Post(
                             handle_recieved_post(
                                 object_id.clone(),
                                 title,
@@ -992,10 +1146,11 @@ async fn ingest_postlike(
                                 community_local_id,
                                 community_is_local,
                                 found_from.as_announce(),
+                                poll_info,
                                 ctx,
                             )
                             .await?,
-                        ))))
+                        )))
                     }
                 } else {
                     Ok(None)
@@ -1339,9 +1494,10 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
     is_announce: Option<&url::Url>,
-    obj: Verified<super::ExtendedPostlike<activitystreams::object::Object<Kind>>>,
+    poll_info: Option<PollIngestInfo>,
+    obj: Verified<activitystreams::object::Object<Kind>>,
     ctx: Arc<crate::RouteContext>,
-) -> Result<Option<PostLocalID>, crate::Error> {
+) -> Result<Option<PostIngestResult>, crate::Error> {
     let title = obj
         .name()
         .iter()
@@ -1386,6 +1542,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
                 community_local_id,
                 community_is_local,
                 is_announce,
+                poll_info,
                 ctx,
             )
             .await?,
@@ -1406,9 +1563,10 @@ async fn handle_recieved_post(
     community_local_id: CommunityLocalID,
     community_is_local: bool,
     is_announce: Option<&url::Url>,
+    poll_info: Option<PollIngestInfo>,
     ctx: Arc<crate::RouteContext>,
-) -> Result<PostLocalID, crate::Error> {
-    let db = ctx.db_pool.get().await?;
+) -> Result<PostIngestResult, crate::Error> {
+    let mut db = ctx.db_pool.get().await?;
     let author = match author {
         Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
         None => None,
@@ -1423,16 +1581,143 @@ async fn handle_recieved_post(
 
     let approved = is_announce.is_some() || community_is_local;
 
-    let row = db.query_one(
-        "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10 RETURNING id",
-        &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str())],
-    ).await?;
+    let (post_local_id, poll_output) = {
+        let trans = db.transaction().await?;
+        let row = trans.query_one(
+            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10, updated_local=current_timestamp RETURNING id, poll_id",
+            &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str())],
+        ).await?;
+        let post_local_id = PostLocalID(row.get(0));
+        let existing_poll_id: Option<i64> = row.get(1);
 
-    let post_local_id = PostLocalID(row.get(0));
+        let poll_output = if let Some(poll_id) = existing_poll_id {
+            if let Some(poll_info) = &poll_info {
+                let names: Vec<&str> = poll_info
+                    .options
+                    .iter()
+                    .map(|(name, _)| name.deref())
+                    .collect();
+                let counts: Vec<Option<i32>> = poll_info
+                    .options
+                    .iter()
+                    .map(|(_, count)| count.clone())
+                    .collect();
+                let indices: Vec<i32> = (0..(poll_info.options.len() as i32)).collect();
+
+                let is_closed: bool = trans
+                    .query_one(
+                        "UPDATE poll SET multiple=$1, is_closed=$3, closed_at=$4 WHERE id=$2 RETURNING COALESCE(is_closed, closed_at < current_timestamp, FALSE)",
+                        &[
+                            &poll_info.multiple,
+                            &poll_id,
+                            &poll_info.is_closed,
+                            &poll_info.closed_at,
+                        ],
+                    )
+                    .await?
+                    .get(0);
+                trans
+                    .execute(
+                        "DELETE FROM poll_option WHERE poll_id=$1 AND NOT (name = ANY($2::TEXT[]))",
+                        &[&poll_id, &names],
+                    )
+                    .await?;
+
+                let options_rows = trans.query("INSERT INTO poll_option (poll_id, name, position, remote_vote_count) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[], $4::INTEGER[]) ON CONFLICT (poll_id, name) DO UPDATE SET position = excluded.position, remote_vote_count = excluded.remote_vote_count RETURNING id, position", &[&poll_id, &names, &indices, &counts]).await?;
+
+                let mut options: Vec<_> = options_rows
+                    .into_iter()
+                    .map(|row| (PollOptionLocalID(row.get(0)), row.get::<_, i32>(1)))
+                    .collect();
+                options.sort_unstable_by_key(|x| x.1);
+
+                Some((options, is_closed))
+            } else {
+                trans
+                    .execute(
+                        "UPDATE post SET poll_id=NULL WHERE id=$1",
+                        &[&post_local_id],
+                    )
+                    .await?;
+                trans
+                    .execute("DELETE FROM poll WHERE id=$1", &[&poll_id])
+                    .await?;
+
+                None
+            }
+        } else {
+            if let Some(poll_info) = &poll_info {
+                let names: Vec<&str> = poll_info
+                    .options
+                    .iter()
+                    .map(|(name, _)| name.deref())
+                    .collect();
+                let counts: Vec<Option<i32>> = poll_info
+                    .options
+                    .iter()
+                    .map(|(_, count)| count.clone())
+                    .collect();
+                let indices: Vec<i32> = (0..(poll_info.options.len() as i32)).collect();
+
+                let row = trans
+                    .query_one(
+                        "INSERT INTO poll (multiple, is_closed, closed_at) VALUES ($1, $2, $3) RETURNING id, COALESCE(is_closed, closed_at < current_timestamp, FALSE)",
+                        &[&poll_info.multiple, &poll_info.is_closed, &poll_info.closed_at],
+                    )
+                    .await?;
+                let poll_id: i64 = row.get(0);
+                let is_closed: bool = row.get(1);
+
+                let options_rows = trans.query("INSERT INTO poll_option (poll_id, name, position, remote_vote_count) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[], $4::INTEGER[]) RETURNING id, position", &[&poll_id, &names, &indices, &counts]).await?;
+                trans
+                    .execute(
+                        "UPDATE post SET poll_id=$1 WHERE id=$2",
+                        &[&poll_id, &post_local_id],
+                    )
+                    .await?;
+
+                let mut options: Vec<_> = options_rows
+                    .into_iter()
+                    .map(|row| (PollOptionLocalID(row.get(0)), row.get::<_, i32>(1)))
+                    .collect();
+                options.sort_unstable_by_key(|x| x.1);
+
+                Some((options, is_closed))
+            } else {
+                None
+            }
+        };
+
+        trans.commit().await?;
+
+        (post_local_id, poll_output)
+    };
 
     if community_is_local {
         crate::on_local_community_add_post(community_local_id, post_local_id, object_id, ctx);
     }
 
-    Ok(post_local_id)
+    let poll = poll_output.map(|(options, is_closed)| {
+        let info = poll_info.unwrap();
+
+        crate::PollInfoOwned {
+            multiple: info.multiple,
+            options: options
+                .into_iter()
+                .zip(info.options)
+                .map(|((id, _), (name, votes))| crate::PollOptionOwned {
+                    id,
+                    name,
+                    votes: votes.unwrap_or(0) as u32,
+                })
+                .collect(),
+            is_closed,
+            closed_at: info.closed_at,
+        }
+    });
+
+    Ok(PostIngestResult {
+        id: post_local_id,
+        poll,
+    })
 }

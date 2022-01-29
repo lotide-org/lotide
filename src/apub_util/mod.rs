@@ -1,6 +1,6 @@
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, PostLocalID, ThingLocalRef,
-    UserLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, PollLocalID, PollOptionLocalID,
+    PostLocalID, ThingLocalRef, UserLocalID,
 };
 use crate::BaseURL;
 use activitystreams::prelude::*;
@@ -18,6 +18,8 @@ pub const ACTIVITY_TYPE: &str = "application/activity+json";
 pub const SIGALG_RSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
 pub const SIGALG_RSA_SHA512: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512";
 
+pub const INTERACTIVE_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
 pub struct Verified<T: Clone>(pub T);
@@ -31,6 +33,12 @@ impl<T: Clone> std::ops::Deref for Verified<T> {
 impl<T: Clone> Verified<T> {
     pub fn into_inner(self) -> T {
         self.0
+    }
+}
+
+impl<T: Clone, U: Clone> From<Verified<activitystreams_ext::Ext1<T, U>>> for Verified<T> {
+    fn from(src: Verified<activitystreams_ext::Ext1<T, U>>) -> Self {
+        Verified(src.0.inner)
     }
 }
 
@@ -90,6 +98,7 @@ pub enum KnownObject {
     Image(ExtendedPostlike<activitystreams::object::Image>),
     Page(ExtendedPostlike<activitystreams::object::Page>),
     Note(ExtendedPostlike<activitystreams::object::Note>),
+    Question(activitystreams::activity::Question),
 }
 
 #[derive(Deserialize)]
@@ -137,6 +146,15 @@ pub type ExtendedPostlike<T> = activitystreams_ext::Ext1<T, TargetExtension>;
 pub enum AnyCollection {
     Unordered(activitystreams::collection::UnorderedCollection),
     Ordered(activitystreams::collection::OrderedCollection),
+}
+
+impl AnyCollection {
+    pub fn total_items(&self) -> Option<u64> {
+        match self {
+            AnyCollection::Unordered(coll) => coll.total_items(),
+            AnyCollection::Ordered(coll) => coll.total_items(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -229,6 +247,24 @@ pub fn get_local_comment_like_apub_id(
     let mut res = crate::apub_util::get_local_comment_apub_id(comment_local_id, host_url_apub);
     res.path_segments_mut()
         .extend(&["likes", &user.to_string()]);
+    res
+}
+
+pub fn get_local_poll_vote_apub_id(
+    poll_id: PollLocalID,
+    user: UserLocalID,
+    option_id: PollOptionLocalID,
+    host_url_apub: &BaseURL,
+) -> BaseURL {
+    let mut res = host_url_apub.clone();
+    res.path_segments_mut().extend(&[
+        "polls",
+        &poll_id.to_string(),
+        "voters",
+        &user.to_string(),
+        "votes",
+        &option_id.to_string(),
+    ]);
     res
 }
 
@@ -403,8 +439,12 @@ impl ActorLocalInfo {
 #[error("Incoming object failed containment check")]
 pub struct NotContained;
 
+pub fn is_contained(object_id: &url::Url, actor_id: &url::Url) -> bool {
+    object_id.host() == actor_id.host() && object_id.port() == actor_id.port()
+}
+
 pub fn require_containment(object_id: &url::Url, actor_id: &url::Url) -> Result<(), NotContained> {
-    if object_id.host() == actor_id.host() && object_id.port() == actor_id.port() {
+    if is_contained(object_id, actor_id) {
         Ok(())
     } else {
         Err(NotContained)
@@ -459,12 +499,19 @@ pub async fn fetch_ap_object(
     Ok(Verified(value))
 }
 
+pub async fn fetch_and_ingest(
+    req_ap_id: &url::Url,
+    ctx: Arc<crate::BaseContext>,
+) -> Result<Option<ingest::IngestResult>, crate::Error> {
+    let obj = fetch_ap_object(req_ap_id, &ctx.http_client).await?;
+    ingest::ingest_object_boxed(obj, ingest::FoundFrom::Other, ctx).await
+}
+
 pub async fn fetch_actor(
     req_ap_id: &url::Url,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<ActorLocalInfo, crate::Error> {
-    let obj = fetch_ap_object(req_ap_id, &ctx.http_client).await?;
-    match ingest::ingest_object_boxed(obj, ingest::FoundFrom::Other, ctx).await? {
+    match fetch_and_ingest(req_ap_id, ctx).await? {
         Some(ingest::IngestResult::Actor(info)) => Ok(info),
         _ => Err(crate::Error::InternalStrStatic("Unrecognized actor type")),
     }
@@ -1195,8 +1242,58 @@ pub fn post_to_ap(
         Ok(())
     }
 
-    match post.href {
-        Some(href) => {
+    match (post.poll.as_ref(), post.href) {
+        (Some(poll), _) => {
+            // theoretically href and poll are mutually exclusive
+
+            let mut post_ap = activitystreams::activity::Question::new();
+
+            post_ap.set_summary(post.title).set_name(post.title);
+
+            let options: Vec<activitystreams::base::AnyBase> = poll
+                .options
+                .iter()
+                .map(|option| {
+                    let mut option_ap = activitystreams::object::Note::new();
+                    option_ap.set_name(option.name);
+
+                    let mut replies_ap = activitystreams::collection::UnorderedCollection::new();
+                    replies_ap.set_total_items(option.votes);
+                    option_ap.set_reply(replies_ap.into_any_base()?);
+
+                    option_ap.into_any_base()
+                })
+                .collect::<Result<_, _>>()?;
+
+            if poll.multiple {
+                post_ap.set_many_any_ofs(options);
+            } else {
+                post_ap.set_many_one_ofs(options);
+            }
+
+            if let Some(closed_at) = poll.closed_at {
+                post_ap.set_closed(closed_at.clone());
+            }
+
+            let mut post_ap = ExtendedPostlike::new(
+                activitystreams::object::ApObject::new(post_ap),
+                Default::default(),
+            );
+
+            apply_properties(
+                &mut post_ap,
+                post,
+                community_ap_id,
+                community_ap_outbox,
+                community_ap_followers,
+                &ctx,
+            )?;
+
+            Ok(activitystreams::base::AnyBase::from_arbitrary_json(
+                post_ap,
+            )?)
+        }
+        (None, Some(href)) => {
             if href.starts_with("local-media://") {
                 let mut attachment = activitystreams::object::Image::new();
                 attachment.set_url(ctx.process_href(href, post.id).into_owned());
@@ -1252,7 +1349,7 @@ pub fn post_to_ap(
                 )?)
             }
         }
-        None => {
+        (None, None) => {
             let mut post_ap = activitystreams::object::Note::new();
 
             post_ap.set_summary(post.title).set_name(post.title);
@@ -1629,6 +1726,59 @@ pub fn local_comment_like_undo_to_ap(
         let mut res = host_url_apub.clone();
         res.path_segments_mut()
             .extend(&["comment_like_undos", &undo_id.to_string()]);
+        res.into()
+    });
+
+    Ok(undo)
+}
+
+pub fn local_poll_vote_to_ap(
+    poll_id: PollLocalID,
+    poll_ap_id: BaseURL,
+    user: UserLocalID,
+    option_id: PollOptionLocalID,
+    option_name: String,
+    host_url_apub: &BaseURL,
+) -> Result<activitystreams::activity::Create, crate::Error> {
+    let id = get_local_poll_vote_apub_id(poll_id, user, option_id, host_url_apub);
+    let note_id = {
+        let mut res = id.clone();
+        res.path_segments_mut().push("note");
+        res
+    };
+
+    let actor = crate::apub_util::get_local_person_apub_id(user, host_url_apub);
+
+    let mut note = activitystreams::object::Note::new();
+    note.set_id(note_id.into())
+        .set_in_reply_to(poll_ap_id)
+        .set_name(option_name)
+        .set_attributed_to(actor.clone());
+
+    let mut create = activitystreams::activity::Create::new(actor, note.into_any_base()?);
+    create
+        .set_context(activitystreams::context())
+        .set_id(id.into());
+
+    Ok(create)
+}
+
+pub fn local_poll_vote_undo_to_ap(
+    poll_id: PollLocalID,
+    user: UserLocalID,
+    option_id: PollOptionLocalID,
+    host_url_apub: &BaseURL,
+) -> Result<activitystreams::activity::Undo, crate::Error> {
+    let undo_id = uuid::Uuid::new_v4(); // activity is temporary
+
+    let mut undo = activitystreams::activity::Undo::new(
+        get_local_person_apub_id(user, host_url_apub),
+        get_local_poll_vote_apub_id(poll_id, user, option_id, host_url_apub),
+    );
+    undo.set_context(activitystreams::context()).set_id({
+        let mut res = host_url_apub.clone();
+        res.path_segments_mut()
+            .extend(&["tmp_objects", &undo_id.to_string()]);
         res.into()
     });
 
