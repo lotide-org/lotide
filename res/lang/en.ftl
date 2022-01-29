@@ -37,6 +37,7 @@ post_needs_content = Post must contain one of href, content_text, or content_mar
 post_not_in_community = That post is not in this community
 post_not_link = That post is not a link
 post_not_yours = That's not your post
+post_poll_options_conflict = Cannot have multiple poll options with the same name
 post_poll_empty = Cannot create a poll without options
 root = lotide is running. Note that lotide itself does not include a frontend, and you'll need to install one separately.
 sort_relevant_not_search = Sorting by relevance is only allowed when searching

@@ -1037,7 +1037,19 @@ async fn route_unstable_posts_create(
                 let indices: Vec<i32> = (0..(poll.options.len() as i32)).collect();
                 let mut names: Vec<Option<String>> = poll.options.into_iter().map(Some).collect();
 
-                let rows = trans.query("INSERT INTO poll_option (poll_id, name, position) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[]) RETURNING id, position", &[&poll_id, &names, &indices]).await?;
+                let rows = trans.query("INSERT INTO poll_option (poll_id, name, position) SELECT $1, * FROM UNNEST($2::TEXT[], $3::INTEGER[]) RETURNING id, position", &[&poll_id, &names, &indices]).await
+                    .map_err(|err| {
+                        match err.as_db_error() {
+                            None => err.into(),
+                            Some(db_err) => {
+                                if db_err.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION && db_err.constraint() == Some("poll_option_poll_id_name_key") {
+                                    crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, lang.tr(&lang::post_poll_options_conflict()).into_owned()))
+                                } else {
+                                    err.into()
+                                }
+                            }
+                        }
+                    })?;
 
                 assert_eq!(names.len(), rows.len());
 
