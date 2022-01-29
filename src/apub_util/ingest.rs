@@ -16,6 +16,7 @@ pub enum FoundFrom {
         community_local_id: CommunityLocalID,
         community_is_local: bool,
     },
+    Refresh,
     Other,
 }
 
@@ -986,6 +987,16 @@ async fn ingest_postlike(
                 community_is_local,
                 ..
             } => Some((community_local_id, community_is_local)),
+            FoundFrom::Refresh => {
+                if let Some(obj_id) = obj_id {
+                    let db = ctx.db_pool.get().await?;
+
+                    let row = db.query_opt("SELECT id, local FROM community WHERE id=(SELECT community FROM post WHERE ap_id=$1)", &[&obj_id.as_str()]).await?;
+                    row.map(|row| (CommunityLocalID(row.get(0)), row.get(1)))
+                } else {
+                    None
+                }
+            }
             _ => match to {
                 None => None,
                 Some(maybe) => maybe

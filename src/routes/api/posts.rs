@@ -1256,7 +1256,12 @@ async fn route_unstable_posts_get(
                         let ap_id = ap_id.parse();
                         crate::spawn_task(async move {
                             let ap_id = ap_id?;
-                            let result = crate::apub_util::fetch_and_ingest(&ap_id, ctx).await?;
+                            let result = crate::apub_util::fetch_and_ingest(
+                                &ap_id,
+                                crate::apub_util::ingest::FoundFrom::Refresh,
+                                ctx,
+                            )
+                            .await?;
                             let _ = tx.send(result);
 
                             Ok(())

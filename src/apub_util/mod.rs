@@ -501,17 +501,18 @@ pub async fn fetch_ap_object(
 
 pub async fn fetch_and_ingest(
     req_ap_id: &url::Url,
+    found_from: ingest::FoundFrom,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<Option<ingest::IngestResult>, crate::Error> {
     let obj = fetch_ap_object(req_ap_id, &ctx.http_client).await?;
-    ingest::ingest_object_boxed(obj, ingest::FoundFrom::Other, ctx).await
+    ingest::ingest_object_boxed(obj, found_from, ctx).await
 }
 
 pub async fn fetch_actor(
     req_ap_id: &url::Url,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<ActorLocalInfo, crate::Error> {
-    match fetch_and_ingest(req_ap_id, ctx).await? {
+    match fetch_and_ingest(req_ap_id, ingest::FoundFrom::Other, ctx).await? {
         Some(ingest::IngestResult::Actor(info)) => Ok(info),
         _ => Err(crate::Error::InternalStrStatic("Unrecognized actor type")),
     }
