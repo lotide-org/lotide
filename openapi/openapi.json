@@ -1443,7 +1443,24 @@
 									},
 									"content_markdown": {"type": "string"},
 									"content_text": {"type": "string"},
-									"title": {"type": "string"}
+									"title": {"type": "string"},
+									"poll": {
+										"type": "object",
+										"required": ["multiple", "options", "closed_in"],
+										"properties": {
+											"multiple": {"type": "boolean", "description": "Whether voters can choose multiple options"},
+											"options": {
+												"type": "array",
+												"items": {"type": "string"},
+												"description": "The available options in the poll"
+											},
+											"closed_in": {
+												"type": "string",
+												"example": "PT10M",
+												"description": "How long until the poll should close, as an ISO8601 duration."
+											}
+										}
+									}
 								}
 							}
 						}
@@ -1496,7 +1513,52 @@
 									"required": ["approved", "local"],
 									"properties": {
 										"approved": {"type": "boolean"},
-										"local": {"type": "boolean"}
+										"local": {"type": "boolean"},
+										"poll": {
+											"type": "object",
+											"required": ["multiple", "options", "closed_at", "is_closed"],
+											"properties": {
+												"multiple": {"type": "boolean", "description": "Whether voters can choose multiple options"},
+												"options": {
+													"type": "array",
+													"items": {
+														"type": "object",
+														"required": ["id", "name", "votes"],
+														"properties": {
+															"id": {"type": "integer"},
+															"name": {"type": "string"},
+															"votes": {"type": "integer"}
+														}
+													}
+												},
+												"closed_at": {
+													"nullable": true,
+													"type": "string",
+													"format": "date-time",
+													"description": "The time when this poll has or will close."
+												},
+												"is_closed": {
+													"type": "boolean"
+												},
+												"your_vote": {
+													"nullable": true,
+													"type": "object",
+													"required": ["options"],
+													"properties": {
+														"options": {
+															"type": "array",
+															"items": {
+																"type": "object",
+																"required": ["id"],
+																"properties": {
+																	"id": {"type": "integer"}
+																}
+															}
+														}
+													}
+												}
+											}
+										}
 									}
 								}
 							}
@@ -1564,6 +1626,49 @@
 					}
 				},
 				"security": [{"bearer": []}]
+			}
+		},
+		"/api/unstable/posts/{postID}/poll/your_vote": {
+			"put": {
+				"summary": "Vote in a poll",
+				"parameters": [
+					{
+						"name": "postID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"requestBody": {
+					"required": true,
+					"content": {
+						"application/json": {
+							"schema": {
+								"oneOf": [
+									{
+										"type": "object",
+										"required": ["options"],
+										"properties": {
+											"options": {"type": "array", "items": {"type": "integer"}}
+										}
+									},
+									{
+										"type": "object",
+										"required": ["option"],
+										"properties": {
+											"option": {"type": "integer"}
+										}
+									}
+								]
+							}
+						}
+					}
+				},
+				"responses": {
+					"204": {
+						"description": "Successfully voted."
+					}
+				}
 			}
 		},
 		"/api/unstable/posts/{postID}/replies": {
