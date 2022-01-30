@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE site DROP COLUMN signup_allowed;
+COMMIT;

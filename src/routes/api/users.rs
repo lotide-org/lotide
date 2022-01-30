@@ -262,6 +262,20 @@ async fn route_unstable_users_create(
         }
     }
 
+    {
+        let row = db
+            .query_one("SELECT signup_allowed FROM site WHERE local", &[])
+            .await?;
+        if row.get(0) {
+            Ok(())
+        } else {
+            Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::FORBIDDEN,
+                lang.tr(&lang::signup_not_allowed()).into_owned(),
+            )))
+        }
+    }?;
+
     let req_password = body.password;
     let passhash =
         tokio::task::spawn_blocking(move || bcrypt::hash(req_password, bcrypt::DEFAULT_COST))

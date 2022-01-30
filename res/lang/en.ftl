@@ -40,6 +40,7 @@ post_not_yours = That's not your post
 post_poll_options_conflict = Cannot have multiple poll options with the same name
 post_poll_empty = Cannot create a poll without options
 root = lotide is running. Note that lotide itself does not include a frontend, and you'll need to install one separately.
+signup_not_allowed = User registration is disabled on this server
 sort_relevant_not_search = Sorting by relevance is only allowed when searching
 user_email_invalid = Specified email address is invalid
 user_name_disallowed_chars = Username contains disallowed characters

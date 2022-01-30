@@ -634,6 +634,13 @@ async fn route_unstable_nodeinfo_20_get(
         row.get::<_, i64>(0)
     };
 
+    let open_registrations = {
+        let row = db
+            .query_one("SELECT signup_allowed FROM site WHERE local", &[])
+            .await?;
+        row.get::<_, bool>(0)
+    };
+
     let body = serde_json::json!({
         "version": "2.0",
         "software": {
@@ -645,7 +652,7 @@ async fn route_unstable_nodeinfo_20_get(
             "inbound": [],
             "outbound": []
         },
-        "openRegistrations": true,
+        "openRegistrations": open_registrations,
         "usage": {
             "users": {
                 "total": local_users,
@@ -674,11 +681,12 @@ async fn route_unstable_instance_get(
     let db = ctx.db_pool.get().await?;
 
     let row = db
-        .query_one("SELECT description, description_markdown, description_html FROM site WHERE local = TRUE", &[])
+        .query_one("SELECT description, description_markdown, description_html, signup_allowed FROM site WHERE local = TRUE", &[])
         .await?;
     let description_text: Option<&str> = row.get(0);
     let description_markdown: Option<&str> = row.get(1);
     let description_html: Option<&str> = row.get(2);
+    let signup_allowed: bool = row.get(3);
 
     let body = serde_json::json!({
         "web_push_vapid_key": ctx.vapid_public_key_base64,
@@ -690,7 +698,8 @@ async fn route_unstable_instance_get(
         "software": {
             "name": "lotide",
             "version": env!("CARGO_PKG_VERSION"),
-        }
+        },
+        "signup_allowed": signup_allowed
     });
 
     crate::json_response(&body)
