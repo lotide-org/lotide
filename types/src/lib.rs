@@ -200,6 +200,7 @@ pub struct RespMinimalPostInfo<'a> {
     pub id: PostLocalID,
     pub title: &'a str,
     pub remote_url: Option<Cow<'a, str>>,
+    pub sensitive: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -223,6 +224,7 @@ pub struct RespPostListPost<'a> {
     pub sticky: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub your_vote: Option<Option<Empty>>,
+    pub sensitive: bool,
 }
 
 #[derive(Serialize, Clone)]

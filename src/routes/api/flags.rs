@@ -62,7 +62,7 @@ async fn route_unstable_flags_list(
         }
     }?;
 
-    let mut sql = "SELECT flag.kind, flag.id, flag.content_text, flag.created_local, flagger.id, flagger.local, flagger.username, flagger.ap_id, flagger.avatar, flagger.is_bot, post.id, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, post_author.id, post_author.username, post_author.local, post_author.ap_id, post_author.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, post_author.is_bot, post.ap_id, post.local, post.approved, community.id, community.name, community.local, community.ap_id, community.deleted FROM flag INNER JOIN person AS flagger ON (flagger.id = flag.person) LEFT OUTER JOIN post ON (post.id = flag.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) WHERE TRUE".to_owned();
+    let mut sql = "SELECT flag.kind, flag.id, flag.content_text, flag.created_local, flagger.id, flagger.local, flagger.username, flagger.ap_id, flagger.avatar, flagger.is_bot, post.id, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, post_author.id, post_author.username, post_author.local, post_author.ap_id, post_author.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, post_author.is_bot, post.ap_id, post.local, post.approved, community.id, community.name, community.local, community.ap_id, community.deleted, post.sensitive FROM flag INNER JOIN person AS flagger ON (flagger.id = flag.person) LEFT OUTER JOIN post ON (post.id = flag.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) LEFT OUTER JOIN community ON (community.id = post.community) WHERE TRUE".to_owned();
     let mut values: Vec<&(dyn postgres_types::ToSql + Sync)> = vec![];
 
     if let Some(to_community) = &query.to_community {
@@ -164,6 +164,7 @@ async fn route_unstable_flags_list(
                             created: post_created.to_rfc3339().into(),
                             score: row.get(22),
                             replies_count_total: Some(row.get(23)),
+                            sensitive: row.get(34),
                             sticky: row.get(24),
                             author: Some(Cow::Owned(author)),
                             remote_url: if post_local {
