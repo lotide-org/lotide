@@ -1241,6 +1241,8 @@ pub fn post_to_ap(
             ));
         }
 
+        props.ext_two.sensitive = Some(post.sensitive);
+
         if let Some(html) = post.content_html {
             props
                 .set_content(crate::clean_html(html))

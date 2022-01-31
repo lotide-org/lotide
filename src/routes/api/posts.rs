@@ -1109,6 +1109,7 @@ async fn route_unstable_posts_create(
         created,
         community: body.community,
         poll,
+        sensitive: body.sensitive,
     };
 
     crate::spawn_task(async move {

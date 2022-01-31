@@ -342,6 +342,7 @@ pub struct PostInfo<'a> {
     #[allow(dead_code)]
     community: CommunityLocalID,
     poll: Option<Cow<'a, PollInfo<'a>>>,
+    sensitive: bool,
 }
 
 pub struct PostInfoOwned {
@@ -355,6 +356,7 @@ pub struct PostInfoOwned {
     created: chrono::DateTime<chrono::FixedOffset>,
     community: CommunityLocalID,
     poll: Option<PollInfoOwned>,
+    sensitive: bool,
 }
 
 impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
@@ -370,6 +372,7 @@ impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
             created: &src.created,
             community: src.community,
             poll: src.poll.as_ref().map(|x| Cow::Owned(x.into())),
+            sensitive: src.sensitive,
         }
     }
 }
