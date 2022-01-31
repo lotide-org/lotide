@@ -319,7 +319,7 @@ async fn route_unstable_posts_list(
         None
     };
 
-    let mut sql = "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot, post.ap_id, post.local, community.deleted".to_owned();
+    let mut sql = "SELECT post.id, post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, person.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = post.id), post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, post.sensitive".to_owned();
     if let Some(idx) = include_your_idx {
         write!(
             sql,
@@ -535,16 +535,17 @@ async fn route_unstable_posts_list(
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Owned(community),
                 score: row.get(16),
+                sensitive: row.get(23),
                 sticky: row.get(18),
                 relevance: if has_relevance {
-                    row.get(if include_your_idx.is_some() { 24 } else { 23 })
+                    row.get(if include_your_idx.is_some() { 25 } else { 24 })
                 } else {
                     None
                 },
                 remote_url,
                 replies_count_total: Some(row.get(17)),
                 your_vote: if include_your_idx.is_some() {
-                    Some(if row.get(23) {
+                    Some(if row.get(24) {
                         Some(crate::types::Empty {})
                     } else {
                         None
@@ -938,6 +939,8 @@ async fn route_unstable_posts_create(
         content_text: Option<String>,
         title: String,
         poll: Option<PollCreateInfo<'a>>,
+        #[serde(default)]
+        sensitive: bool,
     }
 
     let body: PostsCreateBody = serde_json::from_slice(&body)?;
@@ -1083,8 +1086,8 @@ async fn route_unstable_posts_create(
         let poll_id = poll_data.as_ref().map(|(_, poll_id)| *poll_id);
 
         let res_row = trans.query_one(
-            "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved, poll_id, updated_local) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8, $9, current_timestamp) RETURNING id, created",
-            &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved, &poll_id],
+            "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved, poll_id, updated_local, sensitive) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8, $9, current_timestamp, $10) RETURNING id, created",
+            &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved, &poll_id, &body.sensitive],
         ).await?;
 
         let id = PostLocalID(res_row.get(0));
@@ -1106,6 +1109,7 @@ async fn route_unstable_posts_create(
         created,
         community: body.community,
         poll,
+        sensitive: body.sensitive,
     };
 
     crate::spawn_task(async move {
@@ -1155,7 +1159,7 @@ async fn route_unstable_posts_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.id, (NOT post.local AND (current_timestamp - post.updated_local) > '1 MINUTE' AND COALESCE(post.updated_local < poll.closed_at, TRUE)), COALESCE(poll.is_closed, poll.closed_at < current_timestamp, FALSE), poll.closed_at, post.rejected FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
+            "SELECT post.author, post.href, post.content_text, post.title, post.created, post.content_markdown, post.content_html, community.id, community.name, community.local, community.ap_id, person.username, person.local, person.ap_id, (SELECT COUNT(*) FROM post_like WHERE post_like.post = $1), post.approved, person.avatar, post.local, post.sticky, person.is_bot, post.ap_id, post.local, community.deleted, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, CASE WHEN post.local THEN (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id) ELSE COALESCE(remote_vote_count, 0) END) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.id, (NOT post.local AND (current_timestamp - post.updated_local) > '1 MINUTE' AND COALESCE(post.updated_local < poll.closed_at, TRUE)), COALESCE(poll.is_closed, poll.closed_at < current_timestamp, FALSE), poll.closed_at, post.rejected, post.sensitive FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.community = community.id AND post.id = $1",
             &[&post_id],
         )
         .map_err(crate::Error::from),
@@ -1377,6 +1381,7 @@ async fn route_unstable_posts_get(
                 remote_url,
                 replies_count_total: None,
                 score: row.get(14),
+                sensitive: row.get(30),
                 sticky: row.get(18),
                 your_vote,
             };
