@@ -59,11 +59,12 @@
 			},
 			"MinimalPostInfo": {
 				"type": "object",
-				"required": ["id", "title", "remote_url"],
+				"required": ["id", "title", "remote_url", "sensitive"],
 				"properties": {
 					"id": {"type": "integer"},
 					"title": {"type": "string"},
-					"remote_url": {"type": "string", "nullable": true}
+					"remote_url": {"type": "string", "nullable": true},
+					"sensitive": {"type": "boolean"}
 				}
 			},
 			"NullableMinimalPostInfo": {
@@ -73,7 +74,8 @@
 				"properties": {
 					"id": {"type": "integer"},
 					"title": {"type": "string"},
-					"remote_url": {"type": "string", "nullable": true}
+					"remote_url": {"type": "string", "nullable": true},
+					"sensitive": {"type": "boolean"}
 				}
 			},
 			"MinimalUserInfo": {
@@ -172,7 +174,7 @@
 			},
 			"SomePostInfo": {
 				"type": "object",
-				"required": ["id", "title", "created", "community", "score", "sticky", "remote_url", "content_text", "content_html", "content_markdown"],
+				"required": ["id", "title", "created", "community", "score", "sticky", "remote_url", "content_text", "content_html", "content_markdown", "sensitive"],
 				"properties": {
 					"id": {"type": "integer"},
 					"title": {"type": "string"},
@@ -206,7 +208,8 @@
 					"score": {"type": "integer"},
 					"sticky": {"type": "boolean"},
 					"your_vote": {"$ref": "#/components/schemas/YourVote"},
-					"content_markdown": {"type": "string", "nullable": true}
+					"content_markdown": {"type": "string", "nullable": true},
+					"sensitive": {"type": "boolean"}
 				}
 			},
 			"PostListPost": {
@@ -1135,7 +1138,7 @@
 							"application/json": {
 								"schema": {
 									"type": "object",
-									"required": ["software", "description", "web_push_vapid_key"],
+									"required": ["software", "description", "web_push_vapid_key", "signup_allowed"],
 									"properties": {
 										"software": {
 											"type": "object",
@@ -1150,6 +1153,9 @@
 										},
 										"web_push_vapid_key": {
 											"type": "string"
+										},
+										"signup_allowed": {
+											"type": "boolean"
 										}
 									}
 								}
@@ -1460,7 +1466,8 @@
 												"description": "How long until the poll should close, as an ISO8601 duration."
 											}
 										}
-									}
+									},
+									"sensitive": {"type": "boolean"}
 								}
 							}
 						}
@@ -1510,11 +1517,13 @@
 								"schema": {
 									"allOf": [{"$ref": "#/components/schemas/SomePostInfo"}],
 									"type": "object",
-									"required": ["approved", "local"],
+									"required": ["approved", "local", "rejected", "poll"],
 									"properties": {
 										"approved": {"type": "boolean"},
 										"local": {"type": "boolean"},
+										"rejected": {"type": "boolean"},
 										"poll": {
+											"nullable": true,
 											"type": "object",
 											"required": ["multiple", "options", "closed_at", "is_closed"],
 											"properties": {
