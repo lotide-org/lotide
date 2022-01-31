@@ -1056,7 +1056,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
-                Verified(obj.try_into()?),
+                Verified(obj.inner.try_into()?),
                 ctx,
             )
             .await?

@@ -42,6 +42,14 @@ impl<T: Clone, U: Clone> From<Verified<activitystreams_ext::Ext1<T, U>>> for Ver
     }
 }
 
+impl<T: Clone, U1: Clone, U2: Clone> From<Verified<activitystreams_ext::Ext2<T, U1, U2>>>
+    for Verified<T>
+{
+    fn from(src: Verified<activitystreams_ext::Ext2<T, U1, U2>>) -> Self {
+        Verified(src.0.inner)
+    }
+}
+
 pub struct Contained<'a, T: activitystreams::markers::Base + Clone>(pub Cow<'a, Verified<T>>);
 impl<'a, T: activitystreams::markers::Base + Clone> std::ops::Deref for Contained<'a, T> {
     type Target = Verified<T>;
@@ -98,7 +106,7 @@ pub enum KnownObject {
     Image(ExtendedPostlike<activitystreams::object::Image>),
     Page(ExtendedPostlike<activitystreams::object::Page>),
     Note(ExtendedPostlike<activitystreams::object::Note>),
-    Question(activitystreams::activity::Question),
+    Question(ExtendedPostlike<activitystreams::activity::Question>),
 }
 
 #[derive(Deserialize)]
@@ -139,7 +147,17 @@ pub struct TargetExtension {
     target: Option<activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>>,
 }
 
-pub type ExtendedPostlike<T> = activitystreams_ext::Ext1<T, TargetExtension>;
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct SensitiveExtension {
+    #[serde(default)]
+    sensitive: bool,
+}
+
+pub type ExtendedPostlike<T> = activitystreams_ext::Ext2<T, TargetExtension, SensitiveExtension>;
+
+pub fn make_extended_postlike<T>(src: T) -> ExtendedPostlike<T> {
+    ExtendedPostlike::new(src, Default::default(), Default::default())
+}
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -1276,10 +1294,8 @@ pub fn post_to_ap(
                 post_ap.set_closed(closed_at.clone());
             }
 
-            let mut post_ap = ExtendedPostlike::new(
-                activitystreams::object::ApObject::new(post_ap),
-                Default::default(),
-            );
+            let mut post_ap =
+                make_extended_postlike(activitystreams::object::ApObject::new(post_ap));
 
             apply_properties(
                 &mut post_ap,
@@ -1306,10 +1322,8 @@ pub fn post_to_ap(
                     .set_name(post.title)
                     .add_attachment(attachment.into_any_base()?);
 
-                let mut post_ap = ExtendedPostlike::new(
-                    activitystreams::object::ApObject::new(post_ap),
-                    Default::default(),
-                );
+                let mut post_ap =
+                    make_extended_postlike(activitystreams::object::ApObject::new(post_ap));
 
                 apply_properties(
                     &mut post_ap,
@@ -1331,10 +1345,8 @@ pub fn post_to_ap(
                     .set_summary(post.title)
                     .set_name(post.title);
 
-                let mut post_ap = ExtendedPostlike::new(
-                    activitystreams::object::ApObject::new(post_ap),
-                    Default::default(),
-                );
+                let mut post_ap =
+                    make_extended_postlike(activitystreams::object::ApObject::new(post_ap));
 
                 apply_properties(
                     &mut post_ap,
@@ -1355,10 +1367,8 @@ pub fn post_to_ap(
 
             post_ap.set_summary(post.title).set_name(post.title);
 
-            let mut post_ap = ExtendedPostlike::new(
-                activitystreams::object::ApObject::new(post_ap),
-                Default::default(),
-            );
+            let mut post_ap =
+                make_extended_postlike(activitystreams::object::ApObject::new(post_ap));
 
             apply_properties(
                 &mut post_ap,
