@@ -149,8 +149,7 @@ pub struct TargetExtension {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct SensitiveExtension {
-    #[serde(default)]
-    sensitive: bool,
+    sensitive: Option<bool>,
 }
 
 pub type ExtendedPostlike<T> = activitystreams_ext::Ext2<T, TargetExtension, SensitiveExtension>;

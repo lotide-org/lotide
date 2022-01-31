@@ -938,6 +938,8 @@ async fn route_unstable_posts_create(
         content_text: Option<String>,
         title: String,
         poll: Option<PollCreateInfo<'a>>,
+        #[serde(default)]
+        sensitive: bool,
     }
 
     let body: PostsCreateBody = serde_json::from_slice(&body)?;
@@ -1083,8 +1085,8 @@ async fn route_unstable_posts_create(
         let poll_id = poll_data.as_ref().map(|(_, poll_id)| *poll_id);
 
         let res_row = trans.query_one(
-            "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved, poll_id, updated_local) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8, $9, current_timestamp) RETURNING id, created",
-            &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved, &poll_id],
+            "INSERT INTO post (author, href, title, created, community, local, content_text, content_markdown, content_html, approved, poll_id, updated_local, sensitive) VALUES ($1, $2, $3, current_timestamp, $4, TRUE, $5, $6, $7, $8, $9, current_timestamp, $10) RETURNING id, created",
+            &[&user, &body.href, &body.title, &body.community, &content_text, &content_markdown, &content_html, &already_approved, &poll_id, &body.sensitive],
         ).await?;
 
         let id = PostLocalID(res_row.get(0));

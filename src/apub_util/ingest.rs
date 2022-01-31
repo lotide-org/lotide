@@ -1,4 +1,4 @@
-use super::{FollowLike, KnownObject, Verified};
+use super::{ExtendedPostlike, FollowLike, KnownObject, Verified};
 use crate::types::{
     CommentLocalID, CommunityLocalID, PollOptionLocalID, PostLocalID, ThingLocalRef, UserLocalID,
 };
@@ -1056,7 +1056,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
-                Verified(obj.inner.try_into()?),
+                Verified(try_transform_inner(obj)?),
                 ctx,
             )
             .await?
@@ -1144,6 +1144,7 @@ async fn ingest_postlike(
                             .as_ref()
                             .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
                             .map(|href| href.as_str());
+                        let sensitive = obj.ext_two.sensitive;
 
                         Ok(Some(IngestResult::Post(
                             handle_recieved_post(
@@ -1158,6 +1159,7 @@ async fn ingest_postlike(
                                 community_is_local,
                                 found_from.as_announce(),
                                 poll_info,
+                                sensitive,
                                 ctx,
                             )
                             .await?,
@@ -1506,7 +1508,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     community_is_local: bool,
     is_announce: Option<&url::Url>,
     poll_info: Option<PollIngestInfo>,
-    obj: Verified<activitystreams::object::Object<Kind>>,
+    obj: Verified<ExtendedPostlike<activitystreams::object::Object<Kind>>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<PostIngestResult>, crate::Error> {
     let title = obj
@@ -1535,6 +1537,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     let media_type = obj.media_type();
     let created = obj.published();
     let author = obj.attributed_to().and_then(|x| x.as_single_id());
+    let sensitive = obj.ext_two.sensitive;
 
     if let Some(object_id) = obj.id_unchecked() {
         if let Some(author) = author {
@@ -1554,6 +1557,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
                 community_is_local,
                 is_announce,
                 poll_info,
+                sensitive,
                 ctx,
             )
             .await?,
@@ -1575,6 +1579,7 @@ async fn handle_recieved_post(
     community_is_local: bool,
     is_announce: Option<&url::Url>,
     poll_info: Option<PollIngestInfo>,
+    sensitive: Option<bool>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<PostIngestResult, crate::Error> {
     let mut db = ctx.db_pool.get().await?;
@@ -1592,11 +1597,13 @@ async fn handle_recieved_post(
 
     let approved = is_announce.is_some() || community_is_local;
 
+    let sensitive = sensitive.unwrap_or(false);
+
     let (post_local_id, poll_output) = {
         let trans = db.transaction().await?;
         let row = trans.query_one(
-            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10, updated_local=current_timestamp RETURNING id, poll_id",
-            &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str())],
+            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp, $11) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10, updated_local=current_timestamp, sensitive=$11 RETURNING id, poll_id",
+            &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str()), &sensitive],
         ).await?;
         let post_local_id = PostLocalID(row.get(0));
         let existing_poll_id: Option<i64> = row.get(1);
@@ -1731,4 +1738,14 @@ async fn handle_recieved_post(
         id: post_local_id,
         poll,
     })
+}
+
+fn try_transform_inner<T: TryInto<U>, U>(
+    l: ExtendedPostlike<T>,
+) -> Result<ExtendedPostlike<U>, T::Error> {
+    Ok(ExtendedPostlike::new(
+        l.inner.try_into()?,
+        l.ext_one,
+        l.ext_two,
+    ))
 }
