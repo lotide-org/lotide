@@ -1,4 +1,4 @@
-use crate::{CommunityLocalID, PollOptionLocalID, PostLocalID, UserLocalID};
+use crate::types::{CommunityLocalID, PollLocalID, PollOptionLocalID, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -38,7 +38,7 @@ async fn handler_posts_get(
 
     match db
         .query_opt(
-            "SELECT post.author, post.href, post.title, post.created, post.community, post.local, post.deleted, post.had_href, post.content_text, post.content_markdown, post.content_html, community.ap_id, community.ap_outbox, community.local, community.ap_followers, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id)) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.closed_at FROM post INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.id=$1",
+            "SELECT post.author, post.href, post.title, post.created, post.community, post.local, post.deleted, post.had_href, post.content_text, post.content_markdown, post.content_html, community.ap_id, community.ap_outbox, community.local, community.ap_followers, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id)) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.closed_at, poll.id FROM post INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.id=$1",
             &[&post_id.raw()],
         )
         .await?
@@ -59,11 +59,12 @@ async fn handler_posts_get(
 
             if row.get(6) {
                 let had_href: Option<bool> = row.get(7);
+                let poll_id = row.get::<_, Option<_>>(18).map(PollLocalID);
 
                 let mut body = activitystreams::object::Tombstone::new();
                 body
                     .set_former_type(
-                        (if had_href == Some(true) { "Page" } else { "Note" }).to_owned()
+                        (if poll_id.is_some() { "Question" } else { if had_href == Some(true) { "Page" } else { "Note" } }).to_owned()
                     )
                     .set_context(activitystreams::context())
                     .set_id(crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into());
