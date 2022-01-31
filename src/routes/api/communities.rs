@@ -1012,7 +1012,7 @@ async fn route_unstable_communities_posts_patch(
             sql.push(',');
         }
         values.push(approved);
-        write!(sql, "approved=${}", values.len()).unwrap();
+        write!(sql, "approved=${0}, rejected=(NOT ${0})", values.len()).unwrap();
     }
     if let Some(sticky) = &body.sticky {
         if !any_changes {

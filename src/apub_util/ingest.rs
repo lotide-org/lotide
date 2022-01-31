@@ -158,7 +158,7 @@ pub async fn ingest_object(
                             if let Some(remaining) = remaining.strip_prefix("/posts/") {
                                 if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
                                     db.execute(
-                                        "UPDATE post SET approved=TRUE, approved_ap_id=$1 WHERE id=$2 AND community=$3",
+                                        "UPDATE post SET approved=TRUE, approved_ap_id=$1, rejected=FALSE, rejected_ap_id=NULL WHERE id=$2 AND community=$3",
                                         &[&activity_id.as_str(), &local_post_id, &community_local_id],
                                     ).await?;
                                 }
@@ -215,7 +215,7 @@ pub async fn ingest_object(
                         if let Some(remaining) = remaining.strip_prefix("/posts/") {
                             if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
                                 db.execute(
-                                    "UPDATE post SET approved=TRUE, approved_ap_id=$1 WHERE id=$2 AND community=$3",
+                                    "UPDATE post SET approved=TRUE, approved_ap_id=$1, rejected=FALSE, rejected_ap_id=NULL WHERE id=$2 AND community=$3",
                                     &[&activity_id.as_str(), &local_post_id, &community_local_id],
                                 ).await?;
                             }
@@ -601,13 +601,13 @@ pub async fn ingest_object(
                             if let Some(remaining) = remaining.strip_prefix("/posts/") {
                                 if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
                                     db.execute(
-                                        "UPDATE post SET approved=FALSE, approved_ap_id=NULL WHERE id=$1 AND community=$2",
-                                        &[&local_post_id, &community_local_id],
+                                        "UPDATE post SET approved=FALSE, approved_ap_id=NULL, rejected=TRUE, rejected_ap_id=$3 WHERE id=$1 AND community=$2",
+                                        &[&local_post_id, &community_local_id, &activity_id.as_str()],
                                     ).await?;
                                 }
                             }
                         } else {
-                            db.execute("UPDATE post SET approved=FALSE, approved_ap_id=NULL WHERE ap_id=$1", &[&object_id.as_str()])
+                            db.execute("UPDATE post SET approved=FALSE, approved_ap_id=NULL, rejected=TRUE, rejected_ap_id=$2 WHERE ap_id=$1", &[&object_id.as_str(), &activity_id.as_str()])
                                 .await?;
                         }
                     }
@@ -854,8 +854,8 @@ pub async fn ingest_undo(
     db.execute("DELETE FROM community_follow WHERE ap_id=$1", &[&object_id])
         .await?;
     db.execute(
-        "UPDATE post SET approved=FALSE, approved_ap_id=NULL WHERE approved_ap_id=$1",
-        &[&object_id],
+        "UPDATE post SET approved=FALSE, approved_ap_id=NULL, rejected=TRUE, rejected_ap_id=$2 WHERE approved_ap_id=$1",
+        &[&object_id, &activity_id.as_str()],
     )
     .await?;
 

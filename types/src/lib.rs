@@ -281,6 +281,7 @@ pub struct RespPostInfo<'a> {
     #[serde(flatten)]
     pub post: &'a RespPostListPost<'a>,
     pub approved: bool,
+    pub rejected: bool,
     pub local: bool,
     pub poll: Option<RespPollInfo<'a>>,
 }
