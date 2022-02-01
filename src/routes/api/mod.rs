@@ -715,6 +715,7 @@ async fn route_unstable_instance_patch(
         description_text: Option<Cow<'a, str>>,
         description_markdown: Option<Cow<'a, str>>,
         description_html: Option<Cow<'a, str>>,
+        signup_allowed: Option<bool>,
     }
 
     let lang = crate::get_lang_for_req(&req);
@@ -767,6 +768,11 @@ async fn route_unstable_instance_patch(
                 &[&description],
             )
             .await?;
+        }
+
+        if let Some(signup_allowed) = body.signup_allowed {
+            db.execute("UPDATE site SET signup_allowed=$1", &[&signup_allowed])
+                .await?;
         }
 
         Ok(crate::empty_response())

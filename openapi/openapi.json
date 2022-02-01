@@ -1175,7 +1175,8 @@
 								"properties": {
 									"description_text": {"type": "string"},
 									"description_markdown": {"type": "string"},
-									"description_html": {"type": "string"}
+									"description_html": {"type": "string"},
+									"signup_allowed": {"type": "boolean"}
 								}
 							}
 						}
