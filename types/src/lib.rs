@@ -231,6 +231,7 @@ pub struct RespPostListPost<'a> {
 pub struct RespMinimalCommentInfo<'a> {
     pub id: CommentLocalID,
     pub remote_url: Option<Cow<'a, str>>,
+    pub sensitive: bool,
     pub content_text: Option<Cow<'a, str>>,
     #[serde(rename = "content_html")]
     pub content_html_safe: Option<String>,

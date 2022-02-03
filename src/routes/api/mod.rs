@@ -967,7 +967,7 @@ async fn get_comments_replies<'a>(
 
     let limit_i = i64::from(limit) + 1;
 
-    let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown, person.is_bot, reply.ap_id, reply.local";
+    let sql1 = "SELECT result.* FROM UNNEST($1::BIGINT[]) JOIN LATERAL (SELECT reply.id, reply.author, reply.content_text, reply.created, reply.parent, reply.content_html, person.username, person.local, person.ap_id, reply.deleted, person.avatar, reply.attachment_href, reply.local, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), reply.content_markdown, person.is_bot, reply.ap_id, reply.local, reply.sensitive";
     let (sql2, mut values): (_, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) =
         if include_your_for.is_some() {
             (
@@ -1028,6 +1028,7 @@ async fn get_comments_replies<'a>(
             let parent = CommentLocalID(row.get(4));
             let ap_id: Option<String> = row.get(16);
             let local: bool = row.get(17);
+            let sensitive: bool = row.get(18);
 
             let remote_url = if local {
                 Some(String::from(crate::apub_util::get_local_comment_apub_id(
@@ -1079,6 +1080,7 @@ async fn get_comments_replies<'a>(
                         remote_url: remote_url.map(Cow::Owned),
                         content_text: content_text.map(From::from),
                         content_html_safe: content_html.map(|html| crate::clean_html(&html)),
+                        sensitive,
                     },
 
                     attachments: match ctx
@@ -1095,7 +1097,7 @@ async fn get_comments_replies<'a>(
                     replies: Some(RespList::empty()),
                     score: row.get(13),
                     your_vote: include_your_for.map(|_| {
-                        if row.get(18) {
+                        if row.get(19) {
                             Some(crate::types::Empty {})
                         } else {
                             None

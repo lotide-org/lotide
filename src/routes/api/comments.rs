@@ -35,7 +35,7 @@ async fn route_unstable_comments_get(
 
     let (row, your_vote) = futures::future::try_join(
         db.query_opt(
-            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id), reply.content_markdown, person.is_bot, post.ap_id, post.local, reply.ap_id, post.sensitive FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
+            "SELECT reply.author, reply.post, reply.content_text, reply.created, reply.local, reply.content_html, person.username, person.local, person.ap_id, post.title, reply.deleted, reply.parent, person.avatar, reply.attachment_href, (SELECT COUNT(*) FROM reply_like WHERE reply = reply.id), EXISTS(SELECT 1 FROM reply AS r2 WHERE r2.parent = reply.id), reply.content_markdown, person.is_bot, post.ap_id, post.local, reply.ap_id, post.sensitive, reply.sensitive FROM reply INNER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN person ON (reply.author = person.id) WHERE reply.id = $1",
             &[&comment_id],
         )
         .map_err(crate::Error::from),
@@ -142,6 +142,7 @@ async fn route_unstable_comments_get(
                         content_html_safe: row
                             .get::<_, Option<&str>>(5)
                             .map(|html| crate::clean_html(html)),
+                        sensitive: row.get(22),
                     },
 
                     attachments: match ctx.process_attachments_inner(
@@ -627,6 +628,7 @@ async fn route_unstable_comments_replies_create(
         content_text: Option<Cow<'a, str>>,
         content_markdown: Option<String>,
         attachment: Option<Cow<'a, str>>,
+        sensitive: Option<bool>,
     }
 
     let body = hyper::body::to_bytes(req.into_body()).await?;
@@ -655,9 +657,11 @@ async fn route_unstable_comments_replies_create(
         Some(row) => Ok(PostLocalID(row.get(0))),
     }?;
 
+    let sensitive = body.sensitive.unwrap_or(false);
+
     let row = db.query_one(
-        "INSERT INTO reply (post, parent, author, created, local, content_text, content_markdown, content_html, attachment_href) VALUES ($1, $2, $3, current_timestamp, TRUE, $4, $5, $6, $7) RETURNING id, created",
-        &[&post, &parent_id, &user, &content_text, &content_markdown, &content_html, &body.attachment],
+        "INSERT INTO reply (post, parent, author, created, local, content_text, content_markdown, content_html, attachment_href, sensitive) VALUES ($1, $2, $3, current_timestamp, TRUE, $4, $5, $6, $7, $8) RETURNING id, created",
+        &[&post, &parent_id, &user, &content_text, &content_markdown, &content_html, &body.attachment, &sensitive],
     ).await?;
 
     let reply_id = CommentLocalID(row.get(0));
@@ -674,6 +678,7 @@ async fn route_unstable_comments_replies_create(
         created,
         ap_id: crate::APIDOrLocal::Local,
         attachment_href: body.attachment,
+        sensitive,
     };
 
     crate::on_post_add_comment(info, ctx);

@@ -1093,6 +1093,8 @@ async fn ingest_postlike(
                     .map(|href| href.as_str());
 
                 if let Some(object_id) = obj.id_unchecked() {
+                    let sensitive = obj.ext_two.sensitive;
+
                     if let Some(in_reply_to) = obj.in_reply_to() {
                         // it's a reply
 
@@ -1104,6 +1106,7 @@ async fn ingest_postlike(
                             author,
                             in_reply_to,
                             attachment_href,
+                            sensitive,
                             ctx,
                         )
                         .await?
@@ -1213,6 +1216,7 @@ async fn ingest_postlike(
                         .as_ref()
                         .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
                         .map(|href| href.as_str());
+                    let sensitive = obj.ext_two.sensitive;
 
                     let id = handle_recieved_reply(
                         obj_id,
@@ -1222,6 +1226,7 @@ async fn ingest_postlike(
                         author,
                         in_reply_to,
                         attachment_href,
+                        sensitive,
                         ctx,
                     )
                     .await?;
@@ -1378,6 +1383,7 @@ async fn handle_recieved_reply(
     author: Option<&url::Url>,
     in_reply_to: &activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>,
     attachment_href: Option<&str>,
+    sensitive: Option<bool>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<CommentLocalID>, crate::Error> {
     let db = ctx.db_pool.get().await?;
@@ -1454,9 +1460,11 @@ async fn handle_recieved_reply(
                     (Some(content), None)
                 };
 
+                let sensitive = sensitive.unwrap_or(false);
+
                 let row = db.query_opt(
-                    "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id, attachment_href) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7, $8) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
-                    &[&post, &parent, &author, &content_text, &content_html, &created, &object_id.as_str(), &attachment_href],
+                    "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id, attachment_href, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7, $8, $9) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
+                    &[&post, &parent, &author, &content_text, &content_html, &created, &object_id.as_str(), &attachment_href, &sensitive],
                     ).await?;
 
                 if let Some(row) = row {
@@ -1475,6 +1483,7 @@ async fn handle_recieved_reply(
                         }),
                         ap_id: crate::APIDOrLocal::APID(object_id.to_owned()),
                         attachment_href: attachment_href.map(|x| Cow::Owned(x.to_owned())),
+                        sensitive,
                     };
 
                     crate::on_post_add_comment(info, ctx);

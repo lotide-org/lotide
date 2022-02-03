@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE reply DROP COLUMN sensitive;
+COMMIT;

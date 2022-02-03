@@ -1428,7 +1428,13 @@ pub fn local_comment_to_ap(
     parent_or_post_author_ap_id: Option<url::Url>,
     community_ap_id: url::Url,
     ctx: &crate::BaseContext,
-) -> Result<activitystreams::object::ApObject<activitystreams::object::Note>, crate::Error> {
+) -> Result<
+    activitystreams_ext::Ext1<
+        activitystreams::object::ApObject<activitystreams::object::Note>,
+        SensitiveExtension,
+    >,
+    crate::Error,
+> {
     let mut obj = activitystreams::object::Note::new();
 
     obj.set_context(activitystreams::context())
@@ -1476,7 +1482,12 @@ pub fn local_comment_to_ap(
             .set_cc(activitystreams::public());
     }
 
-    Ok(obj)
+    Ok(activitystreams_ext::Ext1::new(
+        obj,
+        SensitiveExtension {
+            sensitive: Some(comment.sensitive),
+        },
+    ))
 }
 
 pub fn spawn_enqueue_send_local_post_to_community(
@@ -1611,7 +1622,7 @@ pub fn local_comment_to_create_ap(
 
     let mut create = activitystreams::activity::Create::new(
         get_local_person_apub_id(author, &ctx.host_url_apub),
-        comment_ap.into_any_base()?,
+        activitystreams::base::AnyBase::from_arbitrary_json(comment_ap)?,
     );
     create.set_context(activitystreams::context()).set_id({
         let mut res = get_local_comment_apub_id(comment.id, &ctx.host_url_apub);

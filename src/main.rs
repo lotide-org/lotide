@@ -438,6 +438,7 @@ pub struct CommentInfo<'a> {
     created: chrono::DateTime<chrono::FixedOffset>,
     ap_id: APIDOrLocal,
     attachment_href: Option<Cow<'a, str>>,
+    sensitive: bool,
 }
 
 pub const KEY_BITS: u32 = 2048;
