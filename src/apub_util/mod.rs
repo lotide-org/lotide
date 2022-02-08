@@ -225,43 +225,13 @@ pub fn try_strip_host<'a>(url: &'a impl AsRef<str>, host_url: &url::Url) -> Opti
     url.strip_prefix(host_url)
 }
 
-pub fn get_local_shared_inbox(host_url_apub: &BaseURL) -> BaseURL {
-    let mut res = host_url_apub.clone();
-    res.path_segments_mut().push("inbox");
-    res
-}
-
-pub fn get_local_post_apub_id(post: PostLocalID, host_url_apub: &BaseURL) -> BaseURL {
-    let mut res = host_url_apub.clone();
-    res.path_segments_mut()
-        .extend(&["posts", &post.to_string()]);
-    res
-}
-
-pub fn get_local_post_like_apub_id(
-    post_local_id: PostLocalID,
-    user: UserLocalID,
-    host_url_apub: &BaseURL,
-) -> BaseURL {
-    let mut res = crate::apub_util::get_local_post_apub_id(post_local_id, host_url_apub);
-    res.path_segments_mut()
-        .extend(&["likes", &user.to_string()]);
-    res
-}
-
-pub fn get_local_comment_apub_id(comment: CommentLocalID, host_url_apub: &BaseURL) -> BaseURL {
-    let mut res = host_url_apub.clone();
-    res.path_segments_mut()
-        .extend(&["comments", &comment.to_string()]);
-    res
-}
-
 pub fn get_local_comment_like_apub_id(
     comment_local_id: CommentLocalID,
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> BaseURL {
-    let mut res = crate::apub_util::get_local_comment_apub_id(comment_local_id, host_url_apub);
+    let mut res =
+        crate::apub_util::LocalObjectRef::Comment(comment_local_id).to_local_uri(host_url_apub);
     res.path_segments_mut()
         .extend(&["likes", &user.to_string()]);
     res
@@ -1221,7 +1191,11 @@ pub fn post_to_ap(
         ctx: &crate::BaseContext,
     ) -> Result<(), crate::Error> {
         props
-            .set_id(get_local_post_apub_id(post.id, &ctx.host_url_apub).into())
+            .set_id(
+                LocalObjectRef::Post(post.id)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into(),
+            )
             .set_context(activitystreams::context())
             .set_attributed_to(get_local_person_apub_id(
                 post.author.unwrap(),
@@ -1407,7 +1381,7 @@ pub fn local_post_to_create_ap(
         post_ap,
     );
     create.set_context(activitystreams::context()).set_id({
-        let mut res = get_local_post_apub_id(post.id, &ctx.host_url_apub);
+        let mut res = LocalObjectRef::Post(post.id).to_local_uri(&ctx.host_url_apub);
         res.path_segments_mut().push("create");
         res.into()
     });
@@ -1438,7 +1412,11 @@ pub fn local_comment_to_ap(
     let mut obj = activitystreams::object::Note::new();
 
     obj.set_context(activitystreams::context())
-        .set_id(get_local_comment_apub_id(comment.id, &ctx.host_url_apub).into())
+        .set_id(
+            LocalObjectRef::Comment(comment.id)
+                .to_local_uri(&ctx.host_url_apub)
+                .into(),
+        )
         .set_attributed_to(url::Url::from(get_local_person_apub_id(
             comment.author.unwrap(),
             &ctx.host_url_apub,
@@ -1566,7 +1544,7 @@ pub fn local_post_delete_to_ap(
     author: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Delete, crate::Error> {
-    let post_ap_id = get_local_post_apub_id(post_id, host_url_apub);
+    let post_ap_id = LocalObjectRef::Post(post_id).to_local_uri(host_url_apub);
     let mut delete = activitystreams::activity::Delete::new(
         get_local_person_apub_id(author, host_url_apub),
         post_ap_id.clone(),
@@ -1585,7 +1563,7 @@ pub fn local_comment_delete_to_ap(
     author: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Delete, crate::Error> {
-    let comment_ap_id = get_local_comment_apub_id(comment_id, host_url_apub);
+    let comment_ap_id = LocalObjectRef::Comment(comment_id).to_local_uri(host_url_apub);
 
     let mut delete = activitystreams::activity::Delete::new(
         get_local_person_apub_id(author, host_url_apub),
@@ -1625,7 +1603,7 @@ pub fn local_comment_to_create_ap(
         activitystreams::base::AnyBase::from_arbitrary_json(comment_ap)?,
     );
     create.set_context(activitystreams::context()).set_id({
-        let mut res = get_local_comment_apub_id(comment.id, &ctx.host_url_apub);
+        let mut res = LocalObjectRef::Comment(comment.id).to_local_uri(&ctx.host_url_apub);
         res.path_segments_mut().push("create");
         res.into()
     });
@@ -1689,8 +1667,11 @@ pub fn local_post_like_to_ap(
         crate::apub_util::get_local_person_apub_id(user, host_url_apub),
         post_ap_id,
     );
-    like.set_context(activitystreams::context())
-        .set_id(get_local_post_like_apub_id(post_local_id, user, host_url_apub).into());
+    like.set_context(activitystreams::context()).set_id(
+        LocalObjectRef::PostLike(post_local_id, user)
+            .to_local_uri(host_url_apub)
+            .into(),
+    );
 
     Ok(like)
 }
@@ -1701,7 +1682,7 @@ pub fn local_post_like_undo_to_ap(
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
-    let like_ap_id = get_local_post_like_apub_id(post_local_id, user, host_url_apub);
+    let like_ap_id = LocalObjectRef::PostLike(post_local_id, user).to_local_uri(host_url_apub);
 
     let mut undo = activitystreams::activity::Undo::new(
         get_local_person_apub_id(user, host_url_apub),
@@ -2020,6 +2001,13 @@ lazy_static::lazy_static! {
     static ref LOCAL_REF_ROUTES: RefRouteNode<()> = {
         RefRouteNode::new()
             .with_child(
+                "comments",
+                RefRouteNode::new()
+                    .with_child_parse::<CommentLocalID, _>(
+                        RefRouteNode::new().with_handler((), |(comment,), _, _| LocalObjectRef::Comment(comment))
+                    )
+            )
+            .with_child(
                 "communities",
                 RefRouteNode::new()
                     .with_child_parse::<CommunityLocalID, _>(
@@ -2045,24 +2033,29 @@ lazy_static::lazy_static! {
                             )
                     )
             )
+            .with_child("inbox", RefRouteNode::new().with_handler((), |_, _, _| LocalObjectRef::SharedInbox))
             .with_child(
                 "posts",
                 RefRouteNode::new()
                     .with_child_parse::<PostLocalID, _>(
                         RefRouteNode::new()
                             .with_handler((), |(post,), _, _| LocalObjectRef::Post(post))
+                            .with_child("likes", RefRouteNode::new().with_child_parse::<UserLocalID, _>(RefRouteNode::new().with_handler((), |(post, user), _, _| LocalObjectRef::PostLike(post, user))))
                     )
             )
     };
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum LocalObjectRef {
+    Comment(CommentLocalID),
     Community(CommunityLocalID),
     CommunityFollow(CommunityLocalID, UserLocalID),
     CommunityFollowJoin(CommunityLocalID, UserLocalID),
     CommunityOutbox(CommunityLocalID),
     Post(PostLocalID),
+    PostLike(PostLocalID, UserLocalID),
+    SharedInbox,
 }
 
 impl LocalObjectRef {
@@ -2083,6 +2076,58 @@ impl LocalObjectRef {
             LocalObjectRef::try_from_path(remaining)
         } else {
             None
+        }
+    }
+
+    pub fn to_local_uri(self, host_url_apub: &BaseURL) -> BaseURL {
+        match self {
+            LocalObjectRef::Comment(comment) => {
+                let mut res = host_url_apub.clone();
+                res.path_segments_mut()
+                    .extend(&["comments", &comment.to_string()]);
+                res
+            }
+            LocalObjectRef::Community(community) => {
+                let mut res = host_url_apub.clone();
+                res.path_segments_mut()
+                    .extend(&["communities", &community.to_string()]);
+                res
+            }
+            LocalObjectRef::CommunityFollow(community, follower) => {
+                let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
+                res.path_segments_mut()
+                    .extend(&["followers", &follower.to_string()]);
+                res
+            }
+            LocalObjectRef::CommunityFollowJoin(community, follower) => {
+                let mut res = LocalObjectRef::CommunityFollow(community, follower)
+                    .to_local_uri(host_url_apub);
+                res.path_segments_mut().push("join");
+                res
+            }
+            LocalObjectRef::CommunityOutbox(community) => {
+                let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
+                res.path_segments_mut().push("outbox");
+                res
+            }
+            LocalObjectRef::Post(post) => {
+                let mut res = host_url_apub.clone();
+                res.path_segments_mut()
+                    .extend(&["posts", &post.to_string()]);
+                res
+            }
+            LocalObjectRef::PostLike(post, user) => {
+                let mut res =
+                    crate::apub_util::LocalObjectRef::Post(post).to_local_uri(host_url_apub);
+                res.path_segments_mut()
+                    .extend(&["likes", &user.to_string()]);
+                res
+            }
+            LocalObjectRef::SharedInbox => {
+                let mut res = host_url_apub.clone();
+                res.path_segments_mut().push("inbox");
+                res
+            }
         }
     }
 }

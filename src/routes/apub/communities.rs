@@ -299,7 +299,7 @@ async fn handler_communities_comments_announce_get(
 
             let comment_local_id = CommentLocalID(row.get(0));
             let comment_ap_id = if row.get(1) {
-                crate::apub_util::get_local_comment_apub_id(comment_local_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Comment(comment_local_id).to_local_uri(&ctx.host_url_apub)
             } else {
                 std::str::FromStr::from_str(row.get(2))?
             };
@@ -385,11 +385,11 @@ async fn handler_communities_featured_list(
             use std::str::FromStr;
 
             if row.get(1) {
-                Ok(crate::apub_util::get_local_post_apub_id(
-                    PostLocalID(row.get(0)),
-                    &ctx.host_url_apub,
+                Ok(
+                    crate::apub_util::LocalObjectRef::Post(PostLocalID(row.get(0)))
+                        .to_local_uri(&ctx.host_url_apub)
+                        .into(),
                 )
-                .into())
             } else {
                 url::Url::from_str(row.get(2))
             }
@@ -710,7 +710,7 @@ async fn handler_communities_outbox_page_get(
         .map(|row| {
             let post_id = PostLocalID(row.get(0));
             let post_ap_id = if row.get(1) {
-                crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Post(post_id).to_local_uri(&ctx.host_url_apub)
             } else {
                 std::str::FromStr::from_str(row.get(2))?
             };
@@ -789,7 +789,7 @@ async fn handler_communities_posts_announce_get(
                 Some(true) => {
                     let post_local_id = PostLocalID(row.get(0));
                     let post_ap_id = if row.get(1) {
-                        crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
+                        crate::apub_util::LocalObjectRef::Post(post_local_id).to_local_uri(&ctx.host_url_apub)
                     } else {
                         std::str::FromStr::from_str(row.get(2))?
                     };
@@ -833,7 +833,7 @@ async fn handler_communities_posts_announce_undos_get(
             let community_local = row.get(2);
             if community_local {
                 let post_ap_id = if row.get(0) {
-                    crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into()
+                    crate::apub_util::LocalObjectRef::Post(post_id).to_local_uri(&ctx.host_url_apub).into()
                 } else {
                     std::str::FromStr::from_str(row.get(1))?
                 };
@@ -885,7 +885,7 @@ async fn handler_communities_posts_add_get(
                 Some(true) => {
                     let post_local_id = PostLocalID(row.get(0));
                     let post_ap_id = if row.get(1) {
-                        crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
+                        crate::apub_util::LocalObjectRef::Post(post_local_id).to_local_uri(&ctx.host_url_apub)
                     } else {
                         std::str::FromStr::from_str(row.get(2))?
                     };
@@ -929,7 +929,7 @@ async fn handler_communities_posts_add_undos_get(
             let community_local = row.get(2);
             if community_local {
                 let post_ap_id = if row.get(0) {
-                    crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into()
+                    crate::apub_util::LocalObjectRef::Post(post_id).to_local_uri(&ctx.host_url_apub).into()
                 } else {
                     std::str::FromStr::from_str(row.get(1))?
                 };

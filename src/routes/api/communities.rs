@@ -996,7 +996,9 @@ async fn route_unstable_communities_posts_patch(
     let old_sticky: bool = old_row.get(4);
 
     let post_ap_id = if old_row.get(2) {
-        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into()
+        crate::apub_util::LocalObjectRef::Post(post_id)
+            .to_local_uri(&ctx.host_url_apub)
+            .into()
     } else {
         std::str::FromStr::from_str(old_row.get(3))?
     };

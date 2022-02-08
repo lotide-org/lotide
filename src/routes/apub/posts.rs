@@ -67,7 +67,7 @@ async fn handler_posts_get(
                         (if poll_id.is_some() { "Question" } else { if had_href == Some(true) { "Page" } else { "Note" } }).to_owned()
                     )
                     .set_context(activitystreams::context())
-                    .set_id(crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into());
+                    .set_id(crate::apub_util::LocalObjectRef::Post(post_id).to_local_uri(&ctx.host_url_apub).into());
 
                 let body = serde_json::to_vec(&body)?.into();
 
@@ -386,7 +386,7 @@ async fn handler_posts_likes_get(
                 .await?;
             let post_local = row.get(0);
             let post_ap_id = if post_local {
-                crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Post(post_id).to_local_uri(&ctx.host_url_apub)
             } else {
                 std::str::FromStr::from_str(row.get(1))?
             };

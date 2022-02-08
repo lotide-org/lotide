@@ -1031,10 +1031,9 @@ async fn get_comments_replies<'a>(
             let sensitive: bool = row.get(18);
 
             let remote_url = if local {
-                Some(String::from(crate::apub_util::get_local_comment_apub_id(
-                    id,
-                    &ctx.host_url_apub,
-                )))
+                Some(String::from(
+                    crate::apub_util::LocalObjectRef::Comment(id).to_local_uri(&ctx.host_url_apub),
+                ))
             } else {
                 ap_id
             };

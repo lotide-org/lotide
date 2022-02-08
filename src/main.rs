@@ -757,7 +757,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                         let author_local_id = row.get::<_, Option<_>>(2).map(UserLocalID);
 
                         if row.get(0) {
-                            Ok(Some((crate::apub_util::get_local_comment_apub_id(parent, &ctx.host_url_apub), Some(crate::apub_util::get_local_person_apub_id(author_local_id.unwrap(), &ctx.host_url_apub)), true, author_local_id, None)))
+                            Ok(Some((crate::apub_util::LocalObjectRef::Comment(parent).to_local_uri(&ctx.host_url_apub), Some(crate::apub_util::get_local_person_apub_id(author_local_id.unwrap(), &ctx.host_url_apub)), true, author_local_id, None)))
                         } else {
                             let author_ap_inbox: Option<url::Url> = row.get::<_, Option<_>>(4).map(|x: &str| std::str::FromStr::from_str(x)).transpose()?;
                             row.get::<_, Option<&str>>(1).map(|x: &str| -> Result<(BaseURL, Option<BaseURL>, bool, Option<UserLocalID>, Option<url::Url>), crate::Error> { Ok((x.parse()?, row.get::<_, Option<&str>>(3).map(std::str::FromStr::from_str).transpose()?, false, author_local_id, author_ap_inbox)) }).transpose()
@@ -773,10 +773,10 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
             let post_local: bool = post_row.get(4);
 
             let post_ap_id = if post_local {
-                Some(crate::apub_util::get_local_post_apub_id(
-                    comment.post,
-                    &ctx.host_url_apub,
-                ))
+                Some(
+                    crate::apub_util::LocalObjectRef::Post(comment.post)
+                        .to_local_uri(&ctx.host_url_apub),
+                )
             } else {
                 post_row
                     .get::<_, Option<&str>>(5)
@@ -786,10 +786,9 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
 
             let comment_ap_id = match &comment.ap_id {
                 crate::APIDOrLocal::APID(apid) => apid.clone(),
-                crate::APIDOrLocal::Local => {
-                    crate::apub_util::get_local_comment_apub_id(comment.id, &ctx.host_url_apub)
-                        .into()
-                }
+                crate::APIDOrLocal::Local => crate::apub_util::LocalObjectRef::Comment(comment.id)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into(),
             };
 
             let (

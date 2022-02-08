@@ -163,7 +163,7 @@ async fn handler_users_get(
 
                 let endpoints = activitystreams::actor::Endpoints {
                     shared_inbox: Some(
-                        crate::apub_util::get_local_shared_inbox(&ctx.host_url_apub).into(),
+                        crate::apub_util::LocalObjectRef::SharedInbox.to_local_uri(&ctx.host_url_apub).into(),
                     ),
                     ..Default::default()
                 };
@@ -411,13 +411,16 @@ async fn handler_users_outbox_page_get(
                 let res = crate::apub_util::local_comment_to_create_ap(
                     &comment_info,
                     &(if row.get(9) {
-                        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into()
+                        crate::apub_util::LocalObjectRef::Post(post_id)
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into()
                     } else {
                         std::str::FromStr::from_str(row.get(10))?
                     }),
                     match row.get(12) {
                         Some(true) => Some(
-                            crate::apub_util::get_local_comment_apub_id(id, &ctx.host_url_apub)
+                            crate::apub_util::LocalObjectRef::Comment(id)
+                                .to_local_uri(&ctx.host_url_apub)
                                 .into(),
                         ),
                         Some(false) => Some(std::str::FromStr::from_str(row.get(7))?),
@@ -511,7 +514,7 @@ async fn handler_comments_get(
                 body
                     .set_former_type("Note".to_owned())
                     .set_context(activitystreams::context())
-                    .set_id(crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub).into());
+                    .set_id(crate::apub_util::LocalObjectRef::Comment(comment_id).to_local_uri(&ctx.host_url_apub).into());
 
                 let body = serde_json::to_vec(&body)?.into();
 
@@ -536,7 +539,7 @@ async fn handler_comments_get(
             };
 
             let post_ap_id = if row.get(6) {
-                crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Post(post_local_id).to_local_uri(&ctx.host_url_apub)
             } else {
                 std::str::FromStr::from_str(row.get(7))?
             };
@@ -565,7 +568,7 @@ async fn handler_comments_get(
 
             let parent_ap_id = match row.get(11) {
                 None => None,
-                Some(true) => Some(crate::apub_util::get_local_comment_apub_id(parent_local_id.unwrap(), &ctx.host_url_apub)),
+                Some(true) => Some(crate::apub_util::LocalObjectRef::Comment(parent_local_id.unwrap()).to_local_uri(&ctx.host_url_apub)),
                 Some(false) => row.get::<_, Option<&str>>(12).map(|x| x.parse()).transpose()?,
             };
 
@@ -659,7 +662,7 @@ async fn handler_comments_create_get(
             };
 
             let post_ap_id = if row.get(6) {
-                crate::apub_util::get_local_post_apub_id(post_local_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Post(post_local_id).to_local_uri(&ctx.host_url_apub)
             } else {
                 std::str::FromStr::from_str(row.get(7))?
             };
@@ -688,7 +691,7 @@ async fn handler_comments_create_get(
 
             let parent_ap_id = match row.get(11) {
                 None => None,
-                Some(true) => Some(crate::apub_util::get_local_comment_apub_id(parent_local_id.unwrap(), &ctx.host_url_apub)),
+                Some(true) => Some(crate::apub_util::LocalObjectRef::Comment(parent_local_id.unwrap()).to_local_uri(&ctx.host_url_apub)),
                 Some(false) => row.get::<_, Option<&str>>(12).map(std::str::FromStr::from_str).transpose()?,
             };
 
@@ -816,7 +819,8 @@ async fn handler_comments_likes_get(
                 .await?;
             let comment_local = row.get(0);
             let comment_ap_id = if comment_local {
-                crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Comment(comment_id)
+                    .to_local_uri(&ctx.host_url_apub)
             } else {
                 std::str::FromStr::from_str(row.get(1))?
             };

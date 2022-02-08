@@ -283,10 +283,8 @@ impl TaskDef for SendNotification {
                     let post_title: Option<&str> = row.get(6);
                     if let Some(post_title) = post_title {
                         Some(build_content(NotificationSendInfo::PostReply {
-                            href: crate::apub_util::get_local_comment_apub_id(
-                                id,
-                                &ctx.host_url_apub,
-                            ),
+                            href: crate::apub_util::LocalObjectRef::Comment(id)
+                                .to_local_uri(&ctx.host_url_apub),
                             reply_content: content,
                             post_title: post_title,
                         }))
@@ -309,10 +307,8 @@ impl TaskDef for SendNotification {
                     let post_title: Option<&str> = row.get(6);
                     if let Some(post_title) = post_title {
                         Some(build_content(NotificationSendInfo::ReplyReply {
-                            href: crate::apub_util::get_local_comment_apub_id(
-                                id,
-                                &ctx.host_url_apub,
-                            ),
+                            href: crate::apub_util::LocalObjectRef::Comment(id)
+                                .to_local_uri(&ctx.host_url_apub),
                             reply_content: content,
                             post_title: post_title,
                         }))

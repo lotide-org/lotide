@@ -85,10 +85,9 @@ async fn get_post_comments<'a>(
             let sensitive: bool = row.get(17);
 
             let remote_url = if local {
-                Some(String::from(crate::apub_util::get_local_comment_apub_id(
-                    id,
-                    &ctx.host_url_apub,
-                )))
+                Some(String::from(
+                    crate::apub_util::LocalObjectRef::Comment(id).to_local_uri(&ctx.host_url_apub),
+                ))
             } else {
                 ap_id
             };
@@ -464,7 +463,7 @@ async fn route_unstable_posts_list(
 
             let remote_url = if local {
                 Some(Cow::Owned(String::from(
-                    crate::apub_util::get_local_post_apub_id(id, &ctx.host_url_apub),
+                    crate::apub_util::LocalObjectRef::Post(id).to_local_uri(&ctx.host_url_apub),
                 )))
             } else {
                 ap_id.map(Cow::Borrowed)
@@ -634,10 +633,7 @@ async fn route_unstable_posts_flags_create(
         let post_local = post_row.get(0);
 
         let post_ap_id = if post_local {
-            Some(crate::apub_util::get_local_post_apub_id(
-                post_id,
-                &ctx.host_url_apub,
-            ))
+            Some(crate::apub_util::LocalObjectRef::Post(post_id).to_local_uri(&ctx.host_url_apub))
         } else {
             post_row
                 .get::<_, Option<&str>>(1)
@@ -1119,7 +1115,9 @@ async fn route_unstable_posts_create(
             crate::on_local_community_add_post(
                 post.community,
                 post.id,
-                crate::apub_util::get_local_post_apub_id(post.id, &ctx.host_url_apub).into(),
+                crate::apub_util::LocalObjectRef::Post(post.id)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into(),
                 ctx,
             );
         } else {
@@ -1200,7 +1198,8 @@ async fn route_unstable_posts_get(
 
             let remote_url = if local {
                 Some(Cow::Owned(String::from(
-                    crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                    crate::apub_util::LocalObjectRef::Post(post_id)
+                        .to_local_uri(&ctx.host_url_apub),
                 )))
             } else {
                 ap_id.map(Cow::Borrowed)
@@ -1506,7 +1505,7 @@ async fn route_unstable_posts_like(
             if let Some(row) = row {
                 let post_local = row.get(0);
                 let post_ap_id = if post_local {
-                    crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub)
+                    crate::apub_util::LocalObjectRef::Post(post_id).to_local_uri(&ctx.host_url_apub)
                 } else {
                     row.get::<_, &str>(1).parse()?
                 };
