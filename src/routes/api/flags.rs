@@ -110,10 +110,8 @@ async fn route_unstable_flags_list(
                             ),
                             remote_url: if author_local {
                                 Some(Cow::Owned(String::from(
-                                    crate::apub_util::get_local_person_apub_id(
-                                        author_id,
-                                        &ctx.host_url_apub,
-                                    ),
+                                    crate::apub_util::LocalObjectRef::User(author_id)
+                                        .to_local_uri(&ctx.host_url_apub),
                                 )))
                             } else {
                                 author_ap_id.map(Cow::Borrowed)
@@ -208,10 +206,8 @@ async fn route_unstable_flags_list(
                         ),
                         remote_url: if flagger_local {
                             Some(Cow::Owned(String::from(
-                                crate::apub_util::get_local_person_apub_id(
-                                    flagger_id,
-                                    &ctx.host_url_apub,
-                                ),
+                                crate::apub_util::LocalObjectRef::User(flagger_id)
+                                    .to_local_uri(&ctx.host_url_apub),
                             )))
                         } else {
                             flagger_ap_id.map(Cow::Borrowed)

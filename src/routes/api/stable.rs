@@ -163,11 +163,9 @@ async fn route_stable_communities_feed_get(
             let author_username = row.get(9);
             let author_ap_id = if row.get(10) {
                 Some(
-                    crate::apub_util::get_local_person_apub_id(
-                        UserLocalID(row.get(1)),
-                        &ctx.host_url_apub,
-                    )
-                    .to_string(),
+                    crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(1)))
+                        .to_local_uri(&ctx.host_url_apub)
+                        .to_string(),
                 )
             } else {
                 row.get(11)

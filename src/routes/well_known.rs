@@ -119,7 +119,7 @@ async fn handler_webfinger_get(
             let subject = format!("acct:{}@{}", name, ctx.local_hostname);
             let alias = match actor_ref {
                 ActorLocalRef::Person(id) => {
-                    crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub)
+                    crate::apub_util::LocalObjectRef::User(id).to_local_uri(&ctx.host_url_apub)
                 }
                 ActorLocalRef::Community(id) => {
                     crate::apub_util::get_local_community_apub_id(id, &ctx.host_url_apub)

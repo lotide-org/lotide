@@ -1046,10 +1046,10 @@ async fn get_comments_replies<'a>(
                 let author_avatar: Option<&str> = row.get(10);
 
                 let author_remote_url = if author_local {
-                    Some(String::from(crate::apub_util::get_local_person_apub_id(
-                        author_id,
-                        &ctx.host_url_apub,
-                    )))
+                    Some(String::from(
+                        crate::apub_util::LocalObjectRef::User(author_id)
+                            .to_local_uri(&ctx.host_url_apub),
+                    ))
                 } else {
                     author_ap_id.map(ToOwned::to_owned)
                 };

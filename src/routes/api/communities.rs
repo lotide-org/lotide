@@ -735,7 +735,7 @@ async fn route_unstable_communities_moderators_list(
 
             let remote_url = if local {
                 Some(Cow::Owned(String::from(
-                    crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub),
+                    crate::apub_util::LocalObjectRef::User(id).to_local_uri(&ctx.host_url_apub),
                 )))
             } else {
                 ap_id.map(Cow::Borrowed)

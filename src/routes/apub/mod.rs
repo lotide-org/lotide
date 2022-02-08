@@ -141,7 +141,7 @@ async fn handler_users_get(
 
             fn format_user<T, K: serde::Serialize + activitystreams::base::AsBase<T> + activitystreams::object::AsObject<T> + activitystreams::markers::Actor>(mut info: K, user_id: UserLocalID, ctx: &crate::RouteContext, username: String, description: Option<String>, avatar: Option<&str>, public_key: Option<&str>) -> Result<Vec<u8>, crate::Error> {
                 let user_ap_id =
-                    crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
+                    crate::apub_util::LocalObjectRef::User(user_id).to_local_uri(&ctx.host_url_apub);
 
                 info.set_many_contexts(vec![
                     activitystreams::context(),
@@ -428,11 +428,9 @@ async fn handler_users_outbox_page_get(
                     },
                     match row.get(14) {
                         Some(true) => Some(
-                            crate::apub_util::get_local_person_apub_id(
-                                UserLocalID(row.get(13)),
-                                &ctx.host_url_apub,
-                            )
-                            .into(),
+                            crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(13)))
+                                .to_local_uri(&ctx.host_url_apub)
+                                .into(),
                         ),
                         Some(false) => Some(std::str::FromStr::from_str(row.get(5))?),
                         None => None,
@@ -578,7 +576,7 @@ async fn handler_comments_get(
                     match row.get(14) {
                         Some(post_author_local) => {
                             if post_author_local {
-                                Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(13)), &ctx.host_url_apub))
+                                Some(crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(13))).to_local_uri(&ctx.host_url_apub))
                             } else {
                                 Some(std::str::FromStr::from_str(row.get(15))?)
                             }
@@ -590,7 +588,7 @@ async fn handler_comments_get(
                     match row.get(17) {
                         Some(parent_author_local) => {
                             if parent_author_local {
-                                Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(16)), &ctx.host_url_apub))
+                                Some(crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(16))).to_local_uri(&ctx.host_url_apub))
                             } else {
                                 Some(std::str::FromStr::from_str(row.get(18))?)
                             }
@@ -701,7 +699,7 @@ async fn handler_comments_create_get(
                     match row.get(14) {
                         Some(post_author_local) => {
                             if post_author_local {
-                                Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(13)), &ctx.host_url_apub))
+                                Some(crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(13))).to_local_uri(&ctx.host_url_apub))
                             } else {
                                 Some(std::str::FromStr::from_str(row.get(15))?)
                             }
@@ -713,7 +711,7 @@ async fn handler_comments_create_get(
                     match row.get(17) {
                         Some(parent_author_local) => {
                             if parent_author_local {
-                                Some(crate::apub_util::get_local_person_apub_id(UserLocalID(row.get(16)), &ctx.host_url_apub))
+                                Some(crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(16))).to_local_uri(&ctx.host_url_apub))
                             } else {
                                 Some(std::str::FromStr::from_str(row.get(18))?)
                             }

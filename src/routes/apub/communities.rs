@@ -482,7 +482,7 @@ async fn handler_communities_followers_get(
             };
 
             let person_ap_id =
-                crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
+                crate::apub_util::LocalObjectRef::User(user_id).to_local_uri(&ctx.host_url_apub);
 
             let mut follow =
                 activitystreams::activity::Follow::new(person_ap_id, community_ap_id.clone());
@@ -551,7 +551,7 @@ async fn handler_communities_followers_join_get(
             };
 
             let person_ap_id =
-                crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub);
+                crate::apub_util::LocalObjectRef::User(user_id).to_local_uri(&ctx.host_url_apub);
 
             let mut follow =
                 activitystreams::activity::Join::new(person_ap_id, community_ap_id.clone());
