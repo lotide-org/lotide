@@ -390,8 +390,8 @@ pub async fn get_or_fetch_user_local_id(
     ctx: &Arc<crate::BaseContext>,
 ) -> Result<UserLocalID, crate::Error> {
     if let Some(remaining) = try_strip_host(ap_id, &ctx.host_url_apub) {
-        if let Some(remaining) = remaining.strip_prefix("/users/") {
-            Ok(remaining.parse()?)
+        if let Some(LocalObjectRef::User(id)) = LocalObjectRef::try_from_path(remaining) {
+            Ok(id)
         } else {
             Err(crate::Error::InternalStr(format!(
                 "Unrecognized local AP ID: {:?}",
@@ -1969,7 +1969,7 @@ pub enum LocalObjectRef {
 }
 
 impl LocalObjectRef {
-    fn try_from_path(path: &str) -> Option<LocalObjectRef> {
+    pub fn try_from_path(path: &str) -> Option<LocalObjectRef> {
         if !path.starts_with('/') {
             return None;
         }
@@ -1981,7 +1981,7 @@ impl LocalObjectRef {
         res.ok()
     }
 
-    fn try_from_uri(uri: &url::Url, host_url_apub: &BaseURL) -> Option<LocalObjectRef> {
+    pub fn try_from_uri(uri: &url::Url, host_url_apub: &BaseURL) -> Option<LocalObjectRef> {
         if let Some(remaining) = try_strip_host(uri, host_url_apub) {
             LocalObjectRef::try_from_path(remaining)
         } else {

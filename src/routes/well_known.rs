@@ -50,34 +50,26 @@ async fn handler_webfinger_get(
         Name(&'a str),
     }
 
-    let found_ref =
-        if let Some(rest) = crate::apub_util::try_strip_host(&query.resource, &ctx.host_url_apub) {
-            if let Some(rest) = rest.strip_prefix("/users/") {
-                if let Ok(id) = rest.parse() {
-                    Some(LocalRef::UserID(id))
-                } else {
-                    None
-                }
-            } else if let Some(rest) = rest.strip_prefix("/communities/") {
-                if let Ok(id) = rest.parse() {
-                    Some(LocalRef::CommunityID(id))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else if query.resource.starts_with("acct:")
-            && query
-                .resource
-                .ends_with(&format!("@{}", ctx.local_hostname))
-        {
-            let name = &query.resource[5..(query.resource.len() - (ctx.local_hostname.len() + 1))];
+    let found_ref = if let Some(local_id) =
+        query.resource.parse().ok().and_then(|url| {
+            crate::apub_util::LocalObjectRef::try_from_uri(&url, &ctx.host_url_apub)
+        }) {
+        match local_id {
+            crate::apub_util::LocalObjectRef::User(id) => Some(LocalRef::UserID(id)),
+            crate::apub_util::LocalObjectRef::Community(id) => Some(LocalRef::CommunityID(id)),
+            _ => None,
+        }
+    } else if query.resource.starts_with("acct:")
+        && query
+            .resource
+            .ends_with(&format!("@{}", ctx.local_hostname))
+    {
+        let name = &query.resource[5..(query.resource.len() - (ctx.local_hostname.len() + 1))];
 
-            Some(LocalRef::Name(name))
-        } else {
-            None
-        };
+        Some(LocalRef::Name(name))
+    } else {
+        None
+    };
 
     let db = ctx.db_pool.get().await?;
 

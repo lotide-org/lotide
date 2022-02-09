@@ -155,13 +155,13 @@ pub async fn ingest_object(
                         if let Some(remaining) =
                             crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
                         {
-                            if let Some(remaining) = remaining.strip_prefix("/posts/") {
-                                if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
-                                    db.execute(
-                                        "UPDATE post SET approved=TRUE, approved_ap_id=$1, rejected=FALSE, rejected_ap_id=NULL WHERE id=$2 AND community=$3",
-                                        &[&activity_id.as_str(), &local_post_id, &community_local_id],
-                                    ).await?;
-                                }
+                            if let Some(crate::apub_util::LocalObjectRef::Post(local_post_id)) =
+                                crate::apub_util::LocalObjectRef::try_from_path(remaining)
+                            {
+                                db.execute(
+                                    "UPDATE post SET approved=TRUE, approved_ap_id=$1, rejected=FALSE, rejected_ap_id=NULL WHERE id=$2 AND community=$3",
+                                    &[&activity_id.as_str(), &local_post_id, &community_local_id],
+                                ).await?;
                             }
                         } else {
                             // don't need announces for local objects
@@ -212,13 +212,13 @@ pub async fn ingest_object(
                     if let Some(remaining) =
                         crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
                     {
-                        if let Some(remaining) = remaining.strip_prefix("/posts/") {
-                            if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
-                                db.execute(
-                                    "UPDATE post SET approved=TRUE, approved_ap_id=$1, rejected=FALSE, rejected_ap_id=NULL WHERE id=$2 AND community=$3",
-                                    &[&activity_id.as_str(), &local_post_id, &community_local_id],
-                                ).await?;
-                            }
+                        if let Some(crate::apub_util::LocalObjectRef::Post(local_post_id)) =
+                            crate::apub_util::LocalObjectRef::try_from_path(remaining)
+                        {
+                            db.execute(
+                                "UPDATE post SET approved=TRUE, approved_ap_id=$1, rejected=FALSE, rejected_ap_id=NULL WHERE id=$2 AND community=$3",
+                                &[&activity_id.as_str(), &local_post_id, &community_local_id],
+                            ).await?;
                         }
                     } else {
                         // don't need announces for local objects
@@ -595,16 +595,14 @@ pub async fn ingest_object(
                     let object_id = activity.object().as_single_id();
 
                     if let Some(object_id) = object_id {
-                        if let Some(remaining) =
-                            crate::apub_util::try_strip_host(&object_id, &ctx.host_url_apub)
+                        if let Some(local_id) =
+                            super::LocalObjectRef::try_from_uri(object_id, &ctx.host_url_apub)
                         {
-                            if let Some(remaining) = remaining.strip_prefix("/posts/") {
-                                if let Ok(local_post_id) = remaining.parse::<PostLocalID>() {
-                                    db.execute(
-                                        "UPDATE post SET approved=FALSE, approved_ap_id=NULL, rejected=TRUE, rejected_ap_id=$3 WHERE id=$1 AND community=$2",
-                                        &[&local_post_id, &community_local_id, &activity_id.as_str()],
-                                    ).await?;
-                                }
+                            if let super::LocalObjectRef::Post(local_post_id) = local_id {
+                                db.execute(
+                                    "UPDATE post SET approved=FALSE, approved_ap_id=NULL, rejected=TRUE, rejected_ap_id=$3 WHERE id=$1 AND community=$2",
+                                    &[&local_post_id, &community_local_id, &activity_id.as_str()],
+                                ).await?;
                             }
                         } else {
                             db.execute("UPDATE post SET approved=FALSE, approved_ap_id=NULL, rejected=TRUE, rejected_ap_id=$2 WHERE ap_id=$1", &[&object_id.as_str(), &activity_id.as_str()])
@@ -684,23 +682,13 @@ pub async fn ingest_like(
         let actor_local_id = super::get_or_fetch_user_local_id(actor_id, &db, &ctx).await?;
 
         if let Some(object_id) = activity.object().as_single_id() {
-            let thing_local_ref = if let Some(remaining) =
-                super::try_strip_host(&object_id, &ctx.host_url_apub)
+            let thing_local_ref = if let Some(local_id) =
+                super::LocalObjectRef::try_from_uri(&object_id, &ctx.host_url_apub)
             {
-                if let Some(remaining) = remaining.strip_prefix("/posts/") {
-                    if let Ok(local_post_id) = remaining.parse() {
-                        Some(ThingLocalRef::Post(local_post_id))
-                    } else {
-                        None
-                    }
-                } else if let Some(remaining) = remaining.strip_prefix("/comments/") {
-                    if let Ok(local_comment_id) = remaining.parse() {
-                        Some(ThingLocalRef::Comment(local_comment_id))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
+                match local_id {
+                    super::LocalObjectRef::Post(id) => Some(ThingLocalRef::Post(id)),
+                    super::LocalObjectRef::Comment(id) => Some(ThingLocalRef::Comment(id)),
+                    _ => None,
                 }
             } else {
                 let row = db.query_opt(
@@ -1408,17 +1396,12 @@ async fn handle_recieved_reply(
                 },
             }
 
-            let target = if let Some(remaining) =
-                super::try_strip_host(&term_ap_id, &ctx.host_url_apub)
+            let target = if let Some(local_id) =
+                super::LocalObjectRef::try_from_uri(&term_ap_id, &ctx.host_url_apub)
             {
-                if let Some(remaining) = remaining.strip_prefix("/posts/") {
-                    if let Ok(local_post_id) = remaining.parse() {
-                        Some(ReplyTarget::Post { id: local_post_id })
-                    } else {
-                        None
-                    }
-                } else if let Some(remaining) = remaining.strip_prefix("/comments/") {
-                    if let Ok(local_comment_id) = remaining.parse() {
+                match local_id {
+                    super::LocalObjectRef::Post(post_id) => Some(ReplyTarget::Post { id: post_id }),
+                    super::LocalObjectRef::Comment(local_comment_id) => {
                         let row = db
                             .query_opt("SELECT post FROM reply WHERE id=$1", &[&local_comment_id])
                             .await?;
@@ -1426,11 +1409,8 @@ async fn handle_recieved_reply(
                             id: local_comment_id,
                             post: PostLocalID(row.get(0)),
                         })
-                    } else {
-                        None
                     }
-                } else {
-                    None
+                    _ => None,
                 }
             } else {
                 let row = db

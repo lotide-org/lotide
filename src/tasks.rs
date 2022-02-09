@@ -173,9 +173,12 @@ impl TaskDef for FetchCommunityFeatured {
         let local_items: Vec<PostLocalID> = local_items
             .into_iter()
             .filter_map(|ap_id| {
-                let rest = crate::apub_util::try_strip_host(&ap_id, &ctx.host_url_apub).unwrap();
-                if let Some(rest) = rest.strip_prefix("/posts/") {
-                    rest.parse().ok()
+                if let Some(crate::apub_util::LocalObjectRef::Post(id)) =
+                    ap_id.parse().ok().and_then(|uri| {
+                        crate::apub_util::LocalObjectRef::try_from_uri(&uri, &ctx.host_url_apub)
+                    })
+                {
+                    Some(id)
                 } else {
                     None
                 }
