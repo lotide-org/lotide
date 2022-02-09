@@ -122,7 +122,7 @@ async fn handler_webfinger_get(
                     crate::apub_util::LocalObjectRef::User(id).to_local_uri(&ctx.host_url_apub)
                 }
                 ActorLocalRef::Community(id) => {
-                    crate::apub_util::get_local_community_apub_id(id, &ctx.host_url_apub)
+                    crate::apub_util::LocalObjectRef::Community(id).to_local_uri(&ctx.host_url_apub)
                 }
             };
             let alias = alias.as_str();

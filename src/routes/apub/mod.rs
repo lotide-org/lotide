@@ -177,7 +177,7 @@ async fn handler_users_get(
                     info,
                 );
                 info.set_outbox(
-                    crate::apub_util::get_local_person_outbox_apub_id(user_id, &ctx.host_url_apub)
+                    crate::apub_util::LocalObjectRef::UserOutbox(user_id).to_local_uri(&ctx.host_url_apub)
                         .into(),
                 )
                 .set_endpoints(endpoints)
@@ -254,16 +254,14 @@ async fn handler_users_outbox_get(
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (user,) = params;
-    let page_ap_id = crate::apub_util::get_local_person_outbox_page_apub_id(
-        user,
-        &crate::TimestampOrLatest::Latest,
-        &ctx.host_url_apub,
-    );
+    let page_ap_id =
+        crate::apub_util::LocalObjectRef::UserOutboxPage(user, crate::TimestampOrLatest::Latest)
+            .to_local_uri(&ctx.host_url_apub);
 
     let collection = serde_json::json!({
         "@context": activitystreams::context(),
         "type": activitystreams::collection::kind::OrderedCollectionType::OrderedCollection,
-        "id": crate::apub_util::get_local_person_outbox_apub_id(user, &ctx.host_url_apub),
+        "id": crate::apub_util::LocalObjectRef::UserOutbox(user).to_local_uri(&ctx.host_url_apub),
         "first": &page_ap_id,
         "current": &page_ap_id
     });
@@ -313,7 +311,8 @@ async fn handler_users_outbox_page_get(
                 let community_id = CommunityLocalID(row.get(8));
                 let community_local = row.get(9);
                 let community_ap_id = if community_local {
-                    crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub)
+                    crate::apub_util::LocalObjectRef::Community(community_id)
+                        .to_local_uri(&ctx.host_url_apub)
                 } else {
                     row.get::<_, &str>(10).parse()?
                 };
@@ -436,11 +435,9 @@ async fn handler_users_outbox_page_get(
                         None => None,
                     },
                     if row.get(16) {
-                        crate::apub_util::get_local_community_apub_id(
-                            CommunityLocalID(row.get(15)),
-                            &ctx.host_url_apub,
-                        )
-                        .into()
+                        crate::apub_util::LocalObjectRef::Community(CommunityLocalID(row.get(15)))
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into()
                     } else {
                         std::str::FromStr::from_str(row.get(17))?
                     },
@@ -456,17 +453,17 @@ async fn handler_users_outbox_page_get(
     let items = items?;
 
     let next = last_created.map(|ts| {
-        crate::apub_util::get_local_person_outbox_page_apub_id(
+        crate::apub_util::LocalObjectRef::UserOutboxPage(
             user,
-            &crate::TimestampOrLatest::Timestamp(ts),
-            &ctx.host_url_apub,
+            crate::TimestampOrLatest::Timestamp(ts),
         )
+        .to_local_uri(&ctx.host_url_apub)
     });
 
     let info = serde_json::json!({
         "@context": activitystreams::context(),
         "type": activitystreams::collection::kind::OrderedCollectionPageType::OrderedCollectionPage,
-        "partOf": crate::apub_util::get_local_person_outbox_apub_id(user, &ctx.host_url_apub),
+        "partOf": crate::apub_util::LocalObjectRef::UserOutbox(user).to_local_uri(&ctx.host_url_apub),
         "orderedItems": items,
         "next": next,
     });
@@ -531,7 +528,7 @@ async fn handler_comments_get(
             let community_local_id = CommunityLocalID(row.get(8));
 
             let community_ap_id = if row.get(9) {
-                crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Community(community_local_id).to_local_uri(&ctx.host_url_apub)
             } else {
                 std::str::FromStr::from_str(row.get(10))?
             };
@@ -654,7 +651,7 @@ async fn handler_comments_create_get(
             let community_local_id = CommunityLocalID(row.get(8));
 
             let community_ap_id = if row.get(9) {
-                crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Community(community_local_id).to_local_uri(&ctx.host_url_apub)
             } else {
                 std::str::FromStr::from_str(row.get(10))?
             };

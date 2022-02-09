@@ -290,6 +290,7 @@ pub enum APIDOrLocal {
     APID(url::Url),
 }
 
+#[derive(Clone, Copy, Debug)]
 pub enum TimestampOrLatest {
     Latest,
     Timestamp(chrono::DateTime<chrono::offset::FixedOffset>),
@@ -925,7 +926,8 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
 
                     if !inboxes.is_empty() {
                         let community_ap_id = if community_local {
-                            apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub)
+                            apub_util::LocalObjectRef::Community(community_id)
+                                .to_local_uri(&ctx.host_url_apub)
                                 .into()
                         } else {
                             std::str::FromStr::from_str(post_row.get(2))?

@@ -137,10 +137,8 @@ async fn route_unstable_flags_list(
                             ),
                             remote_url: if community_local {
                                 Some(Cow::Owned(String::from(
-                                    crate::apub_util::get_local_community_apub_id(
-                                        community_id,
-                                        &ctx.host_url_apub,
-                                    ),
+                                    crate::apub_util::LocalObjectRef::Community(community_id)
+                                        .to_local_uri(&ctx.host_url_apub),
                                 )))
                             } else {
                                 community_ap_id.map(Cow::Borrowed)

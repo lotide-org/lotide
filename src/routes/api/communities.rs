@@ -223,7 +223,8 @@ async fn route_unstable_communities_list(
 
                 let remote_url = if local {
                     Some(Cow::Owned(String::from(
-                        crate::apub_util::get_local_community_apub_id(id, &ctx.host_url_apub),
+                        crate::apub_util::LocalObjectRef::Community(id)
+                            .to_local_uri(&ctx.host_url_apub),
                     )))
                 } else {
                     ap_id.map(Cow::Borrowed)
@@ -464,7 +465,8 @@ async fn route_unstable_communities_get(
 
     let community_remote_url = if community_local {
         Some(Cow::Owned(String::from(
-            crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+            crate::apub_util::LocalObjectRef::Community(community_id)
+                .to_local_uri(&ctx.host_url_apub),
         )))
     } else {
         community_ap_id.map(Cow::Borrowed)

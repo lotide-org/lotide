@@ -88,7 +88,7 @@ async fn handler_posts_get(
                 Option::<&str>::Some(ap_id) => ap_id.parse()?,
                 None => {
                     if community_local {
-                        crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+                        crate::apub_util::LocalObjectRef::Community(community_local_id).to_local_uri(&ctx.host_url_apub)
                     } else {
                         return Err(crate::Error::InternalStrStatic("Missing community AP id"));
                     }
@@ -218,7 +218,7 @@ async fn handler_posts_create_get(
                 Option::<&str>::Some(ap_id) => ap_id.parse()?,
                 None => {
                     if community_local {
-                        crate::apub_util::get_local_community_apub_id(community_local_id, &ctx.host_url_apub)
+                        crate::apub_util::LocalObjectRef::Community(community_local_id).to_local_uri(&ctx.host_url_apub)
                     } else {
                         return Err(crate::Error::InternalStrStatic("Missing community AP id"));
                     }

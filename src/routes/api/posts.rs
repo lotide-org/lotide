@@ -471,7 +471,8 @@ async fn route_unstable_posts_list(
 
             let community_remote_url = if community_local {
                 Some(Cow::Owned(String::from(
-                    crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+                    crate::apub_util::LocalObjectRef::Community(community_id)
+                        .to_local_uri(&ctx.host_url_apub),
                 )))
             } else {
                 community_ap_id.map(Cow::Borrowed)
@@ -651,10 +652,10 @@ async fn route_unstable_posts_flags_create(
                     let community_local = row.get(0);
 
                     let community_ap_id = if community_local {
-                        Some(crate::apub_util::get_local_community_apub_id(
-                            community_id,
-                            &ctx.host_url_apub,
-                        ))
+                        Some(
+                            crate::apub_util::LocalObjectRef::Community(community_id)
+                                .to_local_uri(&ctx.host_url_apub),
+                        )
                     } else {
                         row.get::<_, Option<&str>>(1)
                             .map(|x| x.parse())
@@ -1207,7 +1208,8 @@ async fn route_unstable_posts_get(
 
             let community_remote_url = if community_local {
                 Some(Cow::Owned(String::from(
-                    crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+                    crate::apub_util::LocalObjectRef::Community(community_id)
+                        .to_local_uri(&ctx.host_url_apub),
                 )))
             } else {
                 community_ap_id.map(Cow::Borrowed)

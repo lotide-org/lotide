@@ -163,7 +163,7 @@ async fn handler_communities_get(
             }
 
             let community_ap_id =
-                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub);
+                crate::apub_util::LocalObjectRef::Community(community_id).to_local_uri(&ctx.host_url_apub);
 
             if row.get(5) {
                 // deleted
@@ -470,7 +470,8 @@ async fn handler_communities_followers_get(
             let community_local: bool = row.get(1);
 
             let community_ap_id = if community_local {
-                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Community(community_id)
+                    .to_local_uri(&ctx.host_url_apub)
             } else {
                 let community_ap_id: Option<&str> = row.get(2);
                 std::str::FromStr::from_str(community_ap_id.ok_or_else(|| {
@@ -490,10 +491,8 @@ async fn handler_communities_followers_get(
             follow
                 .set_context(activitystreams::context())
                 .set_id({
-                    let mut res = crate::apub_util::get_local_community_apub_id(
-                        community_id,
-                        &ctx.host_url_apub,
-                    );
+                    let mut res = crate::apub_util::LocalObjectRef::Community(community_id)
+                        .to_local_uri(&ctx.host_url_apub);
                     res.path_segments_mut()
                         .extend(&["followers", &user_id.to_string()]);
                     res.into()
@@ -539,7 +538,8 @@ async fn handler_communities_followers_join_get(
             let community_local: bool = row.get(1);
 
             let community_ap_id = if community_local {
-                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub)
+                crate::apub_util::LocalObjectRef::Community(community_id)
+                    .to_local_uri(&ctx.host_url_apub)
             } else {
                 let community_ap_id: Option<&str> = row.get(2);
                 std::str::FromStr::from_str(community_ap_id.ok_or_else(|| {
@@ -559,10 +559,8 @@ async fn handler_communities_followers_join_get(
             follow
                 .set_context(activitystreams::context())
                 .set_id({
-                    let mut res = crate::apub_util::get_local_community_apub_id(
-                        community_id,
-                        &ctx.host_url_apub,
-                    );
+                    let mut res = crate::apub_util::LocalObjectRef::Community(community_id)
+                        .to_local_uri(&ctx.host_url_apub);
                     res.path_segments_mut()
                         .extend(&["followers", &user_id.to_string(), "join"]);
                     res.into()
@@ -625,7 +623,8 @@ async fn handler_communities_followers_accept_get(
             };
 
             let body = crate::apub_util::community_follow_accept_to_ap(
-                crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+                crate::apub_util::LocalObjectRef::Community(community_id)
+                    .to_local_uri(&ctx.host_url_apub),
                 user_id,
                 follow_ap_id.into(),
             )?;

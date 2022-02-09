@@ -290,10 +290,10 @@ pub async fn ingest_object(
                         if community_local {
                             let community_id = CommunityLocalID(row.get(1));
 
-                            Some(Some(super::get_local_community_apub_id(
-                                community_id,
-                                &ctx.host_url_apub,
-                            )))
+                            Some(Some(
+                                super::LocalObjectRef::Community(community_id)
+                                    .to_local_uri(&ctx.host_url_apub),
+                            ))
                         } else {
                             Some(row.get::<_, Option<&str>>(3).and_then(|x| x.parse().ok()))
                         }
@@ -327,10 +327,10 @@ pub async fn ingest_object(
                                         if community_local {
                                             let community_id = CommunityLocalID(row.get(0));
 
-                                            Some(super::get_local_community_apub_id(
-                                                community_id,
-                                                &ctx.host_url_apub,
-                                            ))
+                                            Some(
+                                                super::LocalObjectRef::Community(community_id)
+                                                    .to_local_uri(&ctx.host_url_apub),
+                                            )
                                         } else {
                                             row.get::<_, Option<&str>>(2)
                                                 .and_then(|x| x.parse().ok())
