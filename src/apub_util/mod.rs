@@ -225,64 +225,6 @@ pub fn try_strip_host<'a>(url: &'a impl AsRef<str>, host_url: &url::Url) -> Opti
     url.strip_prefix(host_url)
 }
 
-pub fn get_local_community_featured_apub_id(
-    community: CommunityLocalID,
-    host_url_apub: &BaseURL,
-) -> BaseURL {
-    let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
-    res.path_segments_mut().push("featured");
-    res
-}
-
-pub fn get_local_community_followers_apub_id(
-    community: CommunityLocalID,
-    host_url_apub: &BaseURL,
-) -> BaseURL {
-    let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
-    res.path_segments_mut().push("followers");
-    res
-}
-
-pub fn get_local_community_outbox_apub_id(
-    community: CommunityLocalID,
-    host_url_apub: &BaseURL,
-) -> BaseURL {
-    let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
-    res.path_segments_mut().push("outbox");
-    res
-}
-
-pub fn get_local_community_outbox_page_apub_id(
-    community: CommunityLocalID,
-    page: &crate::TimestampOrLatest,
-    host_url_apub: &BaseURL,
-) -> BaseURL {
-    let mut res = get_local_community_outbox_apub_id(community, host_url_apub);
-    res.path_segments_mut().extend(&["page", &page.to_string()]);
-    res
-}
-
-pub fn get_local_community_follow_apub_id(
-    community: CommunityLocalID,
-    follower: UserLocalID,
-    host_url_apub: &BaseURL,
-) -> BaseURL {
-    let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
-    res.path_segments_mut()
-        .extend(&["followers", &follower.to_string()]);
-    res
-}
-
-pub fn get_local_community_follow_join_apub_id(
-    community: CommunityLocalID,
-    follower: UserLocalID,
-    host_url_apub: &BaseURL,
-) -> BaseURL {
-    let mut res = get_local_community_follow_apub_id(community, follower, host_url_apub);
-    res.path_segments_mut().push("join");
-    res
-}
-
 pub fn get_local_person_pubkey_apub_id(person: UserLocalID, host_url_apub: &BaseURL) -> BaseURL {
     let mut res = LocalObjectRef::User(person).to_local_uri(host_url_apub);
     res.set_fragment(Some("main-key"));
@@ -639,7 +581,8 @@ pub fn spawn_enqueue_send_community_follow(
         follow
             .set_context(activitystreams::context())
             .set_id(
-                get_local_community_follow_apub_id(community, local_follower, &ctx.host_url_apub)
+                LocalObjectRef::CommunityFollow(community, local_follower)
+                    .to_local_uri(&ctx.host_url_apub)
                     .into(),
             )
             .set_to(community_ap_id.clone());
@@ -647,12 +590,9 @@ pub fn spawn_enqueue_send_community_follow(
         let mut join = activitystreams::activity::Join::new(person_ap_id, community_ap_id.clone());
         join.set_context(activitystreams::context())
             .set_id(
-                get_local_community_follow_join_apub_id(
-                    community,
-                    local_follower,
-                    &ctx.host_url_apub,
-                )
-                .into(),
+                LocalObjectRef::CommunityFollowJoin(community, local_follower)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into(),
             )
             .set_to(community_ap_id);
 
@@ -774,10 +714,7 @@ pub fn local_community_post_add_ap(
                 .extend(&["posts", &post_local_id.to_string(), "add"]);
             res.into()
         })
-        .set_target(get_local_community_outbox_apub_id(
-            community_id,
-            host_url_apub,
-        ))
+        .set_target(LocalObjectRef::CommunityOutbox(community_id).to_local_uri(host_url_apub))
         .set_to({
             let mut res = community_ap_id;
             res.path_segments_mut().push("followers");
@@ -1015,7 +952,8 @@ pub fn local_community_follow_undo_to_ap(
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let mut undo = activitystreams::activity::Undo::new(
         LocalObjectRef::User(local_follower).to_local_uri(host_url_apub),
-        get_local_community_follow_apub_id(community_local_id, local_follower, host_url_apub),
+        LocalObjectRef::CommunityFollow(community_local_id, local_follower)
+            .to_local_uri(host_url_apub),
     );
     undo.set_context(activitystreams::context()).set_id({
         let mut res = host_url_apub.clone();
@@ -1954,8 +1892,14 @@ lazy_static::lazy_static! {
                         RefRouteNode::new()
                             .with_handler((), |(community,), _, _| LocalObjectRef::Community(community))
                             .with_child(
+                                "featured",
+                                RefRouteNode::new()
+                                    .with_handler((), |(community,), _, _| LocalObjectRef::CommunityFeatured(community))
+                            )
+                            .with_child(
                                 "followers",
                                 RefRouteNode::new()
+                                    .with_handler((), |(community,), _, _| LocalObjectRef::CommunityFollowers(community))
                                     .with_child_parse::<UserLocalID, _>(
                                         RefRouteNode::new()
                                             .with_handler((), |(community, follower), _, _| LocalObjectRef::CommunityFollow(community, follower))
@@ -1970,6 +1914,7 @@ lazy_static::lazy_static! {
                                 "outbox",
                                 RefRouteNode::new()
                                     .with_handler((), |(community,), _, _| LocalObjectRef::CommunityOutbox(community))
+                                    .with_child("page", RefRouteNode::new().with_child_parse::<crate::TimestampOrLatest, _>(RefRouteNode::new().with_handler((), |(community, page), _, _| LocalObjectRef::CommunityOutboxPage(community, page))))
                             )
                     )
             )
@@ -2008,9 +1953,12 @@ pub enum LocalObjectRef {
     Comment(CommentLocalID),
     CommentLike(CommentLocalID, UserLocalID),
     Community(CommunityLocalID),
+    CommunityFeatured(CommunityLocalID),
+    CommunityFollowers(CommunityLocalID),
     CommunityFollow(CommunityLocalID, UserLocalID),
     CommunityFollowJoin(CommunityLocalID, UserLocalID),
     CommunityOutbox(CommunityLocalID),
+    CommunityOutboxPage(CommunityLocalID, crate::TimestampOrLatest),
     PollVote(PollLocalID, UserLocalID, PollOptionLocalID),
     Post(PostLocalID),
     PostLike(PostLocalID, UserLocalID),
@@ -2061,10 +2009,20 @@ impl LocalObjectRef {
                     .extend(&["communities", &community.to_string()]);
                 res
             }
-            LocalObjectRef::CommunityFollow(community, follower) => {
+            LocalObjectRef::CommunityFeatured(community) => {
                 let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
-                res.path_segments_mut()
-                    .extend(&["followers", &follower.to_string()]);
+                res.path_segments_mut().push("featured");
+                res
+            }
+            LocalObjectRef::CommunityFollowers(community) => {
+                let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
+                res.path_segments_mut().push("followers");
+                res
+            }
+            LocalObjectRef::CommunityFollow(community, follower) => {
+                let mut res =
+                    LocalObjectRef::CommunityFollowers(community).to_local_uri(host_url_apub);
+                res.path_segments_mut().push(&follower.to_string());
                 res
             }
             LocalObjectRef::CommunityFollowJoin(community, follower) => {
@@ -2076,6 +2034,12 @@ impl LocalObjectRef {
             LocalObjectRef::CommunityOutbox(community) => {
                 let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
                 res.path_segments_mut().push("outbox");
+                res
+            }
+            LocalObjectRef::CommunityOutboxPage(community, page) => {
+                let mut res =
+                    LocalObjectRef::CommunityOutbox(community).to_local_uri(host_url_apub);
+                res.path_segments_mut().extend(&["page", &page.to_string()]);
                 res
             }
             LocalObjectRef::PollVote(poll, user, option) => {

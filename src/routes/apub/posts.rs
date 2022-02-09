@@ -99,7 +99,7 @@ async fn handler_posts_get(
                 Option::<&str>::Some(ap_outbox) => Some(ap_outbox.parse()?),
                 None => {
                     if community_local {
-                        Some(crate::apub_util::get_local_community_outbox_apub_id(community_local_id, &ctx.host_url_apub))
+                        Some(crate::apub_util::LocalObjectRef::CommunityOutbox(community_local_id).to_local_uri(&ctx.host_url_apub))
                     } else {
                         None
                     }
@@ -110,7 +110,7 @@ async fn handler_posts_get(
                 Option::<&str>::Some(ap_followers) => Some(ap_followers.parse()?),
                 None => {
                     if community_local {
-                        Some(crate::apub_util::get_local_community_followers_apub_id(community_local_id, &ctx.host_url_apub))
+                        Some(crate::apub_util::LocalObjectRef::CommunityFollowers(community_local_id).to_local_uri(&ctx.host_url_apub))
                     } else {
                         None
                     }
@@ -229,7 +229,7 @@ async fn handler_posts_create_get(
                 Option::<&str>::Some(ap_outbox) => Some(ap_outbox.parse()?),
                 None => {
                     if community_local {
-                        Some(crate::apub_util::get_local_community_outbox_apub_id(community_local_id, &ctx.host_url_apub))
+                        Some(crate::apub_util::LocalObjectRef::CommunityOutbox(community_local_id).to_local_uri(&ctx.host_url_apub))
                     } else {
                         None
                     }
@@ -240,7 +240,7 @@ async fn handler_posts_create_get(
                 Option::<&str>::Some(ap_followers) => Some(ap_followers.parse()?),
                 None => {
                     if community_local {
-                        Some(crate::apub_util::get_local_community_followers_apub_id(community_local_id, &ctx.host_url_apub))
+                        Some(crate::apub_util::LocalObjectRef::CommunityFollowers(community_local_id).to_local_uri(&ctx.host_url_apub))
                     } else {
                         None
                     }

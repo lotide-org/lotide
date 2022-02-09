@@ -220,17 +220,14 @@ async fn handler_communities_get(
                 let mut info = activitystreams::actor::ApActor::new(inbox.into(), info);
 
                 info.set_outbox(
-                    crate::apub_util::get_local_community_outbox_apub_id(
-                        community_id,
-                        &ctx.host_url_apub,
-                    )
+                    crate::apub_util::LocalObjectRef::CommunityOutbox( community_id).to_local_uri(&ctx.host_url_apub,)
                     .into(),
                 )
-                .set_followers(crate::apub_util::get_local_community_followers_apub_id(community_id, &ctx.host_url_apub).into())
+                .set_followers(crate::apub_util::LocalObjectRef::CommunityFollowers(community_id).to_local_uri(&ctx.host_url_apub).into())
                 .set_preferred_username(name);
 
                 let featured_ext = crate::apub_util::FeaturedExtension {
-                    featured: Some(crate::apub_util::get_local_community_featured_apub_id(community_id, &ctx.host_url_apub).into()),
+                    featured: Some(crate::apub_util::LocalObjectRef::CommunityFeatured(community_id).to_local_uri(&ctx.host_url_apub).into()),
                 };
 
                 let info = activitystreams_ext::Ext1::new(info, featured_ext);
@@ -399,7 +396,8 @@ async fn handler_communities_featured_list(
 
     let mut body = activitystreams::collection::OrderedCollection::new();
     body.set_id(
-        crate::apub_util::get_local_community_featured_apub_id(community_id, &ctx.host_url_apub)
+        crate::apub_util::LocalObjectRef::CommunityFeatured(community_id)
+            .to_local_uri(&ctx.host_url_apub)
             .into(),
     );
     body.set_context(activitystreams::context());
@@ -605,11 +603,11 @@ async fn handler_communities_followers_accept_get(
 
             let follower_local = row.get(3);
             let follow_ap_id = if follower_local {
-                crate::apub_util::get_local_community_follow_apub_id(
+                crate::apub_util::LocalObjectRef::CommunityFollow(
                     community_id,
                     UserLocalID(row.get(2)),
-                    &ctx.host_url_apub,
                 )
+                .to_local_uri(&ctx.host_url_apub)
             } else {
                 let follow_ap_id: Option<&str> = row.get(1);
                 follow_ap_id
@@ -651,16 +649,16 @@ async fn handler_communities_outbox_get(
     _req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community_id,) = params;
-    let page_ap_id = crate::apub_util::get_local_community_outbox_page_apub_id(
+    let page_ap_id = crate::apub_util::LocalObjectRef::CommunityOutboxPage(
         community_id,
-        &crate::TimestampOrLatest::Latest,
-        &ctx.host_url_apub,
-    );
+        crate::TimestampOrLatest::Latest,
+    )
+    .to_local_uri(&ctx.host_url_apub);
 
     let collection = serde_json::json!({
         "@context": activitystreams::context(),
         "type": activitystreams::collection::kind::OrderedCollectionType::OrderedCollection,
-        "id": crate::apub_util::get_local_community_outbox_apub_id(community_id, &ctx.host_url_apub),
+        "id": crate::apub_util::LocalObjectRef::CommunityOutbox(community_id).to_local_uri(&ctx.host_url_apub),
         "first": &page_ap_id,
         "current": &page_ap_id
     });
@@ -734,17 +732,17 @@ async fn handler_communities_outbox_page_get(
     let items: Vec<_> = items?.into_iter().flatten().collect();
 
     let next = last_created.map(|ts| {
-        crate::apub_util::get_local_community_outbox_page_apub_id(
+        crate::apub_util::LocalObjectRef::CommunityOutboxPage(
             community_id,
-            &crate::TimestampOrLatest::Timestamp(ts),
-            &ctx.host_url_apub,
+            crate::TimestampOrLatest::Timestamp(ts),
         )
+        .to_local_uri(&ctx.host_url_apub)
     });
 
     let info = serde_json::json!({
         "@context": activitystreams::context(),
         "type": activitystreams::collection::kind::OrderedCollectionPageType::OrderedCollectionPage,
-        "partOf": crate::apub_util::get_local_community_outbox_apub_id(community_id, &ctx.host_url_apub),
+        "partOf": crate::apub_util::LocalObjectRef::CommunityOutbox(community_id).to_local_uri(&ctx.host_url_apub),
         "orderedItems": items,
         "next": next,
     });

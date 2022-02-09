@@ -317,10 +317,10 @@ async fn handler_users_outbox_page_get(
                     row.get::<_, &str>(10).parse()?
                 };
                 let community_ap_outbox = if community_local {
-                    Some(crate::apub_util::get_local_community_outbox_apub_id(
-                        community_id,
-                        &ctx.host_url_apub,
-                    ))
+                    Some(
+                        crate::apub_util::LocalObjectRef::CommunityOutbox(community_id)
+                            .to_local_uri(&ctx.host_url_apub),
+                    )
                 } else {
                     row.get::<_, Option<&str>>(19)
                         .map(|x| x.parse())
@@ -328,10 +328,10 @@ async fn handler_users_outbox_page_get(
                 };
 
                 let community_ap_followers = if community_local {
-                    Some(crate::apub_util::get_local_community_followers_apub_id(
-                        community_id,
-                        &ctx.host_url_apub,
-                    ))
+                    Some(
+                        crate::apub_util::LocalObjectRef::CommunityFollowers(community_id)
+                            .to_local_uri(&ctx.host_url_apub),
+                    )
                 } else {
                     row.get::<_, Option<&str>>(20)
                         .map(|x| x.parse())
