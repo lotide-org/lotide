@@ -150,8 +150,9 @@ async fn route_stable_communities_feed_get(
             let href_raw: Option<&str> = row.get(2);
             let href = ctx.process_href_opt(href_raw.map(Cow::Borrowed), post_id);
 
-            let local_url =
-                crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).to_string();
+            let local_url = crate::apub_util::LocalObjectRef::Post(post_id)
+                .to_local_uri(&ctx.host_url_apub)
+                .to_string();
 
             let post_ap_id: &str = if row.get(8) {
                 &local_url
@@ -162,11 +163,9 @@ async fn route_stable_communities_feed_get(
             let author_username = row.get(9);
             let author_ap_id = if row.get(10) {
                 Some(
-                    crate::apub_util::get_local_person_apub_id(
-                        UserLocalID(row.get(1)),
-                        &ctx.host_url_apub,
-                    )
-                    .to_string(),
+                    crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(1)))
+                        .to_local_uri(&ctx.host_url_apub)
+                        .to_string(),
                 )
             } else {
                 row.get(11)

@@ -181,10 +181,10 @@ async fn route_unstable_users_list(
                         username: Cow::Borrowed(&username),
                         host: Cow::Borrowed(&ctx.local_hostname),
                         remote_url: Some(
-                            String::from(crate::apub_util::get_local_person_apub_id(
-                                user_id,
-                                &ctx.host_url_apub,
-                            ))
+                            String::from(
+                                crate::apub_util::LocalObjectRef::User(user_id)
+                                    .to_local_uri(&ctx.host_url_apub),
+                            )
                             .into(),
                         ),
                         is_bot: row.get(5),
@@ -511,7 +511,8 @@ async fn route_unstable_users_notifications_list(
 
                 let post_remote_url = if post_local {
                     Some(Cow::Owned(String::from(
-                        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                        crate::apub_util::LocalObjectRef::Post(post_id)
+                            .to_local_uri(&ctx.host_url_apub),
                     )))
                 } else {
                     post_ap_id.map(Cow::Borrowed)
@@ -549,10 +550,8 @@ async fn route_unstable_users_notifications_list(
                         ),
                         remote_url: if community_local {
                             Some(Cow::Owned(String::from(
-                                crate::apub_util::get_local_community_apub_id(
-                                    community_id,
-                                    &ctx.host_url_apub,
-                                ),
+                                crate::apub_util::LocalObjectRef::Community(community_id)
+                                    .to_local_uri(&ctx.host_url_apub),
                             )))
                         } else {
                             community_ap_id.map(Cow::Borrowed)
@@ -580,10 +579,8 @@ async fn route_unstable_users_notifications_list(
                             ),
                             remote_url: if author_local {
                                 Some(Cow::Owned(String::from(
-                                    crate::apub_util::get_local_person_apub_id(
-                                        author_id,
-                                        &ctx.host_url_apub,
-                                    ),
+                                    crate::apub_util::LocalObjectRef::User(author_id)
+                                        .to_local_uri(&ctx.host_url_apub),
                                 )))
                             } else {
                                 author_ap_id.map(Cow::Borrowed)
@@ -619,10 +616,8 @@ async fn route_unstable_users_notifications_list(
                             .map(|html| crate::clean_html(&html)),
                         remote_url: if reply_local {
                             Some(Cow::Owned(String::from(
-                                crate::apub_util::get_local_comment_apub_id(
-                                    reply_id,
-                                    &ctx.host_url_apub,
-                                ),
+                                crate::apub_util::LocalObjectRef::Comment(reply_id)
+                                    .to_local_uri(&ctx.host_url_apub),
                             )))
                         } else {
                             reply_ap_id.map(Cow::Borrowed)
@@ -652,10 +647,8 @@ async fn route_unstable_users_notifications_list(
                             ),
                             remote_url: if author_local {
                                 Some(Cow::Owned(String::from(
-                                    crate::apub_util::get_local_person_apub_id(
-                                        author_id,
-                                        &ctx.host_url_apub,
-                                    ),
+                                    crate::apub_util::LocalObjectRef::User(author_id)
+                                        .to_local_uri(&ctx.host_url_apub),
                                 )))
                             } else {
                                 author_ap_id.map(Cow::Borrowed)
@@ -705,10 +698,8 @@ async fn route_unstable_users_notifications_list(
                             .map(|html| crate::clean_html(&html)),
                         remote_url: if parent_local {
                             Some(Cow::Owned(String::from(
-                                crate::apub_util::get_local_comment_apub_id(
-                                    parent_id,
-                                    &ctx.host_url_apub,
-                                ),
+                                crate::apub_util::LocalObjectRef::Comment(parent_id)
+                                    .to_local_uri(&ctx.host_url_apub),
                             )))
                         } else {
                             parent_ap_id.map(Cow::Borrowed)
@@ -731,10 +722,8 @@ async fn route_unstable_users_notifications_list(
                             ),
                             remote_url: if author_local {
                                 Some(Cow::Owned(String::from(
-                                    crate::apub_util::get_local_person_apub_id(
-                                        author_id,
-                                        &ctx.host_url_apub,
-                                    ),
+                                    crate::apub_util::LocalObjectRef::User(author_id)
+                                        .to_local_uri(&ctx.host_url_apub),
                                 )))
                             } else {
                                 author_ap_id.map(Cow::Borrowed)
@@ -909,7 +898,7 @@ async fn route_unstable_users_get(
 
     let remote_url = if local {
         Some(Cow::Owned(String::from(
-            crate::apub_util::get_local_person_apub_id(user_id, &ctx.host_url_apub),
+            crate::apub_util::LocalObjectRef::User(user_id).to_local_uri(&ctx.host_url_apub),
         )))
     } else {
         ap_id.map(Cow::Borrowed)
@@ -1085,10 +1074,8 @@ async fn route_unstable_users_things_list(
 
                 let community_remote_url = if community_local {
                     Some(Cow::Owned(String::from(
-                        crate::apub_util::get_local_community_apub_id(
-                            community_id,
-                            &ctx.host_url_apub,
-                        ),
+                        crate::apub_util::LocalObjectRef::Community(community_id)
+                            .to_local_uri(&ctx.host_url_apub),
                     )))
                 } else {
                     community_ap_id.map(Cow::Borrowed)
@@ -1098,7 +1085,8 @@ async fn route_unstable_users_things_list(
 
                 let post_remote_url = if post_local {
                     Some(Cow::Owned(String::from(
-                        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                        crate::apub_util::LocalObjectRef::Post(post_id)
+                            .to_local_uri(&ctx.host_url_apub),
                     )))
                 } else {
                     post_ap_id.map(Cow::Borrowed)
@@ -1143,7 +1131,8 @@ async fn route_unstable_users_things_list(
 
                 let post_remote_url = if post_local {
                     Some(Cow::Owned(String::from(
-                        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                        crate::apub_util::LocalObjectRef::Post(post_id)
+                            .to_local_uri(&ctx.host_url_apub),
                     )))
                 } else {
                     post_ap_id.map(Cow::Borrowed)
@@ -1155,7 +1144,8 @@ async fn route_unstable_users_things_list(
 
                 let comment_remote_url = if comment_local {
                     Some(Cow::Owned(String::from(
-                        crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub),
+                        crate::apub_util::LocalObjectRef::Comment(comment_id)
+                            .to_local_uri(&ctx.host_url_apub),
                     )))
                 } else {
                     comment_ap_id.map(Cow::Borrowed)

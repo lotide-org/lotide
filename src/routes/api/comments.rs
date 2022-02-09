@@ -65,7 +65,8 @@ async fn route_unstable_comments_get(
 
             let remote_url = if local {
                 Some(Cow::Owned(String::from(
-                    crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub),
+                    crate::apub_util::LocalObjectRef::Comment(comment_id)
+                        .to_local_uri(&ctx.host_url_apub),
                 )))
             } else {
                 ap_id.map(Cow::Borrowed)
@@ -80,10 +81,8 @@ async fn route_unstable_comments_get(
 
                     let author_remote_url = if author_local {
                         Some(Cow::Owned(String::from(
-                            crate::apub_util::get_local_person_apub_id(
-                                author_id,
-                                &ctx.host_url_apub,
-                            ),
+                            crate::apub_util::LocalObjectRef::User(author_id)
+                                .to_local_uri(&ctx.host_url_apub),
                         )))
                     } else {
                         author_ap_id.map(Cow::Borrowed)
@@ -117,7 +116,8 @@ async fn route_unstable_comments_get(
 
                     let post_remote_url = if post_local {
                         Some(Cow::Owned(String::from(
-                            crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub),
+                            crate::apub_util::LocalObjectRef::Post(post_id)
+                                .to_local_uri(&ctx.host_url_apub),
                         )))
                     } else {
                         post_ap_id.map(Cow::Borrowed)
@@ -285,7 +285,8 @@ async fn route_unstable_comments_like(
             if let Some(row) = row {
                 let comment_local = row.get(0);
                 let comment_ap_id = if comment_local {
-                    crate::apub_util::get_local_comment_apub_id(comment_id, &ctx.host_url_apub)
+                    crate::apub_util::LocalObjectRef::Comment(comment_id)
+                        .to_local_uri(&ctx.host_url_apub)
                 } else {
                     let src: &str = row.get(1);
                     src.parse()?
@@ -430,7 +431,7 @@ async fn route_unstable_comments_likes_list(
 
             let remote_url = if local {
                 Some(Cow::Owned(String::from(
-                    crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub),
+                    crate::apub_util::LocalObjectRef::User(id).to_local_uri(&ctx.host_url_apub),
                 )))
             } else {
                 ap_id.map(Cow::Borrowed)

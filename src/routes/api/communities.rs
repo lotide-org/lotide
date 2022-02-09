@@ -223,7 +223,8 @@ async fn route_unstable_communities_list(
 
                 let remote_url = if local {
                     Some(Cow::Owned(String::from(
-                        crate::apub_util::get_local_community_apub_id(id, &ctx.host_url_apub),
+                        crate::apub_util::LocalObjectRef::Community(id)
+                            .to_local_uri(&ctx.host_url_apub),
                     )))
                 } else {
                     ap_id.map(Cow::Borrowed)
@@ -464,7 +465,8 @@ async fn route_unstable_communities_get(
 
     let community_remote_url = if community_local {
         Some(Cow::Owned(String::from(
-            crate::apub_util::get_local_community_apub_id(community_id, &ctx.host_url_apub),
+            crate::apub_util::LocalObjectRef::Community(community_id)
+                .to_local_uri(&ctx.host_url_apub),
         )))
     } else {
         community_ap_id.map(Cow::Borrowed)
@@ -735,7 +737,7 @@ async fn route_unstable_communities_moderators_list(
 
             let remote_url = if local {
                 Some(Cow::Owned(String::from(
-                    crate::apub_util::get_local_person_apub_id(id, &ctx.host_url_apub),
+                    crate::apub_util::LocalObjectRef::User(id).to_local_uri(&ctx.host_url_apub),
                 )))
             } else {
                 ap_id.map(Cow::Borrowed)
@@ -996,7 +998,9 @@ async fn route_unstable_communities_posts_patch(
     let old_sticky: bool = old_row.get(4);
 
     let post_ap_id = if old_row.get(2) {
-        crate::apub_util::get_local_post_apub_id(post_id, &ctx.host_url_apub).into()
+        crate::apub_util::LocalObjectRef::Post(post_id)
+            .to_local_uri(&ctx.host_url_apub)
+            .into()
     } else {
         std::str::FromStr::from_str(old_row.get(3))?
     };
