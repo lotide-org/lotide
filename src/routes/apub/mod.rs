@@ -810,7 +810,7 @@ async fn handler_comments_likes_get(
 
         if local {
             let row = db
-                .query_one("SELECT local, ap_id FROM reply WHERE id=$1", &[&comment_id])
+                .query_one("SELECT reply.local, reply.ap_id, author.id, author.ap_id FROM reply LEFT OUTER JOIN person AS author ON (author.id = reply.author) WHERE reply.id=$1", &[&comment_id])
                 .await?;
             let comment_local = row.get(0);
             let comment_ap_id = if comment_local {
@@ -820,9 +820,22 @@ async fn handler_comments_likes_get(
                 std::str::FromStr::from_str(row.get(1))?
             };
 
+            let author_ap_id = if comment_local {
+                Some(
+                    crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(2)))
+                        .to_local_uri(&ctx.host_url_apub)
+                        .into(),
+                )
+            } else {
+                row.get::<_, Option<&str>>(3)
+                    .map(|x| x.parse())
+                    .transpose()?
+            };
+
             let like = crate::apub_util::local_comment_like_to_ap(
                 comment_id,
                 comment_ap_id,
+                author_ap_id,
                 user_id,
                 &ctx.host_url_apub,
             )?;
@@ -856,7 +869,7 @@ async fn handler_comment_like_undos_get(
 
     let undo_row = db
         .query_opt(
-            "SELECT reply, person FROM local_reply_like_undo WHERE id=$1",
+            "SELECT reply.id, local_reply_like_undo.person, reply_author.id, reply_author.ap_id, reply_author.local FROM local_reply_like_undo INNER JOIN reply ON (reply.id = local_reply_like_undo.reply) LEFT OUTER JOIN person AS reply_author ON (reply_author.id = reply.author) WHERE local_reply_like_undo.id=$1",
             &[&undo_id],
         )
         .await?;
@@ -865,9 +878,23 @@ async fn handler_comment_like_undos_get(
         let comment_id = CommentLocalID(undo_row.get(0));
         let user_id = UserLocalID(undo_row.get(1));
 
+        let author_ap_id = match undo_row.get(4) {
+            None => None,
+            Some(true) => Some(
+                crate::apub_util::LocalObjectRef::User(UserLocalID(undo_row.get(2)))
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into(),
+            ),
+            Some(false) => undo_row
+                .get::<_, Option<&str>>(3)
+                .map(|x| x.parse())
+                .transpose()?,
+        };
+
         let undo = crate::apub_util::local_comment_like_undo_to_ap(
             undo_id,
             comment_id,
+            author_ap_id,
             user_id,
             &ctx.host_url_apub,
         )?;
@@ -895,18 +922,26 @@ async fn handler_community_follow_undos_get(
 
     let undo_row = db
         .query_opt(
-            "SELECT community, follower FROM local_community_follow_undo WHERE id=$1",
+            "SELECT community.id, community.ap_id, local_community_follow_undo.follower FROM local_community_follow_undo INNER JOIN community ON (community.id = local_community_follow_undo.community) WHERE local_community_follow_undo.id=$1",
             &[&undo_id],
         )
         .await?;
 
     if let Some(undo_row) = undo_row {
         let community_id = CommunityLocalID(undo_row.get(0));
-        let user_id = UserLocalID(undo_row.get(1));
+        let community_ap_id: Option<&str> = undo_row.get(1);
+        let user_id = UserLocalID(undo_row.get(2));
+
+        let community_ap_id = community_ap_id
+            .ok_or(crate::Error::InternalStrStatic(
+                "Missing ap_id for follow undo target",
+            ))?
+            .parse()?;
 
         let undo = crate::apub_util::local_community_follow_undo_to_ap(
             undo_id,
             community_id,
+            community_ap_id,
             user_id,
             &ctx.host_url_apub,
         )?;
@@ -943,7 +978,7 @@ async fn handler_post_like_undos_get(
 
     let undo_row = db
         .query_opt(
-            "SELECT post, person FROM local_post_like_undo WHERE id=$1",
+            "SELECT post.id, local_post_like_undo.person, post_author.id, post_author.ap_id, post_author.local FROM local_post_like_undo INNER JOIN post ON (post.id = local_post_like_undo.post) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) WHERE local_post_like_undo.id=$1",
             &[&undo_id],
         )
         .await?;
@@ -952,9 +987,23 @@ async fn handler_post_like_undos_get(
         let post_id = PostLocalID(undo_row.get(0));
         let user_id = UserLocalID(undo_row.get(1));
 
+        let author_ap_id = match undo_row.get(4) {
+            None => None,
+            Some(true) => Some(
+                crate::apub_util::LocalObjectRef::User(UserLocalID(undo_row.get(2)))
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into(),
+            ),
+            Some(false) => undo_row
+                .get::<_, Option<&str>>(3)
+                .map(|x| x.parse())
+                .transpose()?,
+        };
+
         let undo = crate::apub_util::local_post_like_undo_to_ap(
             undo_id,
             post_id,
+            author_ap_id,
             user_id,
             &ctx.host_url_apub,
         )?;

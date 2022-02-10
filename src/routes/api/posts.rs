@@ -745,7 +745,7 @@ async fn route_unstable_posts_poll_your_vote_set(
     let body = hyper::body::to_bytes(req.into_body()).await?;
     let body: PollVoteBody = serde_json::from_slice(&body)?;
 
-    let row = db.query_opt("SELECT poll.multiple, poll.id, author.local, COALESCE(author.ap_inbox, author.ap_shared_inbox), post.ap_id, COALESCE(poll.is_closed, poll.closed_at <= current_timestamp, FALSE) FROM post INNER JOIN poll ON (poll.id = post.poll_id) LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE post.id = $1", &[&post_id]).await?.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "No such poll")))?;
+    let row = db.query_opt("SELECT poll.multiple, poll.id, author.local, COALESCE(author.ap_inbox, author.ap_shared_inbox), post.ap_id, COALESCE(poll.is_closed, poll.closed_at <= current_timestamp, FALSE), author.ap_id FROM post INNER JOIN poll ON (poll.id = post.poll_id) LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE post.id = $1", &[&post_id]).await?.ok_or_else(|| crate::Error::UserError(crate::simple_response(hyper::StatusCode::BAD_REQUEST, "No such poll")))?;
 
     let multiple: bool = row.get(0);
     let poll_id = PollLocalID(row.get(1));
@@ -811,6 +811,12 @@ async fn route_unstable_posts_poll_your_vote_set(
         if !author_local {
             let inbox: Option<&str> = row.get(3);
             let post_ap_id: Option<String> = row.get(4);
+
+            let author_ap_id = row
+                .get::<_, Option<&str>>(6)
+                .map(|x| x.parse())
+                .transpose()?;
+
             if let (Some(inbox), Some(post_ap_id)) = (inbox, post_ap_id) {
                 let inbox = inbox.parse();
                 let post_ap_id: Result<BaseURL, _> = post_ap_id.parse();
@@ -821,6 +827,7 @@ async fn route_unstable_posts_poll_your_vote_set(
                     for option_id in removed {
                         let activity = crate::apub_util::local_poll_vote_undo_to_ap(
                             poll_id,
+                            author_ap_id.clone(),
                             user,
                             option_id,
                             &ctx.host_url_apub,
@@ -839,6 +846,7 @@ async fn route_unstable_posts_poll_your_vote_set(
                         let activity = crate::apub_util::local_poll_vote_to_ap(
                             poll_id,
                             post_ap_id.clone(),
+                            author_ap_id.clone(),
                             user,
                             option_id,
                             name,
@@ -1499,7 +1507,7 @@ async fn route_unstable_posts_like(
     if row_count > 0 {
         crate::spawn_task(async move {
             let row = db.query_opt(
-                "SELECT post.local, post.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(post_author.ap_shared_inbox, post_author.ap_inbox) FROM post LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) WHERE post.id = $1",
+                "SELECT post.local, post.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(post_author.ap_shared_inbox, post_author.ap_inbox), post_author.id, post_author.ap_id FROM post LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) WHERE post.id = $1",
                 &[&post_id],
             ).await?;
             if let Some(row) = row {
@@ -1527,9 +1535,22 @@ async fn route_unstable_posts_like(
                     }
                 }
 
+                let author_ap_id = if post_local {
+                    Some(
+                        crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(7)))
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into(),
+                    )
+                } else {
+                    row.get::<_, Option<&str>>(8)
+                        .map(|x| x.parse())
+                        .transpose()?
+                };
+
                 let like = crate::apub_util::local_post_like_to_ap(
                     post_id,
                     post_ap_id,
+                    author_ap_id,
                     user,
                     &ctx.host_url_apub,
                 )?;
@@ -1721,7 +1742,7 @@ async fn route_unstable_posts_unlike(
     if let Some(new_undo) = new_undo {
         crate::spawn_task(async move {
             let row = db.query_opt(
-                "SELECT post.local, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(post_author.ap_shared_inbox, post_author.ap_inbox) FROM post LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) WHERE post.id = $1",
+                "SELECT post.local, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(post_author.ap_shared_inbox, post_author.ap_inbox), post_author.id, post_author.ap_id FROM post LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) WHERE post.id = $1",
                 &[&post_id],
             ).await?;
             if let Some(row) = row {
@@ -1744,9 +1765,22 @@ async fn route_unstable_posts_unlike(
                     }
                 }
 
+                let author_ap_id = if post_local {
+                    Some(
+                        crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(6)))
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into(),
+                    )
+                } else {
+                    row.get::<_, Option<&str>>(7)
+                        .map(|x| x.parse())
+                        .transpose()?
+                };
+
                 let undo = crate::apub_util::local_post_like_undo_to_ap(
                     new_undo,
                     post_id,
+                    author_ap_id,
                     user,
                     &ctx.host_url_apub,
                 )?;

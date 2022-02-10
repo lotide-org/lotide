@@ -279,7 +279,7 @@ async fn route_unstable_comments_like(
     if row_count > 0 {
         crate::spawn_task(async move {
             let row = db.query_opt(
-                "SELECT reply.local, reply.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(comment_author.ap_shared_inbox, comment_author.ap_inbox) FROM reply LEFT OUTER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS comment_author ON (comment_author.id = reply.author) WHERE reply.id = $1",
+                "SELECT reply.local, reply.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(comment_author.ap_shared_inbox, comment_author.ap_inbox), comment_author.id, comment_author.ap_id FROM reply LEFT OUTER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS comment_author ON (comment_author.id = reply.author) WHERE reply.id = $1",
                 &[&comment_id],
             ).await?;
             if let Some(row) = row {
@@ -309,9 +309,22 @@ async fn route_unstable_comments_like(
                     }
                 }
 
+                let author_ap_id = if comment_local {
+                    Some(
+                        crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(7)))
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into(),
+                    )
+                } else {
+                    row.get::<_, Option<&str>>(8)
+                        .map(|x| x.parse())
+                        .transpose()?
+                };
+
                 let like = crate::apub_util::local_comment_like_to_ap(
                     comment_id,
                     comment_ap_id,
+                    author_ap_id,
                     user,
                     &ctx.host_url_apub,
                 )?;
@@ -504,7 +517,7 @@ async fn route_unstable_comments_unlike(
     if let Some(new_undo) = new_undo {
         crate::spawn_task(async move {
             let row = db.query_opt(
-                "SELECT reply.local, reply.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(comment_author.ap_shared_inbox, comment_author.ap_inbox) FROM reply LEFT OUTER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS comment_author ON (comment_author.id = reply.author) WHERE reply.id = $1",
+                "SELECT reply.local, reply.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(comment_author.ap_shared_inbox, comment_author.ap_inbox), comment_author.id, comment_author.ap_id FROM reply LEFT OUTER JOIN post ON (reply.post = post.id) LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS comment_author ON (comment_author.id = reply.author) WHERE reply.id = $1",
                 &[&comment_id],
             ).await?;
             if let Some(row) = row {
@@ -527,9 +540,22 @@ async fn route_unstable_comments_unlike(
                     }
                 }
 
+                let author_ap_id = if comment_local {
+                    Some(
+                        crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(7)))
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into(),
+                    )
+                } else {
+                    row.get::<_, Option<&str>>(8)
+                        .map(|x| x.parse())
+                        .transpose()?
+                };
+
                 let undo = crate::apub_util::local_comment_like_undo_to_ap(
                     new_undo,
                     comment_id,
+                    author_ap_id,
                     user,
                     &ctx.host_url_apub,
                 )?;

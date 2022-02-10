@@ -380,7 +380,7 @@ async fn handler_posts_likes_get(
         if local {
             let row = db
                 .query_one(
-                    "SELECT local, ap_id FROM post WHERE id=$1",
+                    "SELECT post.local, post.ap_id, person.local, person.id, person.ap_id FROM post INNER JOIN person ON (person.id = post.author) WHERE post.id=$1",
                     &[&post_id.raw()],
                 )
                 .await?;
@@ -391,9 +391,22 @@ async fn handler_posts_likes_get(
                 std::str::FromStr::from_str(row.get(1))?
             };
 
+            let author_ap_id = if row.get(2) {
+                Some(
+                    crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(3)))
+                        .to_local_uri(&ctx.host_url_apub)
+                        .into(),
+                )
+            } else {
+                row.get::<_, Option<&str>>(4)
+                    .map(|x| x.parse())
+                    .transpose()?
+            };
+
             let like = crate::apub_util::local_post_like_to_ap(
                 post_id,
                 post_ap_id,
+                author_ap_id,
                 user_id,
                 &ctx.host_url_apub,
             )?;

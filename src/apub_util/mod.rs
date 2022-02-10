@@ -623,12 +623,12 @@ pub fn spawn_enqueue_send_community_follow_undo(
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
-        let community_inbox: url::Url = {
+        let (community_inbox, community_ap_id): (url::Url, url::Url) = {
             let db = ctx.db_pool.get().await?;
 
             let row = db
                 .query_one(
-                    "SELECT local, ap_inbox FROM community WHERE id=$1",
+                    "SELECT local, ap_inbox, ap_id FROM community WHERE id=$1",
                     &[&community_local_id],
                 )
                 .await?;
@@ -638,21 +638,33 @@ pub fn spawn_enqueue_send_community_follow_undo(
                 return Ok(());
             } else {
                 let ap_inbox: Option<&str> = row.get(1);
+                let ap_id: Option<&str> = row.get(2);
 
-                ap_inbox
-                    .ok_or_else(|| {
-                        crate::Error::InternalStr(format!(
-                            "Missing apub info for community {}",
-                            community_local_id,
-                        ))
-                    })?
-                    .parse()?
+                (
+                    ap_inbox
+                        .ok_or_else(|| {
+                            crate::Error::InternalStr(format!(
+                                "Missing apub info for community {}",
+                                community_local_id,
+                            ))
+                        })?
+                        .parse()?,
+                    ap_id
+                        .ok_or_else(|| {
+                            crate::Error::InternalStr(format!(
+                                "Missing apub info for community {}",
+                                community_local_id,
+                            ))
+                        })?
+                        .parse()?,
+                )
             }
         };
 
         let undo = local_community_follow_undo_to_ap(
             undo_id,
             community_local_id,
+            community_ap_id,
             local_follower,
             &ctx.host_url_apub,
         )?;
@@ -809,12 +821,19 @@ pub fn local_community_comment_announce_ap(
     let mut announce =
         activitystreams::activity::Announce::new(community_ap_id.deref().clone(), comment_ap_id);
 
-    announce.set_context(activitystreams::context()).set_id({
-        let mut res = community_ap_id;
-        res.path_segments_mut()
-            .extend(&["comments", &comment_local_id.to_string(), "announce"]);
-        res.into()
-    });
+    announce
+        .set_context(activitystreams::context())
+        .set_id({
+            let mut res = community_ap_id;
+            res.path_segments_mut().extend(&[
+                "comments",
+                &comment_local_id.to_string(),
+                "announce",
+            ]);
+            res.into()
+        })
+        .set_to(LocalObjectRef::CommunityFollowers(community_id).to_local_uri(host_url_apub))
+        .set_cc(activitystreams::public());
 
     Ok(announce)
 }
@@ -917,12 +936,15 @@ pub fn local_community_update_to_ap(
     let mut update =
         activitystreams::activity::Update::new(community_ap_id.clone(), community_ap_id.clone());
 
-    update.set_id({
-        let mut res = community_ap_id;
-        res.path_segments_mut()
-            .extend(&["updates", &update_id.to_string()]);
-        res.into()
-    });
+    update
+        .set_id({
+            let mut res = community_ap_id;
+            res.path_segments_mut()
+                .extend(&["updates", &update_id.to_string()]);
+            res.into()
+        })
+        .set_to(LocalObjectRef::CommunityFollowers(community_id).to_local_uri(host_url_apub))
+        .set_cc(activitystreams::public());
 
     Ok(update)
 }
@@ -935,11 +957,15 @@ pub fn local_community_delete_to_ap(
 
     let mut delete =
         activitystreams::activity::Delete::new(community_ap_id.clone(), community_ap_id.clone());
-    delete.set_context(activitystreams::context()).set_id({
-        let mut res = community_ap_id;
-        res.path_segments_mut().push("delete");
-        res.into()
-    });
+    delete
+        .set_context(activitystreams::context())
+        .set_id({
+            let mut res = community_ap_id;
+            res.path_segments_mut().push("delete");
+            res.into()
+        })
+        .set_to(LocalObjectRef::CommunityFollowers(community_id).to_local_uri(host_url_apub))
+        .set_cc(activitystreams::public());
 
     delete
 }
@@ -947,6 +973,7 @@ pub fn local_community_delete_to_ap(
 pub fn local_community_follow_undo_to_ap(
     undo_id: uuid::Uuid,
     community_local_id: CommunityLocalID,
+    community_ap_id: url::Url,
     local_follower: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
@@ -955,12 +982,14 @@ pub fn local_community_follow_undo_to_ap(
         LocalObjectRef::CommunityFollow(community_local_id, local_follower)
             .to_local_uri(host_url_apub),
     );
-    undo.set_context(activitystreams::context()).set_id({
-        let mut res = host_url_apub.clone();
-        res.path_segments_mut()
-            .extend(&["community_follow_undos", &undo_id.to_string()]);
-        res.into()
-    });
+    undo.set_context(activitystreams::context())
+        .set_id({
+            let mut res = host_url_apub.clone();
+            res.path_segments_mut()
+                .extend(&["community_follow_undos", &undo_id.to_string()]);
+            res.into()
+        })
+        .set_to(community_ap_id);
 
     Ok(undo)
 }
@@ -968,16 +997,23 @@ pub fn local_community_follow_undo_to_ap(
 pub fn community_follow_accept_to_ap(
     community_ap_id: BaseURL,
     follower_local_id: UserLocalID,
+    follower_ap_id: url::Url,
     follow_ap_id: url::Url,
 ) -> Result<activitystreams::activity::Accept, crate::Error> {
     let mut accept = activitystreams::activity::Accept::new(community_ap_id.clone(), follow_ap_id);
 
-    accept.set_context(activitystreams::context()).set_id({
-        let mut res = community_ap_id;
-        res.path_segments_mut()
-            .extend(&["followers", &follower_local_id.to_string(), "accept"]);
-        res.into()
-    });
+    accept
+        .set_context(activitystreams::context())
+        .set_id({
+            let mut res = community_ap_id;
+            res.path_segments_mut().extend(&[
+                "followers",
+                &follower_local_id.to_string(),
+                "accept",
+            ]);
+            res.into()
+        })
+        .set_to(follower_ap_id);
 
     Ok(accept)
 }
@@ -1004,10 +1040,10 @@ pub fn spawn_enqueue_send_community_follow_accept(
         let community_ap_id =
             LocalObjectRef::Community(local_community).to_local_uri(&ctx.host_url_apub);
 
-        let follower_inbox = {
+        let (follower_inbox, follower_ap_id) = {
             let row = db
                 .query_one(
-                    "SELECT local, ap_inbox FROM person WHERE id=$1",
+                    "SELECT local, ap_inbox, ap_id FROM person WHERE id=$1",
                     &[&follower],
                 )
                 .await?;
@@ -1018,19 +1054,31 @@ pub fn spawn_enqueue_send_community_follow_accept(
                 return Ok(());
             } else {
                 let ap_inbox: Option<&str> = row.get(1);
+                let ap_id: Option<&str> = row.get(2);
 
-                ap_inbox
-                    .ok_or_else(|| {
-                        crate::Error::InternalStr(format!(
-                            "Missing apub info for user {}",
-                            follower
-                        ))
-                    })?
-                    .parse()?
+                (
+                    ap_inbox
+                        .ok_or_else(|| {
+                            crate::Error::InternalStr(format!(
+                                "Missing apub info for user {}",
+                                follower
+                            ))
+                        })?
+                        .parse()?,
+                    ap_id
+                        .ok_or_else(|| {
+                            crate::Error::InternalStr(format!(
+                                "Missing apub info for user {}",
+                                follower
+                            ))
+                        })?
+                        .parse()?,
+                )
             }
         };
 
-        let accept = community_follow_accept_to_ap(community_ap_id, follower, follow_ap_id)?;
+        let accept =
+            community_follow_accept_to_ap(community_ap_id, follower, follower_ap_id, follow_ap_id)?;
         log::debug!("{:?}", accept);
 
         let body = serde_json::to_string(&accept)?;
@@ -1423,11 +1471,14 @@ pub fn local_post_delete_to_ap(
         LocalObjectRef::User(author).to_local_uri(host_url_apub),
         post_ap_id.clone(),
     );
-    delete.set_context(activitystreams::context()).set_id({
-        let mut res = post_ap_id;
-        res.path_segments_mut().push("delete");
-        res.into()
-    });
+    delete
+        .set_context(activitystreams::context())
+        .set_id({
+            let mut res = post_ap_id;
+            res.path_segments_mut().push("delete");
+            res.into()
+        })
+        .set_to(activitystreams::public());
 
     Ok(delete)
 }
@@ -1444,11 +1495,14 @@ pub fn local_comment_delete_to_ap(
         comment_ap_id.clone(),
     );
 
-    delete.set_context(activitystreams::context()).set_id({
-        let mut res = comment_ap_id;
-        res.path_segments_mut().push("delete");
-        res.into()
-    });
+    delete
+        .set_context(activitystreams::context())
+        .set_id({
+            let mut res = comment_ap_id;
+            res.path_segments_mut().push("delete");
+            res.into()
+        })
+        .set_to(activitystreams::public());
 
     Ok(delete)
 }
@@ -1534,6 +1588,7 @@ pub fn local_post_flag_to_ap(
 pub fn local_post_like_to_ap(
     post_local_id: PostLocalID,
     post_ap_id: BaseURL,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
@@ -1547,12 +1602,19 @@ pub fn local_post_like_to_ap(
             .into(),
     );
 
+    if let Some(author_ap_id) = author_ap_id {
+        like.set_to(author_ap_id);
+    }
+
+    like.set_cc(activitystreams::public());
+
     Ok(like)
 }
 
 pub fn local_post_like_undo_to_ap(
     undo_id: uuid::Uuid,
     post_local_id: PostLocalID,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
@@ -1569,12 +1631,19 @@ pub fn local_post_like_undo_to_ap(
         res.into()
     });
 
+    if let Some(author_ap_id) = author_ap_id {
+        undo.set_to(author_ap_id);
+    }
+
+    undo.set_cc(activitystreams::public());
+
     Ok(undo)
 }
 
 pub fn local_comment_like_to_ap(
     comment_local_id: CommentLocalID,
     comment_ap_id: BaseURL,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
@@ -1587,12 +1656,17 @@ pub fn local_comment_like_to_ap(
     like.set_context(activitystreams::context())
         .set_id(like_ap_id.into());
 
+    if let Some(author_ap_id) = author_ap_id {
+        like.set_to(author_ap_id);
+    }
+
     Ok(like)
 }
 
 pub fn local_comment_like_undo_to_ap(
     undo_id: uuid::Uuid,
     comment_local_id: CommentLocalID,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
@@ -1610,12 +1684,17 @@ pub fn local_comment_like_undo_to_ap(
         res.into()
     });
 
+    if let Some(author_ap_id) = author_ap_id {
+        undo.set_to(author_ap_id);
+    }
+
     Ok(undo)
 }
 
 pub fn local_poll_vote_to_ap(
     poll_id: PollLocalID,
     poll_ap_id: BaseURL,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     option_id: PollOptionLocalID,
     option_name: String,
@@ -1636,16 +1715,25 @@ pub fn local_poll_vote_to_ap(
         .set_name(option_name)
         .set_attributed_to(actor.clone());
 
+    if let Some(ref author_ap_id) = author_ap_id {
+        note.set_to(author_ap_id.clone());
+    }
+
     let mut create = activitystreams::activity::Create::new(actor, note.into_any_base()?);
     create
         .set_context(activitystreams::context())
         .set_id(id.into());
+
+    if let Some(author_ap_id) = author_ap_id {
+        create.set_to(author_ap_id);
+    }
 
     Ok(create)
 }
 
 pub fn local_poll_vote_undo_to_ap(
     poll_id: PollLocalID,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     option_id: PollOptionLocalID,
     host_url_apub: &BaseURL,
@@ -1662,6 +1750,10 @@ pub fn local_poll_vote_undo_to_ap(
             .extend(&["tmp_objects", &undo_id.to_string()]);
         res.into()
     });
+
+    if let Some(author_ap_id) = author_ap_id {
+        undo.set_to(author_ap_id);
+    }
 
     Ok(undo)
 }

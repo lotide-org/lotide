@@ -583,7 +583,7 @@ async fn handler_communities_followers_accept_get(
     let db = ctx.db_pool.get().await?;
 
     let row = db.query_opt(
-        "SELECT community.local, community_follow.ap_id, person.id, person.local FROM community_follow, community, person WHERE community_follow.community = community.id AND community_follow.follower = person.id AND community.id = $1 AND person.id = $2",
+        "SELECT community.local, community_follow.ap_id, person.id, person.local, person.ap_id FROM community_follow, community, person WHERE community_follow.community = community.id AND community_follow.follower = person.id AND community.id = $1 AND person.id = $2",
         &[&community_id, &user_id],
     ).await?;
 
@@ -602,28 +602,46 @@ async fn handler_communities_followers_accept_get(
             }
 
             let follower_local = row.get(3);
-            let follow_ap_id = if follower_local {
-                crate::apub_util::LocalObjectRef::CommunityFollow(
-                    community_id,
-                    UserLocalID(row.get(2)),
+            let follower_local_id = UserLocalID(row.get(2));
+            let (follow_ap_id, follower_ap_id) = if follower_local {
+                (
+                    crate::apub_util::LocalObjectRef::CommunityFollow(
+                        community_id,
+                        follower_local_id,
+                    )
+                    .to_local_uri(&ctx.host_url_apub),
+                    crate::apub_util::LocalObjectRef::User(follower_local_id)
+                        .to_local_uri(&ctx.host_url_apub)
+                        .into(),
                 )
-                .to_local_uri(&ctx.host_url_apub)
             } else {
                 let follow_ap_id: Option<&str> = row.get(1);
-                follow_ap_id
-                    .ok_or_else(|| {
-                        crate::Error::InternalStr(format!(
-                            "Missing ap_id for follow ({} / {})",
-                            community_id, user_id
-                        ))
-                    })?
-                    .parse()?
+                let follower_ap_id: Option<&str> = row.get(4);
+                (
+                    follow_ap_id
+                        .ok_or_else(|| {
+                            crate::Error::InternalStr(format!(
+                                "Missing ap_id for follow ({} / {})",
+                                community_id, user_id
+                            ))
+                        })?
+                        .parse()?,
+                    follower_ap_id
+                        .ok_or_else(|| {
+                            crate::Error::InternalStr(format!(
+                                "Missing ap_id for user ({})",
+                                user_id
+                            ))
+                        })?
+                        .parse()?,
+                )
             };
 
             let body = crate::apub_util::community_follow_accept_to_ap(
                 crate::apub_util::LocalObjectRef::Community(community_id)
                     .to_local_uri(&ctx.host_url_apub),
                 user_id,
+                follower_ap_id,
                 follow_ap_id.into(),
             )?;
             let body = serde_json::to_vec(&body)?.into();
