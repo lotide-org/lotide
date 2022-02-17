@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE community DROP COLUMN old_name;
+COMMIT;

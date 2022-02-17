@@ -800,7 +800,7 @@ pub async fn ingest_delete(
             }
         } else {
             // maybe it's a community
-            db.execute("UPDATE community SET deleted=TRUE, name='[deleted]', description=NULL, description_html=NULL, description_markdown=NULL, created_by=NULL, public_key=NULL WHERE ap_id=$1", &[&object_id.as_str()]).await?;
+            db.execute("UPDATE community SET deleted=TRUE, old_name=name, name='[deleted]', description=NULL, description_html=NULL, description_markdown=NULL, created_by=NULL, public_key=NULL WHERE ap_id=$1", &[&object_id.as_str()]).await?;
         }
     }
 

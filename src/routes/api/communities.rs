@@ -410,7 +410,7 @@ async fn route_unstable_communities_delete(
         }
     })?;
 
-    let row_count = db.execute("UPDATE community SET deleted=TRUE, name='[deleted]', description=NULL, description_html=NULL, description_markdown=NULL WHERE id=$1 AND NOT deleted", &[&community_id]).await?;
+    let row_count = db.execute("UPDATE community SET deleted=TRUE, old_name=name, name='[deleted]', description=NULL, description_html=NULL, description_markdown=NULL WHERE id=$1 AND NOT deleted", &[&community_id]).await?;
 
     if row_count > 0 {
         // successfully deleted, inform followers

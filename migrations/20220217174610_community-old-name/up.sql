@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE community ADD COLUMN old_name TEXT;
+COMMIT;
