@@ -699,7 +699,7 @@ pub fn render_markdown(src: &str) -> String {
 lazy_static::lazy_static! {
     static ref SANITIZER: ammonia::Builder<'static> = {
         let mut builder = ammonia::Builder::default();
-        builder.link_rel(Some("ugc noopener noreferrer"));
+        builder.link_rel(Some("ugc noopener"));
         builder.rm_tags(&["img"]);
 
         builder
