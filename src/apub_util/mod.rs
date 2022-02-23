@@ -1953,6 +1953,10 @@ pub async fn verify_incoming_object(
             )
             .await?
             {
+                log::debug!(
+                    "Received remote object: {}",
+                    String::from_utf8_lossy(&req_body)
+                );
                 Ok(Verified(serde_json::from_slice(&req_body)?))
             } else {
                 Err(crate::Error::UserError(crate::simple_response(
