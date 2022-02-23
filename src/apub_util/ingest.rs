@@ -1591,7 +1591,7 @@ async fn handle_recieved_post(
     let (post_local_id, poll_output) = {
         let trans = db.transaction().await?;
         let row = trans.query_one(
-            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp, $11) ON CONFLICT (ap_id) DO UPDATE SET approved=$9, approved_ap_id=$10, updated_local=current_timestamp, sensitive=$11 RETURNING id, poll_id",
+            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp, $11) ON CONFLICT (ap_id) DO UPDATE SET approved=($9 OR post.approved), approved_ap_id=(CASE WHEN $9 THEN $10 ELSE post.approved_ap_id END), updated_local=current_timestamp, sensitive=$11 RETURNING id, poll_id",
             &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str()), &sensitive],
         ).await?;
         let post_local_id = PostLocalID(row.get(0));
