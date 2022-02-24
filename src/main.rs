@@ -1133,7 +1133,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
                         };
 
                         let ratelimit_ok = match ratelimit_addr {
-                            Some(addr) => context.api_ratelimit.try_call(addr).await,
+                            Some(addr) => context.api_ratelimit.try_call(addr),
                             None => true,
                         };
                         let result = if !ratelimit_ok {
