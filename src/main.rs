@@ -954,17 +954,17 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    let matches = clap::App::new("lotide")
+    let matches = clap::Command::new("lotide")
         .arg(
-            clap::Arg::with_name("config")
-                .short("c")
+            clap::Arg::new("config")
+                .short('c')
                 .value_name("FILE")
                 .help("Sets a path to a config file")
                 .takes_value(true),
         )
         .subcommand(
-            clap::SubCommand::with_name("migrate").arg(
-                clap::Arg::with_name("ACTION")
+            clap::Command::new("migrate").arg(
+                clap::Arg::new("ACTION")
                     .required(true)
                     .default_value("up")
                     .possible_values(&["up", "down", "setup"]),

@@ -58,7 +58,7 @@ log = "0.4"
 env_logger = "0.8"
 v_htmlescape = "0.14.1"
 config = { version = "0.11.0", default-features = false, features = ["ini"] }
-clap = "2.33.3"
+clap = "3.1.2"
 bytes = "1.0.1"
 atom_syndication = "0.11.0"
 lotide_types = { path = "./types" }
