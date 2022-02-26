@@ -41,3 +41,7 @@ post_not_link = Tiu poŝto ne estas ligilo
 description_content_conflict = Maksimume unu el description_text, description_markdown kaj description_html estas permesita
 notification_title_post_reply = Respondo al via poŝto { $post_title }
 notification_title_reply_reply = Respondo al via komento sur poŝto { $post_title }
+poll_is_closed = Enketo estas fermita
+post_conflict_href_poll = Ne povas havi kaj ligilon kaj enketon
+post_poll_options_conflict = Enketo ne povas havi multajn elektojn kun la sama nomo
+post_poll_empty = Ne povas krei enketon sen elektoj
