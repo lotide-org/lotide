@@ -1892,6 +1892,55 @@ pub async fn check_signature_for_actor(
     }
 }
 
+pub fn check_digest(body: &[u8], digest_header: &http::header::HeaderValue) -> bool {
+    let digest_header = match digest_header.to_str() {
+        Ok(value) => value,
+        Err(_) => {
+            log::warn!("Digest header was not ASCII, ignoring");
+            return true;
+        }
+    };
+
+    for segment in digest_header.split(',') {
+        let segment = segment.trim();
+
+        if let Some(idx) = segment.find('=') {
+            let algorithm_id = &segment[..idx].to_lowercase();
+            let digest_value = &segment[(idx + 1)..];
+
+            let expected_value = match algorithm_id.deref() {
+                "sha-256" => {
+                    use sha2::Digest;
+
+                    let mut hasher = sha2::Sha256::new();
+                    hasher.update(body);
+                    let result = hasher.finalize();
+                    Some(base64::encode(result))
+                }
+                "sha-512" => {
+                    use sha2::Digest;
+
+                    let mut hasher = sha2::Sha512::new();
+                    hasher.update(body);
+                    let result = hasher.finalize();
+                    Some(base64::encode(result))
+                }
+                _ => None,
+            };
+
+            if let Some(expected_value) = expected_value {
+                if digest_value != expected_value {
+                    return false;
+                }
+
+                log::debug!("digest matches");
+            }
+        }
+    }
+
+    true
+}
+
 pub async fn verify_incoming_object(
     mut req: hyper::Request<hyper::Body>,
     db: &tokio_postgres::Client,
@@ -1953,6 +2002,14 @@ pub async fn verify_incoming_object(
             )
             .await?
             {
+                if let Some(digest) = req.headers().get("digest") {
+                    if !check_digest(&req_body, digest) {
+                        return Err(crate::Error::UserError(crate::simple_response(
+                            hyper::StatusCode::FORBIDDEN,
+                            "Mismatched Digest header",
+                        )));
+                    }
+                }
                 log::debug!(
                     "Received remote object: {}",
                     String::from_utf8_lossy(&req_body)

@@ -1568,6 +1568,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "serde_urlencoded 0.6.1",
+ "sha2 0.10.2",
  "thiserror",
  "tokio",
  "tokio-postgres",

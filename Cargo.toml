@@ -64,6 +64,7 @@ atom_syndication = "0.11.0"
 lotide_types = { path = "./types" }
 date_duration = "0.1.0"
 web-push = "0.9.1"
+sha2 = "0.10.2"
 
 [dev-dependencies]
 rand = "0.7.3"
