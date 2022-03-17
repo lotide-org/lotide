@@ -407,3 +407,18 @@ pub enum PollVoteBody {
 pub struct RespPollYourVote {
     pub options: Vec<JustID<PollOptionLocalID>>,
 }
+
+#[derive(Serialize, Clone)]
+pub struct RespModlogEvent<'a> {
+    pub time: String,
+    #[serde(flatten)]
+    pub details: RespModlogEventDetails<'a>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
+pub enum RespModlogEventDetails<'a> {
+    RejectPost { post: RespMinimalPostInfo<'a> },
+    ApprovePost { post: RespMinimalPostInfo<'a> },
+}
