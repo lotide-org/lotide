@@ -1,8 +1,9 @@
 use crate::lang;
 use crate::types::{
-    CommentLocalID, FingerRequestQuery, FingerResponse, JustURL, RespAvatarInfo, RespList,
-    RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo, RespMinimalCommunityInfo,
-    RespPostCommentInfo, RespPostListPost, UserLocalID,
+    CommentLocalID, CommunityLocalID, FingerRequestQuery, FingerResponse, JustURL, PostLocalID,
+    RespAvatarInfo, RespList, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
+    RespMinimalCommunityInfo, RespMinimalPostInfo, RespPostCommentInfo, RespPostListPost,
+    RespSiteModlogEvent, RespSiteModlogEventDetails, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -364,7 +365,17 @@ pub fn route_api() -> crate::RouteNode<()> {
                     "instance",
                     crate::RouteNode::new()
                         .with_handler_async(hyper::Method::GET, route_unstable_instance_get)
-                        .with_handler_async(hyper::Method::PATCH, route_unstable_instance_patch),
+                        .with_handler_async(hyper::Method::PATCH, route_unstable_instance_patch)
+                        .with_child(
+                            "modlog",
+                            crate::RouteNode::new().with_child(
+                                "events",
+                                crate::RouteNode::new().with_handler_async(
+                                    hyper::Method::GET,
+                                    route_unstable_instance_modlog_events_list,
+                                ),
+                            ),
+                        ),
                 )
                 .with_child(
                     "misc",
@@ -1126,6 +1137,246 @@ async fn get_comments_replies<'a>(
     }
 
     Ok(result)
+}
+
+async fn route_unstable_instance_modlog_events_list(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let db = ctx.db_pool.get().await?;
+
+    fn default_limit() -> u32 {
+        30
+    }
+
+    #[derive(Deserialize)]
+    struct ModlogEventsListQuery<'a> {
+        #[serde(default = "default_limit")]
+        limit: u32,
+
+        page: Option<Cow<'a, str>>,
+    }
+
+    let query: ModlogEventsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
+    let inner_limit = i64::from(query.limit) + 1;
+
+    let page = query
+        .page
+        .as_deref()
+        .map(parse_number_58)
+        .transpose()
+        .map_err(|_| InvalidPage.into_user_error())?;
+
+    let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&inner_limit];
+
+    let rows = db.query(&format!("SELECT modlog_event.id, modlog_event.time, modlog_event.action, reply_post.id, reply_post.title, reply_post.local, reply_post.ap_id, reply_post.sensitive, person.id, person.username, person.local, person.ap_id, person.avatar, person.is_bot, reply_author.id, reply_author.username, reply_author.local, reply_author.ap_id, reply_author.avatar, reply_author.is_bot, post_community.id, post_community.name, post_community.local, post_community.ap_id, post_community.deleted, post_author.id, post_author.username, post_author.local, post_author.ap_id, post_author.avatar, post_author.is_bot FROM modlog_event LEFT OUTER JOIN reply ON (reply.id = modlog_event.reply) LEFT OUTER JOIN post AS reply_post ON (reply_post.id = reply.post) LEFT OUTER JOIN person ON (person.id = modlog_event.person) LEFT OUTER JOIN person AS reply_author ON (reply_author.id = reply.author) LEFT OUTER JOIN post ON (post.id = modlog_event.post) LEFT OUTER JOIN community AS post_community ON (post_community.id = post.community) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) WHERE modlog_event.by_community IS NULL{} ORDER BY modlog_event.id DESC LIMIT $1", if let Some(page) = &page {
+        values.push(page);
+
+        " AND modlog_event.id <= $2"
+    } else {
+        ""
+    }), &values).await?;
+
+    let (rows, next_page) = if rows.len() > query.limit as usize {
+        let next_page = format_number_58(rows.last().unwrap().get(0));
+        (&rows[..(query.limit as usize)], Some(Cow::Owned(next_page)))
+    } else {
+        (&rows[..], None)
+    };
+
+    let output = RespList {
+        items: rows
+            .iter()
+            .filter_map(|row| {
+                let time: chrono::DateTime<chrono::FixedOffset> = row.get(1);
+                let action = row.get(2);
+
+                let reply_post = row.get::<_, Option<_>>(3).map(|post_id| {
+                    let post_id = PostLocalID(post_id);
+                    let post_title = row.get(4);
+                    let post_local: bool = row.get(5);
+                    let post_ap_id: Option<&str> = row.get(6);
+                    let post_sensitive: bool = row.get(7);
+
+                    let post_remote_url = if post_local {
+                        Some(Cow::Owned(String::from(
+                            crate::apub_util::LocalObjectRef::Post(post_id)
+                                .to_local_uri(&ctx.host_url_apub),
+                        )))
+                    } else {
+                        post_ap_id.map(Cow::Borrowed)
+                    };
+
+                    RespMinimalPostInfo {
+                        id: post_id,
+                        title: post_title,
+                        remote_url: post_remote_url,
+                        sensitive: post_sensitive,
+                    }
+                });
+
+                let user = row.get::<_, Option<_>>(8).map(|user_id| {
+                    let user_id = UserLocalID(user_id);
+                    let local = row.get(10);
+                    let ap_id: Option<&str> = row.get(11);
+                    let avatar: Option<&str> = row.get(12);
+
+                    let remote_url = if local {
+                        Some(Cow::Owned(String::from(
+                            crate::apub_util::LocalObjectRef::User(user_id)
+                                .to_local_uri(&ctx.host_url_apub),
+                        )))
+                    } else {
+                        ap_id.map(Cow::Borrowed)
+                    };
+
+                    RespMinimalAuthorInfo {
+                        id: user_id,
+                        username: Cow::Borrowed(row.get(9)),
+                        local,
+                        host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
+                        avatar: avatar.map(|url| RespAvatarInfo {
+                            url: ctx.process_avatar_href(url, user_id).into_owned().into(),
+                        }),
+                        is_bot: row.get(13),
+                        remote_url,
+                    }
+                });
+
+                let reply_author = row.get::<_, Option<_>>(14).map(|user_id| {
+                    let user_id = UserLocalID(user_id);
+                    let local = row.get(16);
+                    let ap_id: Option<&str> = row.get(17);
+                    let avatar: Option<&str> = row.get(18);
+
+                    let remote_url = if local {
+                        Some(Cow::Owned(String::from(
+                            crate::apub_util::LocalObjectRef::User(user_id)
+                                .to_local_uri(&ctx.host_url_apub),
+                        )))
+                    } else {
+                        ap_id.map(Cow::Borrowed)
+                    };
+
+                    RespMinimalAuthorInfo {
+                        id: user_id,
+                        username: Cow::Borrowed(row.get(15)),
+                        local,
+                        host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
+                        avatar: avatar.map(|url| RespAvatarInfo {
+                            url: ctx.process_avatar_href(url, user_id).into_owned().into(),
+                        }),
+                        is_bot: row.get(19),
+                        remote_url,
+                    }
+                });
+
+                let post_community = row.get::<_, Option<_>>(20).map(|community_id| {
+                    let community_id = CommunityLocalID(community_id);
+                    let name = Cow::Borrowed(row.get(21));
+                    let local = row.get(22);
+                    let ap_id: Option<&str> = row.get(23);
+                    let deleted = row.get(24);
+
+                    let remote_url = if local {
+                        Some(Cow::Owned(String::from(
+                            crate::apub_util::LocalObjectRef::Community(community_id)
+                                .to_local_uri(&ctx.host_url_apub),
+                        )))
+                    } else {
+                        ap_id.map(Cow::Borrowed)
+                    };
+
+                    RespMinimalCommunityInfo {
+                        id: community_id,
+                        deleted,
+                        local,
+                        name,
+                        host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
+                        remote_url,
+                    }
+                });
+
+                let post_author = row.get::<_, Option<_>>(25).map(|user_id| {
+                    let user_id = UserLocalID(user_id);
+                    let local = row.get(27);
+                    let ap_id: Option<&str> = row.get(28);
+                    let avatar: Option<&str> = row.get(29);
+
+                    let remote_url = if local {
+                        Some(Cow::Owned(String::from(
+                            crate::apub_util::LocalObjectRef::User(user_id)
+                                .to_local_uri(&ctx.host_url_apub),
+                        )))
+                    } else {
+                        ap_id.map(Cow::Borrowed)
+                    };
+
+                    RespMinimalAuthorInfo {
+                        id: user_id,
+                        username: Cow::Borrowed(row.get(26)),
+                        local,
+                        host: crate::get_actor_host_or_unknown(local, ap_id, &ctx.local_hostname),
+                        avatar: avatar.map(|url| RespAvatarInfo {
+                            url: ctx.process_avatar_href(url, user_id).into_owned().into(),
+                        }),
+                        is_bot: row.get(30),
+                        remote_url,
+                    }
+                });
+
+                let details = match action {
+                    "delete_post" => {
+                        if let Some(community) = post_community {
+                            if let Some(author) = post_author {
+                                RespSiteModlogEventDetails::DeletePost { author, community }
+                            } else {
+                                return None;
+                            }
+                        } else {
+                            return None;
+                        }
+                    }
+                    "delete_reply" => {
+                        if let Some(author) = reply_author {
+                            if let Some(post) = reply_post {
+                                RespSiteModlogEventDetails::DeleteComment { author, post }
+                            } else {
+                                return None;
+                            }
+                        } else {
+                            return None;
+                        }
+                    }
+                    "suspend_user" => {
+                        if let Some(user) = user {
+                            RespSiteModlogEventDetails::SuspendUser { user }
+                        } else {
+                            return None;
+                        }
+                    }
+                    "unsuspend_user" => {
+                        if let Some(user) = user {
+                            RespSiteModlogEventDetails::UnsuspendUser { user }
+                        } else {
+                            return None;
+                        }
+                    }
+                    _ => return None,
+                };
+
+                Some(RespSiteModlogEvent {
+                    time: time.to_rfc3339(),
+                    details,
+                })
+            })
+            .collect(),
+        next_page,
+    };
+
+    crate::json_response(&output)
 }
 
 async fn route_unstable_misc_render_markdown(

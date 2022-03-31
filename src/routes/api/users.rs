@@ -451,12 +451,22 @@ async fn route_unstable_users_patch(
 
         let trans = db.transaction().await?;
         trans.execute(sql, &values).await?;
-        if body.suspended == Some(true) {
-            // just suspended, need to clear out current logins
+        if let Some(suspended) = body.suspended {
+            if suspended {
+                // just suspended, need to clear out current logins
 
-            trans
-                .execute("DELETE FROM login WHERE person=$1", &[&user_id])
-                .await?;
+                trans
+                    .execute("DELETE FROM login WHERE person=$1", &[&user_id])
+                    .await?;
+            }
+
+            let action = if suspended {
+                "suspend_user"
+            } else {
+                "unsuspend_user"
+            };
+
+            trans.execute("INSERT INTO modlog_event (time, by_person, action, person) VALUES (current_timestamp, $1, $2, $3)", &[&me_or_admin.login_user, &action, &user_id]).await?;
         }
 
         trans.commit().await?;

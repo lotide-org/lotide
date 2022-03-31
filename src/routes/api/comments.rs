@@ -184,7 +184,7 @@ async fn route_unstable_comments_delete(
     let (comment_id,) = params;
 
     let lang = crate::get_lang_for_req(&req);
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let login_user = crate::require_login(&req, &db).await?;
 
@@ -198,24 +198,37 @@ async fn route_unstable_comments_delete(
         None => Ok(crate::empty_response()), // already gone
         Some(row) => {
             let author = row.get::<_, Option<_>>(0).map(UserLocalID);
-            if author != Some(login_user) {
+            let is_mod_action = if author != Some(login_user) {
                 if row.get(2) && crate::is_site_admin(&db, login_user).await? {
                     // still ok
+                    true
                 } else {
                     return Err(crate::Error::UserError(crate::simple_response(
                         hyper::StatusCode::FORBIDDEN,
                         lang.tr(&lang::comment_not_yours()).into_owned(),
                     )));
                 }
-            }
+            } else {
+                false
+            };
 
             let actor = author.unwrap_or(login_user);
 
-            db.execute(
-                "UPDATE reply SET content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE id=$1",
-                &[&comment_id],
-            )
-            .await?;
+            {
+                let trans = db.transaction().await?;
+
+                trans.execute(
+                    "UPDATE reply SET content_text='[deleted]', content_markdown=NULL, content_html=NULL, deleted=TRUE WHERE id=$1",
+                    &[&comment_id],
+                )
+                .await?;
+
+                if is_mod_action {
+                    trans.execute("INSERT INTO modlog_event (time, by_person, action, reply) VALUES (current_timestamp, $1, 'delete_reply', $2)", &[&login_user, &comment_id]).await?;
+                }
+
+                trans.commit().await?;
+            }
 
             crate::spawn_task(async move {
                 let community = row.get::<_, Option<_>>(1).map(CommunityLocalID);

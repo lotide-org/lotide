@@ -422,3 +422,30 @@ pub enum RespCommunityModlogEventDetails<'a> {
     RejectPost { post: RespMinimalPostInfo<'a> },
     ApprovePost { post: RespMinimalPostInfo<'a> },
 }
+
+#[derive(Serialize, Clone)]
+pub struct RespSiteModlogEvent<'a> {
+    pub time: String,
+    #[serde(flatten)]
+    pub details: RespSiteModlogEventDetails<'a>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
+pub enum RespSiteModlogEventDetails<'a> {
+    DeletePost {
+        author: RespMinimalAuthorInfo<'a>,
+        community: RespMinimalCommunityInfo<'a>,
+    },
+    DeleteComment {
+        author: RespMinimalAuthorInfo<'a>,
+        post: RespMinimalPostInfo<'a>,
+    },
+    SuspendUser {
+        user: RespMinimalAuthorInfo<'a>,
+    },
+    UnsuspendUser {
+        user: RespMinimalAuthorInfo<'a>,
+    },
+}
