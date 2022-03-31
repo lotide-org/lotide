@@ -2,9 +2,9 @@ use super::{format_number_58, parse_number_58, CommunitiesSortType, InvalidPage,
 use crate::lang;
 use crate::types::{
     CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityFeeds,
-    RespCommunityFeedsType, RespCommunityInfo, RespList, RespMinimalAuthorInfo,
-    RespMinimalCommunityInfo, RespMinimalPostInfo, RespModeratorInfo, RespModlogEvent,
-    RespModlogEventDetails, RespYourFollowInfo, UserLocalID,
+    RespCommunityFeedsType, RespCommunityInfo, RespCommunityModlogEvent,
+    RespCommunityModlogEventDetails, RespList, RespMinimalAuthorInfo, RespMinimalCommunityInfo,
+    RespMinimalPostInfo, RespModeratorInfo, RespYourFollowInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -973,12 +973,12 @@ async fn route_unstable_communities_modlog_events_list(
                 });
 
                 let details = match action {
-                    "approve_post" => RespModlogEventDetails::ApprovePost { post: post? },
-                    "reject_post" => RespModlogEventDetails::RejectPost { post: post? },
+                    "approve_post" => RespCommunityModlogEventDetails::ApprovePost { post: post? },
+                    "reject_post" => RespCommunityModlogEventDetails::RejectPost { post: post? },
                     _ => return None,
                 };
 
-                Some(RespModlogEvent {
+                Some(RespCommunityModlogEvent {
                     time: time.to_rfc3339(),
                     details,
                 })

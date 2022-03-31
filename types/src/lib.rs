@@ -409,16 +409,16 @@ pub struct RespPollYourVote {
 }
 
 #[derive(Serialize, Clone)]
-pub struct RespModlogEvent<'a> {
+pub struct RespCommunityModlogEvent<'a> {
     pub time: String,
     #[serde(flatten)]
-    pub details: RespModlogEventDetails<'a>,
+    pub details: RespCommunityModlogEventDetails<'a>,
 }
 
 #[derive(Serialize, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
-pub enum RespModlogEventDetails<'a> {
+pub enum RespCommunityModlogEventDetails<'a> {
     RejectPost { post: RespMinimalPostInfo<'a> },
     ApprovePost { post: RespMinimalPostInfo<'a> },
 }
