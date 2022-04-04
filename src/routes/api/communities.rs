@@ -1,9 +1,10 @@
-use super::{CommunitiesSortType, ValueConsumer};
+use super::{format_number_58, parse_number_58, CommunitiesSortType, InvalidPage, ValueConsumer};
 use crate::lang;
 use crate::types::{
     CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityFeeds,
-    RespCommunityFeedsType, RespCommunityInfo, RespList, RespMinimalAuthorInfo,
-    RespMinimalCommunityInfo, RespModeratorInfo, RespYourFollowInfo, UserLocalID,
+    RespCommunityFeedsType, RespCommunityInfo, RespCommunityModlogEvent,
+    RespCommunityModlogEventDetails, RespList, RespMinimalAuthorInfo, RespMinimalCommunityInfo,
+    RespMinimalPostInfo, RespModeratorInfo, RespYourFollowInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -891,6 +892,104 @@ async fn route_unstable_communities_moderators_remove(
     }
 }
 
+async fn route_unstable_communities_modlog_events_list(
+    params: (CommunityLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (community,) = params;
+    let db = ctx.db_pool.get().await?;
+
+    fn default_limit() -> u32 {
+        30
+    }
+
+    #[derive(Deserialize)]
+    struct ModlogEventsListQuery<'a> {
+        #[serde(default = "default_limit")]
+        limit: u32,
+
+        page: Option<Cow<'a, str>>,
+    }
+
+    let query: ModlogEventsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
+    let inner_limit = i64::from(query.limit) + 1;
+
+    let page = query
+        .page
+        .as_deref()
+        .map(parse_number_58)
+        .transpose()
+        .map_err(|_| InvalidPage.into_user_error())?;
+
+    let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+        vec![&community, &inner_limit];
+
+    let rows = db.query(&format!("SELECT modlog_event.id, modlog_event.time, modlog_event.action, post.id, post.title, post.ap_id, post.local, post.sensitive FROM modlog_event LEFT OUTER JOIN post ON (post.id = modlog_event.post) WHERE modlog_event.by_community=$1{}ORDER BY modlog_event.id DESC LIMIT $2", if let Some(page) = &page {
+        values.push(page);
+
+        " AND modlog_event.id <= $3"
+    } else {
+        ""
+    }), &values).await?;
+
+    let (rows, next_page) = if rows.len() > query.limit as usize {
+        let next_page = format_number_58(rows.last().unwrap().get(0));
+        (&rows[..(query.limit as usize)], Some(Cow::Owned(next_page)))
+    } else {
+        (&rows[..], None)
+    };
+
+    let output = RespList {
+        items: rows
+            .iter()
+            .filter_map(|row| {
+                let time: chrono::DateTime<chrono::FixedOffset> = row.get(1);
+                let action = row.get(2);
+
+                let post = row.get::<_, Option<_>>(3).map(|post_id| {
+                    let post_id = PostLocalID(post_id);
+                    let post_title = row.get(4);
+                    let post_ap_id: Option<&str> = row.get(5);
+                    let post_local: bool = row.get(6);
+                    let post_sensitive: bool = row.get(7);
+
+                    let post_remote_url = if post_local {
+                        Some(Cow::Owned(String::from(
+                            crate::apub_util::LocalObjectRef::Post(post_id)
+                                .to_local_uri(&ctx.host_url_apub),
+                        )))
+                    } else {
+                        post_ap_id.map(Cow::Borrowed)
+                    };
+
+                    RespMinimalPostInfo {
+                        id: post_id,
+                        title: post_title,
+                        remote_url: post_remote_url,
+                        sensitive: post_sensitive,
+                    }
+                });
+
+                let details = match action {
+                    "approve_post" => RespCommunityModlogEventDetails::ApprovePost { post: post? },
+                    "reject_post" => RespCommunityModlogEventDetails::RejectPost { post: post? },
+                    _ => return None,
+                };
+
+                Some(RespCommunityModlogEvent {
+                    time: time.to_rfc3339(),
+                    details,
+                })
+            })
+            .collect(),
+        next_page,
+    };
+
+    crate::json_response(&output)
+}
+
 async fn route_unstable_communities_unfollow(
     params: (CommunityLocalID,),
     ctx: Arc<crate::RouteContext>,
@@ -943,7 +1042,7 @@ async fn route_unstable_communities_posts_patch(
     let (community_id, post_id) = params;
 
     let lang = crate::get_lang_for_req(&req);
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     require_community_exists(community_id, &db, &lang).await?;
 
@@ -1031,7 +1130,24 @@ async fn route_unstable_communities_posts_patch(
     if any_changes {
         sql.push_str(" WHERE id=$1");
 
-        db.execute(sql.deref(), &values).await?;
+        {
+            let trans = db.transaction().await?;
+            trans.execute(sql.deref(), &values).await?;
+
+            if let Some(approved) = body.approved {
+                if approved != old_approved {
+                    let action = if approved {
+                        "approve_post"
+                    } else {
+                        "reject_post"
+                    };
+
+                    trans.execute("INSERT INTO modlog_event (time, by_community, by_person, action, post) VALUES (current_timestamp, $1, $2, $3, $4)", &[&community_id, &user, &action, &post_id]).await?;
+                }
+            }
+
+            trans.commit().await?;
+        }
 
         if let Some(approved) = body.approved {
             if approved != old_approved {
@@ -1095,6 +1211,16 @@ pub fn route_communities() -> crate::RouteNode<()> {
                                     route_unstable_communities_moderators_remove,
                                 ),
                         ),
+                )
+                .with_child(
+                    "modlog",
+                    crate::RouteNode::new().with_child(
+                        "events",
+                        crate::RouteNode::new().with_handler_async(
+                            hyper::Method::GET,
+                            route_unstable_communities_modlog_events_list,
+                        ),
+                    ),
                 )
                 .with_child(
                     "unfollow",
