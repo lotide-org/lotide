@@ -4,6 +4,7 @@ use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
+use std::ops::Deref;
 use std::sync::Arc;
 
 mod apub_util;
@@ -21,7 +22,7 @@ use self::types::{
 
 pub use self::lang::Translator;
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(try_from = "url::Url")]
 #[serde(into = "url::Url")]
 pub struct BaseURL(url::Url);
@@ -61,12 +62,6 @@ impl std::fmt::Display for CannotBeABase {
     }
 }
 
-impl CannotBeABase {
-    pub fn as_internal_err(self) -> crate::Error {
-        crate::Error::InternalStrStatic("URL cannot be a base")
-    }
-}
-
 impl std::convert::TryFrom<url::Url> for BaseURL {
     type Error = CannotBeABase;
 
@@ -96,21 +91,9 @@ impl From<BaseURL> for url::Url {
     }
 }
 
-impl From<BaseURL> for iri_string::types::IriString {
-    fn from(src: BaseURL) -> iri_string::types::IriString {
-        src.0.as_str().try_into().unwrap()
-    }
-}
-
-impl From<&BaseURL> for iri_string::types::IriString {
-    fn from(src: &BaseURL) -> iri_string::types::IriString {
-        src.0.as_str().try_into().unwrap()
-    }
-}
-
 impl From<BaseURL> for activitystreams::base::AnyBase {
     fn from(src: BaseURL) -> activitystreams::base::AnyBase {
-        activitystreams::base::AnyBase::from_xsd_any_uri(src.into())
+        src.0.into()
     }
 }
 
@@ -118,7 +101,7 @@ impl From<BaseURL> for activitystreams::primitives::OneOrMany<activitystreams::b
     fn from(
         src: BaseURL,
     ) -> activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase> {
-        activitystreams::base::AnyBase::from(src).into()
+        src.0.into()
     }
 }
 
@@ -304,7 +287,7 @@ impl<T: 'static + std::error::Error + Send> From<T> for Error {
 #[derive(Debug, PartialEq)]
 pub enum APIDOrLocal {
     Local,
-    APID(BaseURL),
+    APID(url::Url),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -730,7 +713,7 @@ pub fn clean_html(src: &str) -> String {
 pub fn on_local_community_add_post(
     community: CommunityLocalID,
     post_local_id: PostLocalID,
-    post_ap_id: BaseURL,
+    post_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
     log::debug!("on_community_add_post");
@@ -740,7 +723,7 @@ pub fn on_local_community_add_post(
 pub fn on_local_community_add_comment(
     community: CommunityLocalID,
     comment_local_id: CommentLocalID,
-    comment_ap_id: BaseURL,
+    comment_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::apub_util::spawn_announce_community_comment(
@@ -955,7 +938,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             comment,
                             community_ap_id,
                             post_ap_id.into(),
-                            parent_ap_id.cloned(),
+                            parent_ap_id.map(|x| x.deref().clone()),
                             post_or_parent_author_ap_id.map(|x| x.into_owned().into()),
                             ctx,
                         );
@@ -966,23 +949,6 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
 
         Ok(())
     });
-}
-
-fn to_time_time(
-    src: chrono::DateTime<chrono::FixedOffset>,
-) -> Result<time::OffsetDateTime, crate::Error> {
-    Ok(time::OffsetDateTime::from_unix_timestamp(src.timestamp())?)
-}
-
-fn from_time_time(src: time::OffsetDateTime) -> chrono::DateTime<chrono::FixedOffset> {
-    use chrono::TimeZone;
-
-    chrono::Utc.timestamp(src.unix_timestamp(), 0).into()
-}
-
-fn to_url(mut src: iri_string::types::IriString) -> Result<url::Url, crate::Error> {
-    src.encode_to_uri();
-    Ok(src.as_str().parse()?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

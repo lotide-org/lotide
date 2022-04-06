@@ -183,26 +183,26 @@ pub enum FollowLike {
 impl activitystreams::markers::Base for FollowLike {}
 
 impl FollowLike {
-    pub fn id_unchecked(&self) -> Option<&iri_string::types::IriString> {
+    pub fn id_unchecked(&self) -> Option<&url::Url> {
         match self {
             FollowLike::Follow(follow) => follow.id_unchecked(),
             FollowLike::Join(join) => join.id_unchecked(),
         }
     }
 
-    pub fn take_id(&mut self) -> Option<iri_string::types::IriString> {
+    pub fn take_id(&mut self) -> Option<url::Url> {
         match self {
             FollowLike::Follow(follow) => follow.take_id(),
             FollowLike::Join(join) => join.take_id(),
         }
     }
 
-    pub fn object_unchecked(
+    pub fn object(
         &self,
     ) -> &activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase> {
         match self {
-            FollowLike::Follow(follow) => follow.object_unchecked(),
-            FollowLike::Join(join) => join.object_unchecked(),
+            FollowLike::Follow(follow) => follow.object(),
+            FollowLike::Join(join) => join.object(),
         }
     }
 
@@ -305,22 +305,11 @@ impl ActorLocalInfo {
 #[error("Incoming object failed containment check")]
 pub struct NotContained;
 
-pub fn is_contained(
-    object_id: &iri_string::types::IriString,
-    actor_id: &iri_string::types::IriString,
-) -> bool {
-    object_id
-        .authority_components()
-        .map(|x| (x.host(), x.port()))
-        == actor_id
-            .authority_components()
-            .map(|x| (x.host(), x.port()))
+pub fn is_contained(object_id: &url::Url, actor_id: &url::Url) -> bool {
+    object_id.host() == actor_id.host() && object_id.port() == actor_id.port()
 }
 
-pub fn require_containment(
-    object_id: &iri_string::types::IriString,
-    actor_id: &iri_string::types::IriString,
-) -> Result<(), NotContained> {
+pub fn require_containment(object_id: &url::Url, actor_id: &url::Url) -> Result<(), NotContained> {
     if is_contained(object_id, actor_id) {
         Ok(())
     } else {
@@ -552,7 +541,7 @@ pub fn spawn_enqueue_send_community_follow(
     crate::spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
-        let (community_ap_id, community_inbox): (BaseURL, url::Url) = {
+        let (community_ap_id, community_inbox): (url::Url, url::Url) = {
             let row = db
                 .query_one(
                     "SELECT local, ap_id, ap_inbox FROM community WHERE id=$1",
@@ -634,7 +623,7 @@ pub fn spawn_enqueue_send_community_follow_undo(
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
-        let (community_inbox, community_ap_id): (url::Url, BaseURL) = {
+        let (community_inbox, community_ap_id): (url::Url, url::Url) = {
             let db = ctx.db_pool.get().await?;
 
             let row = db
@@ -694,7 +683,7 @@ pub fn spawn_enqueue_send_community_follow_undo(
 pub fn local_community_post_announce_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
-    post_ap_id: BaseURL,
+    post_ap_id: url::Url,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Announce, crate::Error> {
     let community_ap_id = LocalObjectRef::Community(community_id).to_local_uri(host_url_apub);
@@ -723,7 +712,7 @@ pub fn local_community_post_announce_ap(
 pub fn local_community_post_add_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
-    post_ap_id: BaseURL,
+    post_ap_id: url::Url,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Add, crate::Error> {
     let community_ap_id = LocalObjectRef::Community(community_id).to_local_uri(host_url_apub);
@@ -751,7 +740,7 @@ pub fn local_community_post_add_ap(
 pub fn local_community_post_add_undo_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
-    post_ap_id: BaseURL,
+    post_ap_id: url::Url,
     uuid: &uuid::Uuid,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
@@ -787,7 +776,7 @@ pub fn local_community_post_add_undo_ap(
 pub fn local_community_post_announce_undo_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
-    post_ap_id: BaseURL,
+    post_ap_id: url::Url,
     uuid: &uuid::Uuid,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
@@ -824,13 +813,13 @@ pub fn local_community_post_announce_undo_ap(
 pub fn local_community_comment_announce_ap(
     community_id: CommunityLocalID,
     comment_local_id: CommentLocalID,
-    comment_ap_id: BaseURL,
+    comment_ap_id: url::Url,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Announce, crate::Error> {
     let community_ap_id = LocalObjectRef::Community(community_id).to_local_uri(host_url_apub);
 
     let mut announce =
-        activitystreams::activity::Announce::new(community_ap_id.clone(), comment_ap_id);
+        activitystreams::activity::Announce::new(community_ap_id.deref().clone(), comment_ap_id);
 
     announce
         .set_context(activitystreams::context())
@@ -852,7 +841,7 @@ pub fn local_community_comment_announce_ap(
 pub fn spawn_announce_community_post(
     community: CommunityLocalID,
     post_local_id: PostLocalID,
-    post_ap_id: BaseURL,
+    post_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
     match local_community_post_announce_ap(
@@ -885,7 +874,7 @@ pub fn spawn_announce_community_post(
 pub fn spawn_enqueue_send_community_post_announce_undo(
     community: CommunityLocalID,
     post: PostLocalID,
-    post_ap_id: BaseURL,
+    post_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
     {
@@ -921,7 +910,7 @@ pub fn spawn_enqueue_send_community_post_announce_undo(
 pub fn spawn_announce_community_comment(
     community: CommunityLocalID,
     comment_local_id: CommentLocalID,
-    comment_ap_id: BaseURL,
+    comment_ap_id: url::Url,
     ctx: Arc<crate::RouteContext>,
 ) {
     let announce = local_community_comment_announce_ap(
@@ -984,7 +973,7 @@ pub fn local_community_delete_to_ap(
 pub fn local_community_follow_undo_to_ap(
     undo_id: uuid::Uuid,
     community_local_id: CommunityLocalID,
-    community_ap_id: BaseURL,
+    community_ap_id: url::Url,
     local_follower: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
@@ -1008,8 +997,8 @@ pub fn local_community_follow_undo_to_ap(
 pub fn community_follow_accept_to_ap(
     community_ap_id: BaseURL,
     follower_local_id: UserLocalID,
-    follower_ap_id: iri_string::types::IriString,
-    follow_ap_id: iri_string::types::IriString,
+    follower_ap_id: url::Url,
+    follow_ap_id: url::Url,
 ) -> Result<activitystreams::activity::Accept, crate::Error> {
     let mut accept = activitystreams::activity::Accept::new(community_ap_id.clone(), follow_ap_id);
 
@@ -1051,7 +1040,7 @@ pub fn spawn_enqueue_send_community_follow_accept(
         let community_ap_id =
             LocalObjectRef::Community(local_community).to_local_uri(&ctx.host_url_apub);
 
-        let (follower_inbox, follower_ap_id): (url::Url, iri_string::types::IriString) = {
+        let (follower_inbox, follower_ap_id) = {
             let row = db
                 .query_one(
                     "SELECT local, ap_inbox, ap_id FROM person WHERE id=$1",
@@ -1109,9 +1098,9 @@ pub fn spawn_enqueue_send_community_follow_accept(
 
 pub fn post_to_ap(
     post: &crate::PostInfo<'_>,
-    community_ap_id: BaseURL,
-    community_ap_outbox: Option<BaseURL>,
-    community_ap_followers: Option<BaseURL>,
+    community_ap_id: url::Url,
+    community_ap_outbox: Option<url::Url>,
+    community_ap_followers: Option<url::Url>,
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::base::AnyBase, crate::Error> {
     fn apply_properties<
@@ -1120,9 +1109,9 @@ pub fn post_to_ap(
     >(
         props: &mut ExtendedPostlike<activitystreams::object::ApObject<O>>,
         post: &crate::PostInfo,
-        community_ap_id: BaseURL,
-        community_ap_outbox: Option<BaseURL>,
-        community_ap_followers: Option<BaseURL>,
+        community_ap_id: url::Url,
+        community_ap_outbox: Option<url::Url>,
+        community_ap_followers: Option<url::Url>,
         ctx: &crate::BaseContext,
     ) -> Result<(), crate::Error> {
         props
@@ -1135,7 +1124,7 @@ pub fn post_to_ap(
             .set_attributed_to(
                 LocalObjectRef::User(post.author.unwrap()).to_local_uri(&ctx.host_url_apub),
             )
-            .set_published(crate::to_time_time(*post.created)?)
+            .set_published(*post.created)
             .set_to(community_ap_id)
             .set_cc(activitystreams::public());
 
@@ -1145,7 +1134,7 @@ pub fn post_to_ap(
 
         if let Some(community_ap_outbox) = community_ap_outbox {
             props.ext_one.target = Some(activitystreams::primitives::OneOrMany::from_xsd_any_uri(
-                community_ap_outbox.into(),
+                community_ap_outbox,
             ));
         }
 
@@ -1200,7 +1189,7 @@ pub fn post_to_ap(
             }
 
             if let Some(closed_at) = poll.closed_at {
-                post_ap.set_closed_date(crate::to_time_time(*closed_at)?);
+                post_ap.set_closed(closed_at.clone());
             }
 
             let mut post_ap =
@@ -1297,9 +1286,9 @@ pub fn post_to_ap(
 
 pub fn local_post_to_create_ap(
     post: &crate::PostInfo<'_>,
-    community_ap_id: BaseURL,
-    community_ap_outbox: Option<BaseURL>,
-    community_ap_followers: Option<BaseURL>,
+    community_ap_id: url::Url,
+    community_ap_outbox: Option<url::Url>,
+    community_ap_followers: Option<url::Url>,
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
     let post_ap = post_to_ap(
@@ -1331,10 +1320,10 @@ pub fn local_post_to_create_ap(
 
 pub fn local_comment_to_ap(
     comment: &crate::CommentInfo,
-    post_ap_id: &BaseURL,
-    parent_ap_id: Option<BaseURL>,
-    parent_or_post_author_ap_id: Option<BaseURL>,
-    community_ap_id: BaseURL,
+    post_ap_id: &url::Url,
+    parent_ap_id: Option<url::Url>,
+    parent_or_post_author_ap_id: Option<url::Url>,
+    community_ap_id: url::Url,
     ctx: &crate::BaseContext,
 ) -> Result<
     activitystreams_ext::Ext1<
@@ -1351,10 +1340,10 @@ pub fn local_comment_to_ap(
                 .to_local_uri(&ctx.host_url_apub)
                 .into(),
         )
-        .set_attributed_to(
+        .set_attributed_to(url::Url::from(
             LocalObjectRef::User(comment.author.unwrap()).to_local_uri(&ctx.host_url_apub),
-        )
-        .set_published(crate::to_time_time(comment.created)?)
+        ))
+        .set_published(comment.created)
         .set_in_reply_to(parent_ap_id.unwrap_or_else(|| post_ap_id.clone()));
 
     if let Some(attachment_href) = ctx.process_attachments_inner(
@@ -1387,7 +1376,7 @@ pub fn local_comment_to_ap(
 
     if let Some(parent_or_post_author_ap_id) = parent_or_post_author_ap_id {
         obj.set_to(parent_or_post_author_ap_id)
-            .set_many_ccs(vec![activitystreams::public(), community_ap_id.into()]);
+            .set_many_ccs(vec![activitystreams::public(), community_ap_id]);
     } else {
         obj.set_to(community_ap_id)
             .set_cc(activitystreams::public());
@@ -1409,10 +1398,10 @@ pub fn spawn_enqueue_send_local_post_to_community(
         let db = ctx.db_pool.get().await?;
 
         let (community_ap_id, community_inbox, community_outbox, community_followers): (
-            BaseURL,
             url::Url,
-            Option<BaseURL>,
-            Option<BaseURL>,
+            url::Url,
+            Option<url::Url>,
+            Option<url::Url>,
         ) = {
             let row = db
                 .query_one(
@@ -1520,10 +1509,10 @@ pub fn local_comment_delete_to_ap(
 
 pub fn local_comment_to_create_ap(
     comment: &crate::CommentInfo,
-    post_ap_id: &BaseURL,
-    parent_ap_id: Option<BaseURL>,
-    parent_or_post_author_ap_id: Option<BaseURL>,
-    community_ap_id: BaseURL,
+    post_ap_id: &url::Url,
+    parent_ap_id: Option<url::Url>,
+    parent_or_post_author_ap_id: Option<url::Url>,
+    community_ap_id: url::Url,
     ctx: &crate::BaseContext,
 ) -> Result<activitystreams::activity::Create, crate::Error> {
     let comment_ap = local_comment_to_ap(
@@ -1550,7 +1539,7 @@ pub fn local_comment_to_create_ap(
     if let Some(parent_or_post_author_ap_id) = parent_or_post_author_ap_id {
         create
             .set_to(parent_or_post_author_ap_id)
-            .set_many_ccs(vec![activitystreams::public(), community_ap_id.into()]);
+            .set_many_ccs(vec![activitystreams::public(), community_ap_id]);
     } else {
         create
             .set_to(community_ap_id)
@@ -1588,9 +1577,7 @@ pub fn local_post_flag_to_ap(
     if to_community {
         if let Some((_, _, community_ap_id)) = community_info {
             if let Some(community_ap_id) = community_ap_id {
-                flag.set_to(activitystreams::base::AnyBase::from_xsd_any_uri(
-                    community_ap_id.into(),
-                ));
+                flag.set_to(community_ap_id.deref().clone());
             }
         }
     }
@@ -1601,7 +1588,7 @@ pub fn local_post_flag_to_ap(
 pub fn local_post_like_to_ap(
     post_local_id: PostLocalID,
     post_ap_id: BaseURL,
-    author_ap_id: Option<BaseURL>,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
@@ -1627,7 +1614,7 @@ pub fn local_post_like_to_ap(
 pub fn local_post_like_undo_to_ap(
     undo_id: uuid::Uuid,
     post_local_id: PostLocalID,
-    author_ap_id: Option<BaseURL>,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
@@ -1656,7 +1643,7 @@ pub fn local_post_like_undo_to_ap(
 pub fn local_comment_like_to_ap(
     comment_local_id: CommentLocalID,
     comment_ap_id: BaseURL,
-    author_ap_id: Option<BaseURL>,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Like, crate::Error> {
@@ -1679,7 +1666,7 @@ pub fn local_comment_like_to_ap(
 pub fn local_comment_like_undo_to_ap(
     undo_id: uuid::Uuid,
     comment_local_id: CommentLocalID,
-    author_ap_id: Option<BaseURL>,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
@@ -1707,7 +1694,7 @@ pub fn local_comment_like_undo_to_ap(
 pub fn local_poll_vote_to_ap(
     poll_id: PollLocalID,
     poll_ap_id: BaseURL,
-    author_ap_id: Option<BaseURL>,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     option_id: PollOptionLocalID,
     option_name: String,
@@ -1746,7 +1733,7 @@ pub fn local_poll_vote_to_ap(
 
 pub fn local_poll_vote_undo_to_ap(
     poll_id: PollLocalID,
-    author_ap_id: Option<BaseURL>,
+    author_ap_id: Option<url::Url>,
     user: UserLocalID,
     option_id: PollOptionLocalID,
     host_url_apub: &BaseURL,
@@ -1774,10 +1761,10 @@ pub fn local_poll_vote_undo_to_ap(
 pub fn spawn_enqueue_send_comment(
     inboxes: HashSet<url::Url>,
     comment: crate::CommentInfo,
-    community_ap_id: BaseURL,
-    post_ap_id: BaseURL,
-    parent_ap_id: Option<BaseURL>,
-    post_or_parent_author_ap_id: Option<BaseURL>,
+    community_ap_id: url::Url,
+    post_ap_id: url::Url,
+    parent_ap_id: Option<url::Url>,
+    post_or_parent_author_ap_id: Option<url::Url>,
     ctx: Arc<crate::RouteContext>,
 ) {
     if inboxes.is_empty() {
@@ -2004,14 +1991,12 @@ pub async fn verify_incoming_object(
             }
             .unwrap_or(path_and_query);
 
-            let actor_ap_id = crate::to_url(actor_ap_id.clone())?;
-
             if check_signature_for_actor(
                 signature,
                 req.method(),
                 path_and_query,
                 req.headers(),
-                &actor_ap_id,
+                actor_ap_id,
                 db,
                 ctx,
             )
