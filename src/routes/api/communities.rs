@@ -305,6 +305,30 @@ async fn route_unstable_communities_create(
         }
     }
 
+    {
+        let row = db
+            .query_one(
+                "SELECT community_creation_requirement FROM site WHERE local=TRUE",
+                &[],
+            )
+            .await?;
+        let requirement: Option<&str> = row.get(0);
+        match requirement {
+            None => Ok(()),
+            Some(_) => {
+                if crate::is_site_admin(&db, user).await? {
+                    Ok(())
+                } else {
+                    Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        lang.tr(&lang::permission_missing_create_community())
+                            .into_owned(),
+                    )))
+                }
+            }
+        }
+    }?;
+
     let rsa = openssl::rsa::Rsa::generate(crate::KEY_BITS)?;
     let private_key = rsa.private_key_to_pem()?;
     let public_key = rsa.public_key_to_pem()?;

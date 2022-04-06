@@ -2,8 +2,8 @@ use crate::lang;
 use crate::types::{
     CommentLocalID, CommunityLocalID, FingerRequestQuery, FingerResponse, JustURL, PostLocalID,
     RespAvatarInfo, RespList, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
-    RespMinimalCommunityInfo, RespMinimalPostInfo, RespPostCommentInfo, RespPostListPost,
-    RespSiteModlogEvent, RespSiteModlogEventDetails, UserLocalID,
+    RespMinimalCommunityInfo, RespMinimalPostInfo, RespPermissionInfo, RespPostCommentInfo,
+    RespPostListPost, RespSiteModlogEvent, RespSiteModlogEventDetails, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -593,15 +593,25 @@ async fn route_unstable_logins_current_get(
 
     let user = crate::require_login(&req, &db).await?;
 
-    let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications) FROM person WHERE id=$1", &[&user]).await?;
+    let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications), site.community_creation_requirement FROM person, site WHERE site.local AND id=$1", &[&user]).await?;
+
+    let is_site_admin = row.get(1);
 
     crate::json_response(&serde_json::json!({
         "user": RespLoginUserInfo {
             id: user,
             username: row.get(0),
-            is_site_admin: row.get(1),
+            is_site_admin,
             has_unread_notifications: row.get(2),
         },
+        "permissions": serde_json::json!({
+            "create_community": RespPermissionInfo {
+                allowed: match row.get::<_, Option<&str>>(3) {
+                    None => true,
+                    Some(_) => is_site_admin,
+                }
+            },
+        }),
     }))
 }
 

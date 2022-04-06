@@ -449,3 +449,8 @@ pub enum RespSiteModlogEventDetails<'a> {
         user: RespMinimalAuthorInfo<'a>,
     },
 }
+
+#[derive(Serialize, Clone)]
+pub struct RespPermissionInfo {
+    pub allowed: bool,
+}

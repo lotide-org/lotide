@@ -29,6 +29,7 @@ not_admin = You are not a site admin
 notification_title_post_reply = Reply to your post { $post_title }
 notification_title_reply_reply = Reply to your comment on post { $post_title }
 password_incorrect = Incorrect password
+permission_missing_create_community = You are not allowed to create communities
 poll_is_closed = Poll is closed
 post_conflict_href_poll = Cannot specify both a link and a poll
 post_content_conflict = content_markdown and content_text are mutually exclusive
