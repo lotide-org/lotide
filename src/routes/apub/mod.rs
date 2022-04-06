@@ -1,7 +1,6 @@
 use crate::{CommentLocalID, CommunityLocalID, PollOptionLocalID, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
 use std::borrow::Cow;
-use std::ops::Deref;
 use std::sync::Arc;
 
 mod communities;
@@ -147,7 +146,7 @@ async fn handler_users_get(
                     activitystreams::context(),
                     activitystreams::security(),
                 ]);
-                info.set_id(user_ap_id.deref().clone())
+                info.set_id(user_ap_id.clone().into())
                     .set_name(username.as_ref());
 
                 if let Some(description) = description {

@@ -1,6 +1,5 @@
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
+use crate::{BaseURL, CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
-use std::ops::Deref;
 use std::sync::Arc;
 
 lazy_static::lazy_static! {
@@ -204,7 +203,7 @@ async fn handler_communities_get(
                     activitystreams::security(),
                 ])
                 .add_context(FEATURED_CONTEXT.clone())
-                .set_id(community_ap_id.deref().clone())
+                .set_id((&community_ap_id).into())
                 .set_name(name.as_ref());
 
                 if let Some(description) = description {
@@ -384,11 +383,10 @@ async fn handler_communities_featured_list(
             if row.get(1) {
                 Ok(
                     crate::apub_util::LocalObjectRef::Post(PostLocalID(row.get(0)))
-                        .to_local_uri(&ctx.host_url_apub)
-                        .into(),
+                        .to_local_uri(&ctx.host_url_apub),
                 )
             } else {
-                url::Url::from_str(row.get(2))
+                BaseURL::from_str(row.get(2))
             }
         })
         .collect();

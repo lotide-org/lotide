@@ -4,15 +4,16 @@ version = 3
 
 [[package]]
 name = "activitystreams"
-version = "0.7.0-alpha.11"
-source = "git+https://git.sr.ht/~vpzom/activitystreams?rev=74d2e03#74d2e038e6fee49d98f0399ea1b1846dee1c8d1d"
+version = "0.7.0-alpha.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "459a89e7d449cf49e57044d59dcf637d2927362b7a75737c90bd3679ba476a78"
 dependencies = [
- "chrono",
+ "activitystreams-kinds",
+ "iri-string",
  "mime",
  "serde",
  "serde_json",
- "thiserror",
- "url",
+ "time 0.3.9",
 ]
 
 [[package]]
@@ -24,6 +25,16 @@ dependencies = [
  "activitystreams",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "activitystreams-kinds"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d014a4fb8828870b7b46bee6257b9a89d06188ae8d435381ba94f14c8c697d8"
+dependencies = [
+ "iri-string",
+ "serde",
 ]
 
 [[package]]
@@ -295,7 +306,7 @@ dependencies = [
  "libc",
  "num-integer",
  "num-traits",
- "time",
+ "time 0.1.43",
  "winapi",
 ]
 
@@ -1338,6 +1349,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68f2d64f2edebec4ce84ad108148e67e1064789bee435edc5b60ad398714a3a9"
 
 [[package]]
+name = "iri-string"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ec8cc841faef2a1776a41301350a3718c1d6b21fcedc67e7224d2c9a364440d"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "isahc"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1550,6 +1570,7 @@ dependencies = [
  "http",
  "hyper",
  "hyper-tls",
+ "iri-string",
  "lazy_static",
  "lettre",
  "log",
@@ -1570,6 +1591,7 @@ dependencies = [
  "serde_urlencoded 0.6.1",
  "sha2 0.10.2",
  "thiserror",
+ "time 0.3.9",
  "tokio",
  "tokio-postgres",
  "tokio-util",
@@ -1842,6 +1864,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19e64526ebdee182341572e50e9ad03965aa510cd94427a4549448f285e957a1"
 dependencies = [
  "hermit-abi",
+ "libc",
+]
+
+[[package]]
+name = "num_threads"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aba1801fb138d8e85e11d0fc70baf4fe1cdfffda7c6cd34a854905df588e5ed0"
+dependencies = [
  "libc",
 ]
 
@@ -2197,6 +2228,7 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
+ "time 0.3.9",
  "uuid",
 ]
 
@@ -2885,6 +2917,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "time"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2702e08a7a860f005826c6815dcac101b19b5eb330c27fe4a5928fec1d20ddd"
+dependencies = [
+ "itoa 1.0.1",
+ "libc",
+ "num_threads",
+]
+
+[[package]]
 name = "tinystr"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3469,7 +3512,7 @@ dependencies = [
  "log",
  "mac",
  "markup5ever",
- "time",
+ "time 0.1.43",
 ]
 
 [[package]]

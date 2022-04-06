@@ -2,10 +2,11 @@ use super::{ExtendedPostlike, FollowLike, KnownObject, Verified};
 use crate::types::{
     CommentLocalID, CommunityLocalID, PollOptionLocalID, PostLocalID, ThingLocalRef, UserLocalID,
 };
+use crate::BaseURL;
 use activitystreams::prelude::*;
 use serde::Deserialize;
 use std::borrow::Cow;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -79,7 +80,7 @@ pub async fn ingest_object(
 
             if let Some(community_local_id) = community_local_id {
                 let object_id = activity
-                    .object()
+                    .object_unchecked()
                     .as_single_id()
                     .ok_or(crate::Error::InternalStrStatic("Missing object for Accept"))?;
 
@@ -132,11 +133,14 @@ pub async fn ingest_object(
                 let target_is_outbox = if let Some(ap_outbox) = ap_outbox {
                     ap_outbox == target.as_str()
                 } else {
-                    let actor = crate::apub_util::fetch_actor(community_ap_id, ctx.clone()).await?;
+                    let community_ap_id = crate::to_url(community_ap_id.clone())?;
+
+                    let actor =
+                        crate::apub_util::fetch_actor(&community_ap_id, ctx.clone()).await?;
 
                     if let crate::apub_util::ActorLocalInfo::Community { ap_outbox, .. } = actor {
                         if let Some(ap_outbox) = ap_outbox {
-                            ap_outbox == *target
+                            ap_outbox.as_str() == target.as_str()
                         } else {
                             false
                         }
@@ -149,7 +153,7 @@ pub async fn ingest_object(
                     crate::apub_util::require_containment(activity_id, community_ap_id)?;
                     crate::apub_util::require_containment(target, community_ap_id)?;
 
-                    let object_id = activity.object().as_single_id();
+                    let object_id = activity.object_unchecked().as_single_id();
 
                     if let Some(object_id) = object_id {
                         if let Some(remaining) =
@@ -164,15 +168,17 @@ pub async fn ingest_object(
                                 ).await?;
                             }
                         } else {
+                            let object_id = crate::to_url(object_id.clone())?;
+
                             // don't need announces for local objects
                             let obj =
-                                crate::apub_util::fetch_ap_object(object_id, &ctx.http_client)
+                                crate::apub_util::fetch_ap_object(&object_id, &ctx.http_client)
                                     .await?;
 
                             ingest_object_boxed(
                                 obj,
                                 FoundFrom::Announce {
-                                    url: activity_id.clone(),
+                                    url: crate::to_url(activity_id.clone())?,
                                     community_local_id,
                                     community_is_local,
                                 },
@@ -206,7 +212,7 @@ pub async fn ingest_object(
             if let Some((community_local_id, community_is_local)) = community_local_info {
                 crate::apub_util::require_containment(activity_id, community_ap_id)?;
 
-                let object_id = activity.object().as_single_id();
+                let object_id = activity.object_unchecked().as_single_id();
 
                 if let Some(object_id) = object_id {
                     if let Some(remaining) =
@@ -221,14 +227,16 @@ pub async fn ingest_object(
                             ).await?;
                         }
                     } else {
+                        let object_id = crate::to_url(object_id.clone())?;
+
                         // don't need announces for local objects
                         let obj =
-                            crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?;
+                            crate::apub_util::fetch_ap_object(&object_id, &ctx.http_client).await?;
 
                         ingest_object_boxed(
                             obj,
                             FoundFrom::Announce {
-                                url: activity_id.clone(),
+                                url: crate::to_url(activity_id.clone())?,
                                 community_local_id,
                                 community_is_local,
                             },
@@ -262,16 +270,14 @@ pub async fn ingest_object(
 
             crate::apub_util::require_containment(activity_id, actor_ap_id)?;
 
-            let actor_local_id =
-                crate::apub_util::get_or_fetch_user_local_id(actor_ap_id, &db, &ctx).await?;
+            let actor_ap_id = crate::to_url(actor_ap_id.clone())?;
 
-            let target =
-                activity
-                    .object()
-                    .as_single_id()
-                    .ok_or(crate::Error::InternalStrStatic(
-                        "Missing target in activity",
-                    ))?;
+            let actor_local_id =
+                crate::apub_util::get_or_fetch_user_local_id(&actor_ap_id, &db, &ctx).await?;
+
+            let target = activity.object_unchecked().as_single_id().ok_or(
+                crate::Error::InternalStrStatic("Missing target in activity"),
+            )?;
 
             let target_found = if let Some(remaining) =
                 super::try_strip_host(target, &ctx.host_url_apub)
@@ -346,8 +352,10 @@ pub async fn ingest_object(
                             None => false,
                             Some(community_ap_id) => {
                                 if let Some(to) = activity.to() {
-                                    to.iter()
-                                        .any(|x| x.as_xsd_any_uri() == Some(&community_ap_id))
+                                    to.iter().any(|x| {
+                                        x.as_xsd_any_uri().map(|x| x.as_str())
+                                            == Some(&community_ap_id.as_str())
+                                    })
                                 } else {
                                     false
                                 }
@@ -411,7 +419,7 @@ pub async fn ingest_object(
                 &[&name, &ap_id.as_str(), &inbox, &shared_inbox, &public_key, &public_key_sigalg, &description_html, &outbox.map(|x| x.as_str()), &followers],
             ).await?.get(0));
 
-            let outbox = outbox.map(|x| x.to_owned());
+            let outbox = outbox.cloned().map(crate::to_url).transpose()?;
 
             if let Some(featured_url) = group.ext_two.featured {
                 crate::apub_util::spawn_enqueue_fetch_community_featured(id, featured_url, ctx);
@@ -445,13 +453,15 @@ pub async fn ingest_object(
                 crate::Error::InternalStrStatic("Missing actor for activity"),
             )?;
 
-            let target_id = activity.object().as_single_id();
+            let target_id = activity.object_unchecked().as_single_id();
 
             super::require_containment(activity_id, actor_id)?;
 
             if let Some(target_id) = target_id {
+                let target_id = crate::to_url(target_id.clone())?;
+
                 if let Some(super::LocalObjectRef::Community(community_id)) =
-                    super::LocalObjectRef::try_from_uri(target_id, &ctx.host_url_apub)
+                    super::LocalObjectRef::try_from_uri(&target_id, &ctx.host_url_apub)
                 {
                     let follower_local_id = {
                         let row = db
@@ -481,8 +491,9 @@ pub async fn ingest_object(
         KnownObject::Note(obj) => {
             // try to handle poll response
             if let Some(in_reply_to) = obj.in_reply_to().and_then(|x| x.as_single_id()) {
+                let in_reply_to = crate::to_url(in_reply_to.clone())?;
                 if let Some(crate::apub_util::LocalObjectRef::Post(post_id)) =
-                    crate::apub_util::LocalObjectRef::try_from_uri(in_reply_to, &ctx.host_url_apub)
+                    crate::apub_util::LocalObjectRef::try_from_uri(&in_reply_to, &ctx.host_url_apub)
                 {
                     if let Some(name) = obj
                         .name()
@@ -508,6 +519,7 @@ pub async fn ingest_object(
                                 if closed {
                                     // ignore
                                 } else {
+                                    let actor_id = crate::to_url(actor_id.clone())?;
                                     let actor_local_id =
                                         super::get_or_fetch_user_local_id(&actor_id, &db, &ctx)
                                             .await?;
@@ -575,11 +587,13 @@ pub async fn ingest_object(
                 let target_is_outbox = if let Some(ap_outbox) = ap_outbox {
                     ap_outbox == target.as_str()
                 } else {
-                    let actor = crate::apub_util::fetch_actor(community_ap_id, ctx.clone()).await?;
+                    let community_ap_id = crate::to_url(community_ap_id.clone())?;
+                    let actor =
+                        crate::apub_util::fetch_actor(&community_ap_id, ctx.clone()).await?;
 
                     if let crate::apub_util::ActorLocalInfo::Community { ap_outbox, .. } = actor {
                         if let Some(ap_outbox) = ap_outbox {
-                            ap_outbox == *target
+                            ap_outbox.as_str() == target.as_str()
                         } else {
                             false
                         }
@@ -592,11 +606,13 @@ pub async fn ingest_object(
                     crate::apub_util::require_containment(activity_id, community_ap_id)?;
                     crate::apub_util::require_containment(target, community_ap_id)?;
 
-                    let object_id = activity.object().as_single_id();
+                    let object_id = activity.object_unchecked().as_single_id();
 
                     if let Some(object_id) = object_id {
+                        let object_id = crate::to_url(object_id.clone())?;
+
                         if let Some(local_id) =
-                            super::LocalObjectRef::try_from_uri(object_id, &ctx.host_url_apub)
+                            super::LocalObjectRef::try_from_uri(&object_id, &ctx.host_url_apub)
                         {
                             if let super::LocalObjectRef::Post(local_post_id) = local_id {
                                 db.execute(
@@ -624,17 +640,13 @@ pub async fn ingest_object(
                 .id_unchecked()
                 .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
-            let object_id =
-                activity
-                    .object()
-                    .as_single_id()
-                    .ok_or(crate::Error::InternalStrStatic(
-                        "Missing object ID for Update",
-                    ))?;
+            let object_id = activity.object_unchecked().as_single_id().ok_or(
+                crate::Error::InternalStrStatic("Missing object ID for Update"),
+            )?;
 
             crate::apub_util::require_containment(activity_id, object_id)?;
 
-            let object_id = object_id.clone();
+            let object_id = crate::to_url(object_id.clone())?;
 
             crate::spawn_task(async move {
                 let row = db
@@ -679,9 +691,13 @@ pub async fn ingest_like(
     if let Some(actor_id) = activity.actor_unchecked().as_single_id() {
         super::require_containment(activity_id, actor_id)?;
 
-        let actor_local_id = super::get_or_fetch_user_local_id(actor_id, &db, &ctx).await?;
+        let actor_id = crate::to_url(actor_id.clone())?;
 
-        if let Some(object_id) = activity.object().as_single_id() {
+        let actor_local_id = super::get_or_fetch_user_local_id(&actor_id, &db, &ctx).await?;
+
+        if let Some(object_id) = activity.object_unchecked().as_single_id() {
+            let object_id = crate::to_url(object_id.clone())?;
+
             let thing_local_ref = if let Some(local_id) =
                 super::LocalObjectRef::try_from_uri(&object_id, &ctx.host_url_apub)
             {
@@ -774,7 +790,7 @@ pub async fn ingest_delete(
         .as_single_id()
         .ok_or(crate::Error::InternalStrStatic("Missing ID for actor"))?;
 
-    if let Some(object_id) = activity.object().as_single_id() {
+    if let Some(object_id) = activity.object_unchecked().as_single_id() {
         super::require_containment(activity_id, actor_id)?;
         super::require_containment(object_id, actor_id)?;
 
@@ -824,7 +840,7 @@ pub async fn ingest_undo(
             ))?;
 
     let object_id = activity
-        .object()
+        .object_unchecked()
         .as_single_id()
         .ok_or(crate::Error::InternalStrStatic("Missing object for Undo"))?;
 
@@ -854,7 +870,7 @@ pub async fn ingest_create(
     activity: Verified<activitystreams::activity::Create>,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<(), crate::Error> {
-    for req_obj in activity.object().iter() {
+    for req_obj in activity.object_unchecked().iter() {
         let object_id = req_obj.id();
 
         if let Some(object_id) = object_id {
@@ -865,7 +881,8 @@ pub async fn ingest_create(
             } {
                 Verified(serde_json::from_value(serde_json::to_value(&req_obj)?)?)
             } else {
-                crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?
+                let object_id = crate::to_url(object_id.clone())?;
+                crate::apub_util::fetch_ap_object(&object_id, &ctx.http_client).await?
             };
 
             ingest_object_boxed(obj, FoundFrom::Other, ctx.clone()).await?;
@@ -878,7 +895,7 @@ pub async fn ingest_create(
 pub struct PollIngestInfo {
     multiple: bool,
     is_closed: Option<bool>,
-    closed_at: Option<chrono::DateTime<chrono::FixedOffset>>,
+    closed_at: Option<time::OffsetDateTime>,
     options: Vec<(String, Option<i32>)>,
 }
 
@@ -933,13 +950,13 @@ async fn ingest_postlike(
 
                 let (is_closed, closed_at) = match obj.closed() {
                     Some(value) => match value {
-                        activitystreams::primitives::ClosedValue::ObjectOrLink(_) => (None, None),
-                        activitystreams::primitives::ClosedValue::DateTime(timestamp) => {
-                            (None, Some(timestamp.as_datetime().clone()))
-                        }
-                        activitystreams::primitives::ClosedValue::Boolean(value) => {
-                            (Some(*value), None)
-                        }
+                        activitystreams::primitives::Either::Left(_) => (None, None),
+                        activitystreams::primitives::Either::Right(
+                            activitystreams::primitives::Either::Left(timestamp),
+                        ) => (None, Some(timestamp)),
+                        activitystreams::primitives::Either::Right(
+                            activitystreams::primitives::Either::Right(value),
+                        ) => (Some(value), None),
                     },
                     None => (None, None),
                 };
@@ -959,15 +976,20 @@ async fn ingest_postlike(
     let community_found = match target
         .as_ref()
         .and_then(|target| target.as_one().and_then(|x| x.id()))
-        .map(|target_id| {
-            if let Some(super::LocalObjectRef::CommunityOutbox(community_local_id)) =
-                super::LocalObjectRef::try_from_uri(target_id, &ctx.host_url_apub)
-            {
-                Some(community_local_id)
-            } else {
-                None
-            }
-        }) {
+        .map::<Result<_, crate::Error>, _>(|target_id| {
+            let target_id = crate::to_url(target_id.clone())?;
+            Ok(
+                if let Some(super::LocalObjectRef::CommunityOutbox(community_local_id)) =
+                    super::LocalObjectRef::try_from_uri(&target_id, &ctx.host_url_apub)
+                {
+                    Some(community_local_id)
+                } else {
+                    None
+                },
+            )
+        })
+        .transpose()?
+    {
         Some(Some(community_local_id)) => Some((community_local_id, true)),
         Some(None) | None => match found_from {
             FoundFrom::Announce {
@@ -991,14 +1013,20 @@ async fn ingest_postlike(
                     .iter()
                     .filter_map(|any| {
                         any.as_xsd_any_uri()
-                            .and_then(|uri| {
-                                if let Some(super::LocalObjectRef::Community(community_id)) =
-                                    super::LocalObjectRef::try_from_uri(uri, &ctx.host_url_apub)
-                                {
-                                    Some(community_id)
-                                } else {
-                                    None
+                            .and_then(|uri| match crate::to_url(uri.clone()) {
+                                Ok(uri) => {
+                                    if let Some(super::LocalObjectRef::Community(community_id)) =
+                                        super::LocalObjectRef::try_from_uri(
+                                            &uri,
+                                            &ctx.host_url_apub,
+                                        )
+                                    {
+                                        Some(community_id)
+                                    } else {
+                                        None
+                                    }
                                 }
+                                Err(_) => None,
                             })
                             .map(|id| (id, true))
                     })
@@ -1087,10 +1115,10 @@ async fn ingest_postlike(
                         // it's a reply
 
                         Ok(handle_recieved_reply(
-                            object_id,
+                            object_id.clone(),
                             content.unwrap_or(""),
                             media_type,
-                            created.as_ref(),
+                            created.map(crate::from_time_time).as_ref(),
                             author,
                             in_reply_to,
                             attachment_href,
@@ -1144,7 +1172,7 @@ async fn ingest_postlike(
                                 href,
                                 content,
                                 media_type,
-                                created.as_ref(),
+                                created.map(crate::from_time_time).as_ref(),
                                 author,
                                 community_local_id,
                                 community_is_local,
@@ -1207,10 +1235,10 @@ async fn ingest_postlike(
                     let sensitive = obj.ext_two.sensitive;
 
                     let id = handle_recieved_reply(
-                        obj_id,
+                        obj_id.clone(),
                         content.unwrap_or(""),
                         media_type,
-                        created.as_ref(),
+                        created.map(crate::from_time_time).as_ref(),
                         author,
                         in_reply_to,
                         attachment_href,
@@ -1237,7 +1265,7 @@ async fn ingest_followlike(
     ctx: Arc<crate::BaseContext>,
 ) -> Result<(), crate::Error> {
     let follower_ap_id = follow.actor_unchecked().as_single_id();
-    let target = follow.object().as_single_id();
+    let target = follow.object_unchecked().as_single_id();
 
     if let Some(follower_ap_id) = follower_ap_id {
         let activity_ap_id = follow
@@ -1249,12 +1277,16 @@ async fn ingest_followlike(
 
         let db = ctx.db_pool.get().await?;
 
+        let follower_ap_id = crate::to_url(follower_ap_id.clone())?;
+
         let follower_local_id =
-            crate::apub_util::get_or_fetch_user_local_id(follower_ap_id, &db, &ctx).await?;
+            crate::apub_util::get_or_fetch_user_local_id(&follower_ap_id, &db, &ctx).await?;
 
         if let Some(target) = target {
+            let target = crate::to_url(target.clone())?;
+
             if let Some(super::LocalObjectRef::Community(community_id)) =
-                super::LocalObjectRef::try_from_uri(target, &ctx.host_url_apub)
+                super::LocalObjectRef::try_from_uri(&target, &ctx.host_url_apub)
             {
                 let row = db
                     .query_opt("SELECT local FROM community WHERE id=$1", &[&community_id])
@@ -1364,11 +1396,11 @@ async fn ingest_personlike<
 }
 
 async fn handle_recieved_reply(
-    object_id: &url::Url,
+    object_id: iri_string::types::IriString,
     content: &str,
     media_type: Option<&mime::Mime>,
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
-    author: Option<&url::Url>,
+    author: Option<&iri_string::types::IriString>,
     in_reply_to: &activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>,
     attachment_href: Option<&str>,
     sensitive: Option<bool>,
@@ -1376,8 +1408,12 @@ async fn handle_recieved_reply(
 ) -> Result<Option<CommentLocalID>, crate::Error> {
     let db = ctx.db_pool.get().await?;
 
-    let author = match author {
-        Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
+    let author: Option<UserLocalID> = match author {
+        Some(author) => {
+            let author = crate::to_url(author.clone())?;
+
+            Some(super::get_or_fetch_user_local_id(&author, &db, &ctx).await?)
+        }
         None => None,
     };
 
@@ -1396,9 +1432,10 @@ async fn handle_recieved_reply(
                 },
             }
 
-            let target = if let Some(local_id) =
-                super::LocalObjectRef::try_from_uri(&term_ap_id, &ctx.host_url_apub)
-            {
+            let target = if let Some(local_id) = super::LocalObjectRef::try_from_uri(
+                &crate::to_url(term_ap_id.clone())?,
+                &ctx.host_url_apub,
+            ) {
                 match local_id {
                     super::LocalObjectRef::Post(post_id) => Some(ReplyTarget::Post { id: post_id }),
                     super::LocalObjectRef::Comment(local_comment_id) => {
@@ -1461,7 +1498,10 @@ async fn handle_recieved_reply(
                             chrono::offset::Utc::now()
                                 .with_timezone(&chrono::offset::FixedOffset::west(0))
                         }),
-                        ap_id: crate::APIDOrLocal::APID(object_id.to_owned()),
+                        ap_id: crate::APIDOrLocal::APID(
+                            BaseURL::try_from(crate::to_url(object_id)?)
+                                .map_err(|x| x.as_internal_err())?,
+                        ),
                         attachment_href: attachment_href.map(|x| Cow::Owned(x.to_owned())),
                         sensitive,
                     };
@@ -1540,7 +1580,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
                 href,
                 content,
                 media_type,
-                created.as_ref(),
+                created.map(crate::from_time_time).as_ref(),
                 author,
                 community_local_id,
                 community_is_local,
@@ -1557,13 +1597,13 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
 }
 
 async fn handle_recieved_post(
-    object_id: url::Url,
+    object_id: iri_string::types::IriString,
     title: &str,
     href: Option<&str>,
     content: Option<&str>,
     media_type: Option<&mime::Mime>,
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
-    author: Option<&url::Url>,
+    author: Option<&iri_string::types::IriString>,
     community_local_id: CommunityLocalID,
     community_is_local: bool,
     is_announce: Option<&url::Url>,
@@ -1571,9 +1611,16 @@ async fn handle_recieved_post(
     sensitive: Option<bool>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<PostIngestResult, crate::Error> {
+    let object_id =
+        BaseURL::try_from(crate::to_url(object_id)?).map_err(|x| x.as_internal_err())?;
+
     let mut db = ctx.db_pool.get().await?;
     let author = match author {
-        Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
+        Some(author) => {
+            let author = crate::to_url(author.clone())?;
+
+            Some(super::get_or_fetch_user_local_id(&author, &db, &ctx).await?)
+        }
         None => None,
     };
 
@@ -1719,7 +1766,7 @@ async fn handle_recieved_post(
                 })
                 .collect(),
             is_closed,
-            closed_at: info.closed_at,
+            closed_at: info.closed_at.map(crate::from_time_time),
         }
     });
 
