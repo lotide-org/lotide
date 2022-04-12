@@ -1,0 +1,12 @@
+BEGIN;
+	CREATE TABLE invitation (
+		id SERIAL PRIMARY KEY,
+		key INTEGER UNIQUE,
+		created_by BIGINT REFERENCES person NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL,
+		used_by BIGINT REFERENCES person
+	);
+
+	ALTER TABLE site ADD COLUMN allow_invitations BOOLEAN NOT NULL DEFAULT FALSE;
+	ALTER TABLE site ADD COLUMN users_create_invitations BOOLEAN NOT NULL DEFAULT FALSE;
+COMMIT;

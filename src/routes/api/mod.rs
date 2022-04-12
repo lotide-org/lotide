@@ -15,6 +15,7 @@ mod comments;
 mod communities;
 mod flags;
 mod forgot_password;
+mod invitations;
 mod media;
 mod posts;
 mod stable;
@@ -330,6 +331,7 @@ pub fn route_api() -> crate::RouteNode<()> {
                     ),
                 )
                 .with_child("flags", flags::route_flags())
+                .with_child("invitations", invitations::route_invitations())
                 .with_child(
                     "logins",
                     crate::RouteNode::new()

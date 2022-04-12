@@ -397,6 +397,11 @@ pub struct NotificationSubscriptionCreateQuery<'a> {
 }
 
 #[derive(Deserialize)]
+pub struct InvitationsListQuery<'a> {
+    pub key: Option<Cow<'a, str>>,
+}
+
+#[derive(Deserialize)]
 #[serde(untagged)]
 pub enum PollVoteBody {
     Multiple { options: Vec<PollOptionLocalID> },
@@ -453,4 +458,13 @@ pub enum RespSiteModlogEventDetails<'a> {
 #[derive(Serialize, Clone)]
 pub struct RespPermissionInfo {
     pub allowed: bool,
+}
+
+#[derive(Serialize, Clone)]
+pub struct RespInvitationInfo<'a> {
+    pub id: i32,
+    pub key: Cow<'a, str>,
+    pub created_by: RespMinimalAuthorInfo<'a>,
+    pub created_at: String,
+    pub used: bool,
 }
