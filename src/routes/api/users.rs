@@ -237,6 +237,7 @@ async fn route_unstable_users_create(
         username: Cow<'a, str>,
         password: String,
         email_address: Option<Cow<'a, str>>,
+        invitation_key: Option<Cow<'a, str>>,
 
         #[serde(default)]
         login: bool,
@@ -262,17 +263,56 @@ async fn route_unstable_users_create(
         }
     }
 
-    {
+    let invitation_id: Option<i32> = {
         let row = db
-            .query_one("SELECT signup_allowed FROM site WHERE local", &[])
+            .query_one(
+                "SELECT signup_allowed, allow_invitations FROM site WHERE local",
+                &[],
+            )
             .await?;
         if row.get(0) {
-            Ok(())
+            Ok(None)
         } else {
-            Err(crate::Error::UserError(crate::simple_response(
-                hyper::StatusCode::FORBIDDEN,
-                lang.tr(&lang::signup_not_allowed()).into_owned(),
-            )))
+            if let Some(invitation_key) = body.invitation_key {
+                if row.get(1) {
+                    let invitation_row = match invitation_key.parse::<crate::Pineapple>() {
+                        Ok(invitation_key) => {
+                            db.query_opt(
+                                "SELECT used_by, id FROM invitation WHERE key=$1",
+                                &[&invitation_key.as_int()],
+                            )
+                            .await?
+                        }
+                        Err(_) => None,
+                    };
+
+                    if let Some(invitation_row) = invitation_row {
+                        if invitation_row.get::<_, Option<i64>>(0).is_some() {
+                            Err(crate::Error::UserError(crate::simple_response(
+                                hyper::StatusCode::FORBIDDEN,
+                                lang.tr(&lang::invitation_already_used()).into_owned(),
+                            )))
+                        } else {
+                            Ok(invitation_row.get(1))
+                        }
+                    } else {
+                        Err(crate::Error::UserError(crate::simple_response(
+                            hyper::StatusCode::FORBIDDEN,
+                            lang.tr(&lang::no_such_invitation()).into_owned(),
+                        )))
+                    }
+                } else {
+                    Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        lang.tr(&lang::invitations_disabled()).into_owned(),
+                    )))
+                }
+            } else {
+                Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::FORBIDDEN,
+                    lang.tr(&lang::signup_not_allowed()).into_owned(),
+                )))
+            }
         }
     }?;
 
@@ -304,9 +344,20 @@ async fn route_unstable_users_create(
             &[&body.username, &passhash, &body.email_address],
         ).await?;
 
+        let id = UserLocalID(row.get(0));
+
+        if let Some(invitation_id) = invitation_id {
+            trans
+                .execute(
+                    "UPDATE invitation SET used_by=$1 WHERE id=$2",
+                    &[&id, &invitation_id],
+                )
+                .await?;
+        }
+
         trans.commit().await?;
 
-        UserLocalID(row.get(0))
+        id
     };
 
     let info = RespLoginUserInfo {
