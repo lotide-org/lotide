@@ -595,7 +595,7 @@ async fn route_unstable_logins_current_get(
 
     let user = crate::require_login(&req, &db).await?;
 
-    let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications), site.community_creation_requirement FROM person, site WHERE site.local AND id=$1", &[&user]).await?;
+    let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications), site.community_creation_requirement, site.allow_invitations, site.users_create_invitations FROM person, site WHERE site.local AND id=$1", &[&user]).await?;
 
     let is_site_admin = row.get(1);
 
@@ -612,6 +612,9 @@ async fn route_unstable_logins_current_get(
                     None => true,
                     Some(_) => is_site_admin,
                 }
+            },
+            "create_invitation": RespPermissionInfo {
+                allowed: row.get(4) && (is_site_admin || row.get(5)),
             },
         }),
     }))
