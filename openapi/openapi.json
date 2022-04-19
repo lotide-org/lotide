@@ -1381,6 +1381,71 @@
 				}
 			}
 		},
+		"/api/unstable/invitations": {
+			"get": {
+				"summary": "Lookup invitations",
+				"parameters": [
+					{
+						"name": "key",
+						"in": "query",
+						"required": false,
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"type": "object",
+												"required": ["id", "key", "created_by", "created_at", "used"],
+												"properties": {
+													"id": {"type": "integer"},
+													"key": {"type": "string"},
+													"created_by": {"$ref": "#/components/schemas/MinimalUserInfo"},
+													"created_at": {"type": "string", "format": "date-time"},
+													"used": {"type": "boolean"}
+												}
+											}
+										},
+										"next_page": {"type": "string", "nullable": true}
+									}
+								}
+							}
+						}
+					}
+				}
+			},
+			"post": {
+				"summary": "Create an invitation",
+				"responses": {
+					"200": {
+						"description": "Successfully created.",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["key", "id"],
+									"properties": {
+										"key": {"type": "string"},
+										"id": {"type": "integer"}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		"/api/unstable/logins": {
 			"post": {
 				"summary": "Log in to the service",
@@ -1441,9 +1506,10 @@
 										},
 										"permissions": {
 											"type": "object",
-											"required": ["create_community"],
+											"required": ["create_community", "create_invitation"],
 											"properties": {
-												"create_community": {"$ref": "#/components/schemas/PermissionInfo"}
+												"create_community": {"$ref": "#/components/schemas/PermissionInfo"},
+												"create_invitation": {"$ref": "#/components/schemas/PermissionInfo"}
 											}
 										}
 									}
@@ -2125,6 +2191,7 @@
 									"username": {"type": "string"},
 									"password": {"type": "string"},
 									"email_address": {"type": "string", "format": "email"},
+									"invitation_key": {"type": "string"},
 									"login": {
 										"type": "boolean",
 										"description": "If true, will also create a login token for the new user"
