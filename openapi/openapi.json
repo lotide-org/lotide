@@ -172,6 +172,13 @@
 					}
 				}
 			},
+			"PermissionInfo": {
+				"type": "object",
+				"required": ["allowed"],
+				"properties": {
+					"allowed": {"type": "boolean"}
+				}
+			},
 			"SomePostInfo": {
 				"type": "object",
 				"required": ["id", "title", "created", "community", "score", "sticky", "remote_url", "content_text", "content_html", "content_markdown", "sensitive"],
@@ -226,13 +233,14 @@
 			},
 			"PostCommentInfo": {
 				"type": "object",
-				"required": ["id", "content_text", "content_markdown", "content_html", "author", "created", "deleted", "replies", "attachments", "local", "remote_url"],
+				"required": ["id", "content_text", "content_markdown", "content_html", "sensitive", "author", "created", "deleted", "replies", "attachments", "local", "remote_url"],
 				"properties": {
 					"id": {"type": "integer"},
 					"remote_url": {"type": "string", "nullable": true},
 					"content_text": {"type": "string", "nullable": true},
 					"content_markdown": {"type": "string", "nullable": true},
 					"content_html": {"type": "string", "nullable": true},
+					"sensitive": {"type": "boolean"},
 					"attachments": {
 						"type": "array",
 						"items": {
@@ -342,12 +350,13 @@
 							"application/json": {
 								"schema": {
 									"type": "object",
-									"required": ["id", "content_text", "content_html", "author", "created", "deleted", "replies", "parent", "post", "remote_url"],
+									"required": ["id", "content_text", "content_html", "sensitive", "author", "created", "deleted", "replies", "parent", "post", "remote_url"],
 									"properties": {
 										"id": {"type": "integer"},
 										"remote_url": {"type": "string", "nullable": true},
 										"content_text": {"type": "string", "nullable": true},
 										"content_html": {"type": "string", "nullable": true},
+										"sensitive": {"type": "boolean"},
 										"author": {
 											"$ref": "#/components/schemas/NullableMinimalUserInfo"
 										},
@@ -492,7 +501,8 @@
 									"attachment": {
 										"type": "string",
 										"description": "Must be a `local-media://` reference"
-									}
+									},
+									"sensitive": {"type": "boolean"}
 								}
 							}
 						}
@@ -924,6 +934,81 @@
 				"security": [{"bearer": []}]
 			}
 		},
+		"/api/unstable/communities/{communityID}/modlog/events": {
+			"get": {
+				"summary": "List community modlog events",
+				"parameters": [
+					{
+						"name": "communityID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "limit",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"allOf": [
+													{
+														"type": "object",
+														"required": ["time"],
+														"properties": {
+															"time": {"type": "string", "format": "date-time"}
+														}
+													},
+													{
+														"oneOf": [
+															{
+																"type": "object",
+																"required": ["type", "post"],
+																"properties": {
+																	"type": {"type": "string", "enum": ["reject_post"]},
+																	"post": {"$ref": "#/components/schemas/MinimalPostInfo"}
+																}
+															},
+															{
+																"type": "object",
+																"required": ["type", "post"],
+																"properties": {
+																	"type": {"type": "string", "enum": ["approve_post"]},
+																	"post": {"$ref": "#/components/schemas/MinimalPostInfo"}
+																}
+															}
+														]
+													}
+												]
+											}
+										},
+										"next_page": {"type": "string", "nullable": true}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		"/api/unstable/communities/{communityID}/posts/{postID}": {
 			"patch": {
 				"summary": "Modify a post's publishing state",
@@ -1189,6 +1274,113 @@
 				}
 			}
 		},
+		"/api/unstable/instance/modlog/events": {
+			"get": {
+				"summary": "List instance modlog events",
+				"parameters": [
+					{
+						"name": "limit",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "integer"}
+					},
+					{
+						"name": "page",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "string"}
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["items", "next_page"],
+									"properties": {
+										"items": {
+											"type": "array",
+											"items": {
+												"allOf": [
+													{
+														"type": "object",
+														"required": ["time"],
+														"properties": {
+															"time": {"type": "string", "format": "date-time"}
+														}
+													},
+													{
+														"type": "object",
+														"required": ["type", "author", "community"],
+														"properties": {
+															"type": {
+																"type": "string",
+																"enum": ["delete_post"]
+															},
+															"author": {
+																"$ref": "#/components/schemas/MinimalUserInfo"
+															},
+															"community": {
+																"$ref": "#/components/schemas/MinimalCommunityInfo"
+															}
+														}
+													},
+													{
+														"type": "object",
+														"required": ["type", "author", "post"],
+														"properties": {
+															"type": {
+																"type": "string",
+																"enum": ["delete_comment"]
+															},
+															"author": {
+																"$ref": "#/components/schemas/MinimalUserInfo"
+															},
+															"post": {
+																"$ref": "#/components/schemas/MinimalPostInfo"
+															}
+														}
+													},
+													{
+														"type": "object",
+														"required": ["type", "user"],
+														"properties": {
+															"type": {
+																"type": "string",
+																"enum": ["suspend_user"]
+															},
+															"user": {
+																"$ref": "#/components/schemas/MinimalUserInfo"
+															}
+														}
+													},
+													{
+														"type": "object",
+														"required": ["type", "user"],
+														"properties": {
+															"type": {
+																"type": "string",
+																"enum": ["unsuspend_user"]
+															},
+															"user": {
+																"$ref": "#/components/schemas/MinimalUserInfo"
+															}
+														}
+													}
+												]
+											}
+										},
+										"next_page": {"type": "string", "nullable": true}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		"/api/unstable/logins": {
 			"post": {
 				"summary": "Log in to the service",
@@ -1242,10 +1434,17 @@
 							"application/json": {
 								"schema": {
 									"type": "object",
-									"required": ["user"],
+									"required": ["user", "permissions"],
 									"properties": {
 										"user": {
 											"$ref": "#/components/schemas/LoginUserInfo"
+										},
+										"permissions": {
+											"type": "object",
+											"required": ["create_community"],
+											"properties": {
+												"create_community": {"$ref": "#/components/schemas/PermissionInfo"}
+											}
 										}
 									}
 								}
@@ -1764,7 +1963,8 @@
 									"attachment": {
 										"type": "string",
 										"description": "Must be a `local-media://` reference"
-									}
+									},
+									"sensitive": {"type": "boolean"}
 								}
 							}
 						}
@@ -2028,12 +2228,13 @@
 												"oneOf": [
 													{
 														"type": "object",
-														"required": ["type", "id", "content_text", "content_html", "created", "post"],
+														"required": ["type", "id", "content_text", "content_html", "created", "post", "sensitive"],
 														"properties": {
 															"type": {"type": "string", "enum": ["comment"]},
 															"id": {"type": "integer"},
 															"content_text": {"type": "string", "nullable": true},
 															"content_html": {"type": "string", "nullable": true},
+															"sensitive": {"type": "boolean"},
 															"created": {"type": "string", "format": "date-time"},
 															"post": {"$ref": "#/components/schemas/MinimalPostInfo"}
 														}
