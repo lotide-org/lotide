@@ -173,11 +173,23 @@ pub struct RespMinimalAuthorInfo<'a> {
 }
 
 #[derive(Serialize)]
-pub struct RespLoginUserInfo<'a> {
+pub struct RespLoginUserInfo {
     pub id: UserLocalID,
-    pub username: &'a str,
+    pub username: String,
     pub is_site_admin: bool,
     pub has_unread_notifications: bool,
+}
+
+#[derive(Serialize)]
+pub struct RespLoginInfo {
+    pub user: RespLoginUserInfo,
+    pub permissions: RespLoginPermissions,
+}
+
+#[derive(Serialize)]
+pub struct RespLoginPermissions {
+    pub create_community: RespPermissionInfo,
+    pub create_invitation: RespPermissionInfo,
 }
 
 #[derive(Serialize, Clone)]

@@ -234,7 +234,7 @@ async fn route_unstable_users_create(
 
     #[derive(Deserialize)]
     struct UsersCreateBody<'a> {
-        username: Cow<'a, str>,
+        username: String,
         password: String,
         email_address: Option<Cow<'a, str>>,
         invitation_key: Option<Cow<'a, str>>,
@@ -360,17 +360,20 @@ async fn route_unstable_users_create(
         id
     };
 
-    let info = RespLoginUserInfo {
-        id: user_id,
-        username: &body.username,
-        is_site_admin: false,
-        has_unread_notifications: false,
-    };
-
     let output = if body.login {
         let token = super::insert_token(user_id, &db).await?;
-        serde_json::json!({"user": info, "token": token.to_string()})
+
+        let info = super::fetch_login_info(&db, user_id).await?;
+
+        serde_json::json!({"user": info.user, "permissions": info.permissions, "token": token.to_string()})
     } else {
+        let info = RespLoginUserInfo {
+            id: user_id,
+            username: body.username,
+            is_site_admin: false,
+            has_unread_notifications: false,
+        };
+
         serde_json::json!({ "user": info })
     };
 

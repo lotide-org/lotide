@@ -1,9 +1,10 @@
 use crate::lang;
 use crate::types::{
     CommentLocalID, CommunityLocalID, FingerRequestQuery, FingerResponse, JustURL, PostLocalID,
-    RespAvatarInfo, RespList, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
-    RespMinimalCommunityInfo, RespMinimalPostInfo, RespPermissionInfo, RespPostCommentInfo,
-    RespPostListPost, RespSiteModlogEvent, RespSiteModlogEventDetails, UserLocalID,
+    RespAvatarInfo, RespList, RespLoginInfo, RespLoginPermissions, RespLoginUserInfo,
+    RespMinimalAuthorInfo, RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo,
+    RespPermissionInfo, RespPostCommentInfo, RespPostListPost, RespSiteModlogEvent,
+    RespSiteModlogEventDetails, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -532,7 +533,7 @@ async fn route_unstable_logins_create(
 
     let row = db
         .query_opt(
-            "SELECT id, username, passhash, is_site_admin, suspended, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications) FROM person WHERE LOWER(username)=LOWER($1) AND local",
+            "SELECT id, passhash, suspended FROM person WHERE LOWER(username)=LOWER($1) AND local",
             &[&body.username],
         )
         .await?
@@ -544,8 +545,7 @@ async fn route_unstable_logins_create(
         })?;
 
     let id = UserLocalID(row.get(0));
-    let username: &str = row.get(1);
-    let passhash: Option<String> = row.get(2);
+    let passhash: Option<String> = row.get(1);
 
     let passhash = passhash.ok_or_else(|| {
         crate::Error::UserError(crate::simple_response(
@@ -561,7 +561,7 @@ async fn route_unstable_logins_create(
             .await??;
 
     if correct {
-        if row.get(4) {
+        if row.get(2) {
             return Err(crate::Error::UserError(crate::simple_response(
                 hyper::StatusCode::FORBIDDEN,
                 lang.tr(&lang::user_suspended_error()).into_owned(),
@@ -570,13 +570,10 @@ async fn route_unstable_logins_create(
 
         let token = insert_token(id, &db).await?;
 
+        let info = fetch_login_info(&db, id).await?;
+
         crate::json_response(
-            &serde_json::json!({"token": token.to_string(), "user": RespLoginUserInfo {
-                id,
-                username,
-                is_site_admin: row.get(3),
-                has_unread_notifications: row.get(5),
-            }}),
+            &serde_json::json!({"token": token.to_string(), "user": info.user, "permissions": info.permissions}),
         )
     } else {
         Ok(crate::simple_response(
@@ -595,29 +592,9 @@ async fn route_unstable_logins_current_get(
 
     let user = crate::require_login(&req, &db).await?;
 
-    let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications), site.community_creation_requirement, site.allow_invitations, site.users_create_invitations FROM person, site WHERE site.local AND id=$1", &[&user]).await?;
+    let info = fetch_login_info(&db, user).await?;
 
-    let is_site_admin = row.get(1);
-
-    crate::json_response(&serde_json::json!({
-        "user": RespLoginUserInfo {
-            id: user,
-            username: row.get(0),
-            is_site_admin,
-            has_unread_notifications: row.get(2),
-        },
-        "permissions": serde_json::json!({
-            "create_community": RespPermissionInfo {
-                allowed: match row.get::<_, Option<&str>>(3) {
-                    None => true,
-                    Some(_) => is_site_admin,
-                }
-            },
-            "create_invitation": RespPermissionInfo {
-                allowed: row.get(4) && (is_site_admin || row.get(5)),
-            },
-        }),
-    }))
+    crate::json_response(&info)
 }
 
 async fn route_unstable_logins_current_delete(
@@ -1453,6 +1430,35 @@ pub async fn process_comment_content<'a, 'b>(
                 (Some(text), None, None)
             }
             None => (None, None, None),
+        },
+    })
+}
+
+pub async fn fetch_login_info(
+    db: &tokio_postgres::Client,
+    user: UserLocalID,
+) -> Result<RespLoginInfo, crate::Error> {
+    let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications), site.community_creation_requirement, site.allow_invitations, site.users_create_invitations FROM person, site WHERE site.local AND id=$1", &[&user]).await?;
+
+    let is_site_admin = row.get(1);
+
+    Ok(RespLoginInfo {
+        user: RespLoginUserInfo {
+            id: user,
+            username: row.get(0),
+            is_site_admin,
+            has_unread_notifications: row.get(2),
+        },
+        permissions: RespLoginPermissions {
+            create_community: RespPermissionInfo {
+                allowed: match row.get::<_, Option<&str>>(3) {
+                    None => true,
+                    Some(_) => is_site_admin,
+                },
+            },
+            create_invitation: RespPermissionInfo {
+                allowed: row.get(4) && (is_site_admin || row.get(5)),
+            },
         },
     })
 }

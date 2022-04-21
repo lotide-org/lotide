@@ -35,6 +35,23 @@
 					"has_unread_notifications": {"type": "boolean"}
 				}
 			},
+			"LoginInfo": {
+				"type": "object",
+				"required": ["user", "permissions"],
+				"properties": {
+					"user": {
+						"$ref": "#/components/schemas/LoginUserInfo"
+					},
+					"permissions": {
+						"type": "object",
+						"required": ["create_community", "create_invitation"],
+						"properties": {
+							"create_community": {"$ref": "#/components/schemas/PermissionInfo"},
+							"create_invitation": {"$ref": "#/components/schemas/PermissionInfo"}
+						}
+					}
+				}
+			},
 			"MinimalCommentInfo": {
 				"type": "object",
 				"required": ["id", "remote_url"],
@@ -1474,14 +1491,18 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "object",
-									"required": ["token", "user"],
-									"properties": {
-										"token": {"type": "string"},
-										"user": {
-											"$ref": "#/components/schemas/LoginUserInfo"
+									"allOf": [
+										{
+											"type": "object",
+											"required": ["token"],
+											"properties": {
+												"token": {"type": "string"}
+											}
+										},
+										{
+											"$ref": "#/components/schemas/LoginInfo"
 										}
-									}
+									]
 								}
 							}
 						}
@@ -1498,21 +1519,7 @@
 						"content": {
 							"application/json": {
 								"schema": {
-									"type": "object",
-									"required": ["user", "permissions"],
-									"properties": {
-										"user": {
-											"$ref": "#/components/schemas/LoginUserInfo"
-										},
-										"permissions": {
-											"type": "object",
-											"required": ["create_community", "create_invitation"],
-											"properties": {
-												"create_community": {"$ref": "#/components/schemas/PermissionInfo"},
-												"create_invitation": {"$ref": "#/components/schemas/PermissionInfo"}
-											}
-										}
-									}
+									"$ref": "#/components/schemas/LoginInfo"
 								}
 							}
 						}
@@ -2212,6 +2219,9 @@
 									"properties": {
 										"user": {
 											"$ref": "#/components/schemas/LoginUserInfo"
+										},
+										"permissions": {
+											"$ref": "#/components/schemas/LoginInfo/properties/permissions"
 										},
 										"token": {
 											"type": "string"
