@@ -8,6 +8,7 @@ use crate::types::{
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -211,6 +212,32 @@ async fn route_unstable_communities_list(
 
     let rows = rows;
 
+    let pending_moderation_actions_map = if query.include_your {
+        let moderated_communities: Vec<_> = rows
+            .iter()
+            .filter_map(|row| {
+                if row.get(8) {
+                    Some(CommunityLocalID(row.get(0)))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if moderated_communities.is_empty() {
+            None
+        } else {
+            let rows = db.query("SELECT COUNT(*), post.community FROM flag INNER JOIN post ON (post.id = post) WHERE flag.to_community AND post.approved AND post.community=ANY($1::BIGINT[]) GROUP BY post.community", &[&moderated_communities]).await?;
+            Some(
+                rows.into_iter()
+                    .map(|row| (CommunityLocalID(row.get(1)), row.get(0)))
+                    .collect::<HashMap<CommunityLocalID, i64>>(),
+            )
+        }
+    } else {
+        None
+    };
+
     let output = RespList {
         items: rows
             .iter()
@@ -229,6 +256,12 @@ async fn route_unstable_communities_list(
                     )))
                 } else {
                     ap_id.map(Cow::Borrowed)
+                };
+
+                let you_are_moderator = if query.include_your {
+                    Some(row.get(8))
+                } else {
+                    None
                 };
 
                 RespCommunityInfo {
@@ -253,15 +286,24 @@ async fn route_unstable_communities_list(
                         },
                     },
 
-                    you_are_moderator: if query.include_your {
-                        Some(row.get(8))
-                    } else {
-                        None
-                    },
+                    you_are_moderator,
                     your_follow: if query.include_your {
                         Some(
                             row.get::<_, Option<bool>>(7)
                                 .map(|accepted| RespYourFollowInfo { accepted }),
+                        )
+                    } else {
+                        None
+                    },
+
+                    pending_moderation_actions: if you_are_moderator == Some(true) {
+                        Some(
+                            pending_moderation_actions_map
+                                .as_ref()
+                                .unwrap()
+                                .get(&id)
+                                .copied()
+                                .unwrap_or(0) as u32,
                         )
                     } else {
                         None
@@ -497,6 +539,19 @@ async fn route_unstable_communities_get(
         community_ap_id.map(Cow::Borrowed)
     };
 
+    let you_are_moderator = if query.include_your {
+        Some(row.get(7))
+    } else {
+        None
+    };
+
+    let pending_moderation_actions = if you_are_moderator == Some(true) {
+        let row = db.query_one("SELECT COUNT(*) FROM flag INNER JOIN post ON (post.id = post) WHERE flag.to_community AND post.approved AND post.community=$1", &[&community_id]).await?;
+        Some(row.get(0))
+    } else {
+        None
+    };
+
     let info = RespCommunityInfo {
         base: RespMinimalCommunityInfo {
             id: community_id,
@@ -522,11 +577,7 @@ async fn route_unstable_communities_get(
                 ),
             },
         },
-        you_are_moderator: if query.include_your {
-            Some(row.get(7))
-        } else {
-            None
-        },
+        you_are_moderator,
         your_follow: if query.include_your {
             Some(
                 row.get::<_, Option<bool>>(6)
@@ -535,6 +586,8 @@ async fn route_unstable_communities_get(
         } else {
             None
         },
+
+        pending_moderation_actions,
     };
 
     crate::json_response(&info)

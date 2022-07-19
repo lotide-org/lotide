@@ -340,6 +340,9 @@ pub struct RespCommunityInfo<'a> {
     pub you_are_moderator: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub your_follow: Option<Option<RespYourFollowInfo>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_moderation_actions: Option<u32>,
 }
 
 #[derive(Serialize, Clone)]

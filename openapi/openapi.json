@@ -186,6 +186,10 @@
 								"description": "Whether your follow request has been accepted by the community."
 							}
 						}
+					},
+					"pending_moderation_actions": {
+						"type": "integer",
+						"description": "Number of pending flags sent to this community. Present with include_your=true if you are a moderator"
 					}
 				}
 			},
