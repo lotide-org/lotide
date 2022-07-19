@@ -82,6 +82,8 @@ async fn route_unstable_communities_list(
         #[serde(rename = "your_follow.accepted")]
         your_follow_accepted: Option<bool>,
 
+        you_are_moderator: Option<bool>,
+
         #[serde(default)]
         include_your: bool,
 
@@ -103,7 +105,10 @@ async fn route_unstable_communities_list(
 
     let db = ctx.db_pool.get().await?;
 
-    let login_user_maybe = if query.include_your || query.your_follow_accepted.is_some() {
+    let login_user_maybe = if query.include_your
+        || query.your_follow_accepted.is_some()
+        || query.you_are_moderator.is_some()
+    {
         Some(crate::require_login(&req, &db).await?)
     } else {
         None
@@ -141,6 +146,21 @@ async fn route_unstable_communities_list(
         .unwrap();
         values.push(req_your_follow_accepted);
         write!(sql, " AND accepted=${})", values.len()).unwrap();
+    }
+    if let Some(req_you_are_moderator) = &query.you_are_moderator {
+        write!(sql, " AND community.id ").unwrap();
+
+        if !req_you_are_moderator {
+            write!(sql, "NOT ").unwrap();
+        }
+
+        values.push(login_user_maybe.as_ref().unwrap());
+        write!(
+            sql,
+            "IN (SELECT community FROM community_moderator WHERE person=${})",
+            values.len()
+        )
+        .unwrap();
     }
     if let Some(req_local) = &query.local {
         values.push(req_local);

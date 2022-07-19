@@ -663,6 +663,13 @@
 						"description": "Filter to either communities you are following or waiting to follow. Requires login."
 					},
 					{
+						"name": "you_are_moderator",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"},
+						"description": "Filter based on whether you are a moderator of the community. Requires login."
+					},
+					{
 						"name": "local",
 						"in": "query",
 						"required": false,
