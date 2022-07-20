@@ -567,7 +567,7 @@ async fn route_unstable_communities_get(
 
     let pending_moderation_actions = if you_are_moderator == Some(true) {
         let row = db.query_one("SELECT COUNT(*) FROM flag INNER JOIN post ON (post.id = post) WHERE flag.to_community AND post.approved AND post.community=$1", &[&community_id]).await?;
-        Some(row.get(0))
+        Some(row.get::<_, i64>(0) as u32)
     } else {
         None
     };
