@@ -27,12 +27,13 @@
 			},
 			"LoginUserInfo": {
 				"type": "object",
-				"required": ["id", "username", "is_site_admin", "has_unread_notifications"],
+				"required": ["id", "username", "is_site_admin", "has_unread_notifications", "has_pending_moderation_actions"],
 				"properties": {
 					"id": {"type": "integer"},
 					"username": {"type": "string"},
 					"is_site_admin": {"type": "boolean"},
-					"has_unread_notifications": {"type": "boolean"}
+					"has_unread_notifications": {"type": "boolean"},
+					"has_pending_moderation_actions": {"type": "boolean"}
 				}
 			},
 			"LoginInfo": {

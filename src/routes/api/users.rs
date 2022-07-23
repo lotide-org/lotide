@@ -372,6 +372,7 @@ async fn route_unstable_users_create(
             username: body.username,
             is_site_admin: false,
             has_unread_notifications: false,
+            has_pending_moderation_actions: false,
         };
 
         serde_json::json!({ "user": info })

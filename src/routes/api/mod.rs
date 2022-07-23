@@ -1438,7 +1438,7 @@ pub async fn fetch_login_info(
     db: &tokio_postgres::Client,
     user: UserLocalID,
 ) -> Result<RespLoginInfo, crate::Error> {
-    let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications), site.community_creation_requirement, site.allow_invitations, site.users_create_invitations FROM person, site WHERE site.local AND id=$1", &[&user]).await?;
+    let row = db.query_one("SELECT username, is_site_admin, EXISTS(SELECT 1 FROM notification WHERE to_user = person.id AND created_at > person.last_checked_notifications), EXISTS(SELECT 1 FROM flag INNER JOIN post ON (post.id = post) WHERE flag.to_community AND post.approved AND post.community IN (SELECT community FROM community_moderator WHERE person=person.id)), site.community_creation_requirement, site.allow_invitations, site.users_create_invitations FROM person, site WHERE site.local AND id=$1", &[&user]).await?;
 
     let is_site_admin = row.get(1);
 
@@ -1448,16 +1448,17 @@ pub async fn fetch_login_info(
             username: row.get(0),
             is_site_admin,
             has_unread_notifications: row.get(2),
+            has_pending_moderation_actions: row.get(3),
         },
         permissions: RespLoginPermissions {
             create_community: RespPermissionInfo {
-                allowed: match row.get::<_, Option<&str>>(3) {
+                allowed: match row.get::<_, Option<&str>>(4) {
                     None => true,
                     Some(_) => is_site_admin,
                 },
             },
             create_invitation: RespPermissionInfo {
-                allowed: row.get(4) && (is_site_admin || row.get(5)),
+                allowed: row.get(5) && (is_site_admin || row.get(6)),
             },
         },
     })

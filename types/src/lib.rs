@@ -178,6 +178,7 @@ pub struct RespLoginUserInfo {
     pub username: String,
     pub is_site_admin: bool,
     pub has_unread_notifications: bool,
+    pub has_pending_moderation_actions: bool,
 }
 
 #[derive(Serialize)]
