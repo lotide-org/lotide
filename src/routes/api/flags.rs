@@ -19,6 +19,7 @@ async fn route_unstable_flags_list(
     struct FlagsListQuery {
         to_this_site_admin: Option<bool>,
         to_community: Option<CommunityLocalID>,
+        dismissed: Option<bool>,
     }
 
     let query: FlagsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -76,6 +77,28 @@ async fn route_unstable_flags_list(
     }
     if let Some(value) = query.to_this_site_admin {
         write!(sql, " AND {}((flag.to_site_admin AND flag.local) OR (flag.to_remote_site_admin AND NOT flag.local))", if value { "" } else { "NOT " }).unwrap();
+    }
+    if let Some(dismissed) = &query.dismissed {
+        values.push(dismissed);
+        if query.to_community.is_some() {
+            if query.to_this_site_admin == Some(true) {
+                return Err(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Cannot filter by dismissal with multiple target filters",
+                )));
+            }
+
+            write!(sql, " AND to_community_dismissed=").unwrap();
+        } else if query.to_this_site_admin == Some(true) {
+            write!(sql, " AND to_site_admin_dismissed=").unwrap();
+        } else {
+            return Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Cannot filter by dismissal without target filter",
+            )));
+        }
+
+        write!(sql, "${}", values.len()).unwrap();
     }
 
     sql.push_str(" ORDER BY flag.id DESC LIMIT 30");
@@ -240,6 +263,108 @@ async fn route_unstable_flags_list(
     crate::json_response(&output)
 }
 
+async fn route_unstable_flags_edit(
+    params: (FlagLocalID,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (flag_id,) = params;
+
+    let db = ctx.db_pool.get().await?;
+    let lang = crate::get_lang_for_req(&req);
+
+    let user = crate::require_login(&req, &db).await?;
+
+    #[derive(Deserialize)]
+    struct Body {
+        community_dismissed: Option<bool>,
+    }
+
+    let body = hyper::body::to_bytes(req.into_body()).await?;
+
+    let body: Body = serde_json::from_slice(&body)?;
+
+    let mut needs_community_mod = false;
+
+    let mut changes = Vec::<(&str, &(dyn tokio_postgres::types::ToSql + Sync))>::new();
+
+    if let Some(community_dismissed) = &body.community_dismissed {
+        needs_community_mod = true;
+
+        changes.push(("to_community_dismissed", community_dismissed));
+    }
+
+    if changes.is_empty() {
+        return Ok(crate::empty_response());
+    }
+
+    if needs_community_mod {
+        let row = db.query_opt("SELECT community FROM flag LEFT OUTER JOIN post ON (post.id = flag.post) WHERE flag.id = $1", &[&flag_id]).await?;
+        match row {
+            None => return Ok(crate::empty_response()),
+            Some(row) => {
+                let community_id = row.get::<_, Option<_>>(0).map(CommunityLocalID);
+                match community_id {
+                    None => Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        "Unknown community for flag",
+                    ))),
+                    Some(community_id) => {
+                        let row = db
+                            .query_opt(
+                                "SELECT 1 FROM community_moderator WHERE community=$1 AND person=$2",
+                                &[&community_id, &user],
+                            )
+                            .await?;
+                        match row {
+                            None => Err(crate::Error::UserError(crate::simple_response(
+                                hyper::StatusCode::FORBIDDEN,
+                                lang.tr(&lang::must_be_moderator()).into_owned(),
+                            ))),
+                            Some(_) => Ok(()),
+                        }
+                    }
+                }
+            }
+        }?
+    }
+
+    {
+        use std::fmt::Write;
+
+        let mut sql = "UPDATE flag SET ".to_owned();
+        let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = changes
+            .iter()
+            .enumerate()
+            .map(|(idx, (key, value))| {
+                write!(
+                    sql,
+                    "{}{}=${}",
+                    if idx == 0 { "" } else { "," },
+                    key,
+                    idx + 1
+                )
+                .unwrap();
+
+                *value
+            })
+            .collect();
+        values.push(&flag_id);
+        write!(sql, " WHERE id=${}", values.len()).unwrap();
+
+        let sql: &str = &sql;
+
+        db.execute(sql, &values).await?;
+    }
+
+    Ok(crate::empty_response())
+}
+
 pub fn route_flags() -> crate::RouteNode<()> {
-    crate::RouteNode::new().with_handler_async(hyper::Method::GET, route_unstable_flags_list)
+    crate::RouteNode::new()
+        .with_handler_async(hyper::Method::GET, route_unstable_flags_list)
+        .with_child_parse::<FlagLocalID, _>(
+            crate::RouteNode::new()
+                .with_handler_async(hyper::Method::PATCH, route_unstable_flags_edit),
+        )
 }

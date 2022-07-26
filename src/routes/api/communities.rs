@@ -247,7 +247,7 @@ async fn route_unstable_communities_list(
         if moderated_communities.is_empty() {
             None
         } else {
-            let rows = db.query("SELECT COUNT(*), post.community FROM flag INNER JOIN post ON (post.id = post) WHERE flag.to_community AND post.approved AND post.community=ANY($1::BIGINT[]) GROUP BY post.community", &[&moderated_communities]).await?;
+            let rows = db.query("SELECT COUNT(*), post.community FROM flag INNER JOIN post ON (post.id = post) WHERE flag.to_community AND NOT flag.to_community_dismissed AND post.approved AND post.community=ANY($1::BIGINT[]) GROUP BY post.community", &[&moderated_communities]).await?;
             Some(
                 rows.into_iter()
                     .map(|row| (CommunityLocalID(row.get(1)), row.get(0)))

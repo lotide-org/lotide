@@ -1110,6 +1110,13 @@
 						"in": "query",
 						"required": false,
 						"schema": {"type": "boolean"}
+					},
+					{
+						"name": "dismissed",
+						"in": "query",
+						"required": false,
+						"schema": {"type": "boolean"},
+						"description": "Filter by whether the flag is dismissed for the target. Requires exactly one target filter."
 					}
 				],
 				"responses": {
@@ -1161,6 +1168,36 @@
 								}
 							}
 						}
+					}
+				}
+			}
+		},
+		"/api/unstable/flags/{flagID}": {
+			"patch": {
+				"summary": "Edit flag details",
+				"parameters": [
+					{
+						"name": "flagID",
+						"in": "path",
+						"required": true,
+						"schema": {"type": "integer"}
+					}
+				],
+				"requestBody": {
+					"content": {
+						"application/json": {
+							"schema": {
+								"type": "object",
+								"properties": {
+									"community_dismissed": {"type": "boolean"}
+								}
+							}
+						}
+					}
+				},
+				"responses": {
+					"204": {
+						"description": "Successfully modified."
 					}
 				}
 			}
