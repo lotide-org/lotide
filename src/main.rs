@@ -965,7 +965,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subcommand(
             clap::Command::new("migrate").arg(
                 clap::Arg::new("ACTION")
-                    .required(true)
                     .default_value("up")
                     .possible_values(&["up", "down", "setup"]),
             ),
