@@ -76,4 +76,4 @@ rstest = "0.12.0"
 fluent-syntax = "0.11.0"
 
 [patch.crates-io]
-activitystreams = { git = "https://git.sr.ht/~vpzom/activitystreams", rev = "74d2e03" }
+activitystreams = { git = "https://git.sr.ht/~vpzom/activitystreams", rev = "e692dc" }

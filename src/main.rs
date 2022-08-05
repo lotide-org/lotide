@@ -159,6 +159,7 @@ pub struct BaseContext {
     pub api_ratelimit: henry::RatelimitBucket<std::net::IpAddr>,
     pub vapid_public_key_base64: String,
     pub vapid_signature_builder: web_push::PartialVapidSignatureBuilder,
+    pub break_stuff: bool,
 
     pub local_hostname: String,
 
@@ -1078,6 +1079,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         local_hostname: get_url_host(&host_url_apub)
             .expect("Couldn't find host in HOST_URL_ACTIVITYPUB"),
 
+        break_stuff: config.break_stuff,
         db_pool,
         mailer,
         mail_from,

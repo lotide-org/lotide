@@ -1120,28 +1120,56 @@ async fn ingest_postlike(
                                         activitystreams::object::Document::from_any_base(
                                             base.clone(),
                                         )
-                                        .map(|obj| obj.unwrap().take_url()),
+                                        .map(|obj| {
+                                            obj.unwrap()
+                                                .take_url()
+                                                .as_ref()
+                                                .and_then(|href| {
+                                                    href.iter()
+                                                        .filter_map(|x| x.as_xsd_any_uri())
+                                                        .next()
+                                                })
+                                                .map(|href| href.as_str().to_owned())
+                                        }),
                                     ),
                                     Some("Image") => Some(
                                         activitystreams::object::Image::from_any_base(base.clone())
-                                            .map(|obj| obj.unwrap().take_url()),
+                                            .map(|obj| {
+                                                obj.unwrap()
+                                                    .take_url()
+                                                    .as_ref()
+                                                    .and_then(|href| {
+                                                        href.iter()
+                                                            .filter_map(|x| x.as_xsd_any_uri())
+                                                            .next()
+                                                    })
+                                                    .map(|href| href.as_str().to_owned())
+                                            }),
+                                    ),
+                                    Some("Link") => Some(
+                                        activitystreams::link::Link::<
+                                            activitystreams::link::kind::LinkType,
+                                        >::from_any_base(
+                                            base.clone()
+                                        )
+                                        .map(|obj| {
+                                            obj.unwrap()
+                                                .take_href()
+                                                .map(|href| href.as_str().to_owned())
+                                        }),
                                     ),
                                     _ => None,
                                 }
                             })
                             .transpose()?
                             .flatten();
-                        let href = href
-                            .as_ref()
-                            .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
-                            .map(|href| href.as_str());
                         let sensitive = obj.ext_two.sensitive;
 
                         Ok(Some(IngestResult::Post(
                             handle_recieved_post(
                                 object_id.clone(),
                                 title,
-                                href,
+                                href.as_deref(),
                                 content,
                                 media_type,
                                 created.as_ref(),

@@ -23,6 +23,9 @@ pub struct Config {
     pub media_location: Option<std::path::PathBuf>,
     pub smtp_url: Option<String>,
     pub smtp_from: Option<String>,
+
+    #[serde(default)]
+    pub break_stuff: bool,
 }
 
 impl Config {

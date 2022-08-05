@@ -5,7 +5,7 @@ version = 3
 [[package]]
 name = "activitystreams"
 version = "0.7.0-alpha.11"
-source = "git+https://git.sr.ht/~vpzom/activitystreams?rev=74d2e03#74d2e038e6fee49d98f0399ea1b1846dee1c8d1d"
+source = "git+https://git.sr.ht/~vpzom/activitystreams?rev=e692dc#e692dcaa40b09206e56bf612ecdfb361891a750c"
 dependencies = [
  "chrono",
  "mime",
