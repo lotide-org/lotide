@@ -1520,7 +1520,7 @@ dependencies = [
 
 [[package]]
 name = "lotide"
-version = "0.12.0-pre"
+version = "0.12.0-rc.1"
 dependencies = [
  "activitystreams",
  "activitystreams-ext",
