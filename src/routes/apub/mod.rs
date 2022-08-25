@@ -9,6 +9,7 @@ mod posts;
 
 pub fn route_apub() -> crate::RouteNode<()> {
     crate::RouteNode::new()
+        .with_handler_async(hyper::Method::GET, handler_get)
         .with_child(
             "users",
             crate::RouteNode::new().with_child_parse::<UserLocalID, _>(
@@ -84,6 +85,49 @@ pub fn route_apub() -> crate::RouteNode<()> {
                     .with_handler_async(hyper::Method::GET, handler_post_like_undos_get),
             ),
         )
+}
+
+async fn handler_get(
+    _: (),
+    ctx: Arc<crate::RouteContext>,
+    _req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let mut info = activitystreams::actor::Service::new();
+    info.set_many_contexts(vec![
+        activitystreams::context(),
+        activitystreams::security(),
+    ]);
+    info.set_id(ctx.host_url_apub.clone().into());
+
+    let info = activitystreams::actor::ApActor::new(
+        crate::apub_util::LocalObjectRef::SharedInbox
+            .to_local_uri(&ctx.host_url_apub)
+            .into(),
+        info,
+    );
+
+    let key_id = format!("{}#main-key", ctx.host_url_apub);
+
+    let public_key_ext = crate::apub_util::PublicKeyExtension {
+        public_key: Some(crate::apub_util::PublicKey {
+            id: (&key_id).into(),
+            owner: Cow::Borrowed(ctx.host_url_apub.0.as_str()),
+            public_key_pem: Cow::Borrowed(&ctx.pubkey),
+            signature_algorithm: Some(crate::apub_util::SIGALG_RSA_SHA256.into()),
+        }),
+    };
+
+    let info = activitystreams_ext::Ext1::new(info, public_key_ext);
+
+    let body = serde_json::to_vec(&info)?;
+
+    let mut resp = hyper::Response::new(body.into());
+    resp.headers_mut().insert(
+        hyper::header::CONTENT_TYPE,
+        hyper::header::HeaderValue::from_static("application/activity+json"),
+    );
+
+    Ok(resp)
 }
 
 pub fn route_inbox() -> crate::RouteNode<()> {

@@ -1,0 +1,4 @@
+BEGIN;
+	ALTER TABLE site DROP COLUMN private_key;
+	ALTER TABLE site DROP COLUMN public_key;
+COMMIT;

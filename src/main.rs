@@ -159,6 +159,8 @@ pub struct BaseContext {
     pub api_ratelimit: henry::RatelimitBucket<std::net::IpAddr>,
     pub vapid_public_key_base64: String,
     pub vapid_signature_builder: web_push::PartialVapidSignatureBuilder,
+    pub privkey: openssl::pkey::PKey<openssl::pkey::Private>,
+    pub pubkey: String,
 
     pub local_hostname: String,
 
@@ -992,12 +994,16 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         16,
     );
 
+    let db = db_pool.get().await?;
+    let site_row = db
+        .query_one(
+            "SELECT vapid_private_key, private_key, public_key FROM site WHERE local=TRUE",
+            &[],
+        )
+        .await?;
+
     let vapid_key: openssl::ec::EcKey<openssl::pkey::Private> = {
-        let db = db_pool.get().await?;
-        let row = db
-            .query_one("SELECT vapid_private_key FROM site WHERE local=TRUE", &[])
-            .await?;
-        match row.get(0) {
+        match site_row.get(0) {
             Some(bytes) => openssl::ec::EcKey::private_key_from_pem(bytes)?,
             None => {
                 let key = openssl::ec::EcKey::generate(
@@ -1023,6 +1029,28 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         vapid_signature_builder.get_public_key(),
         base64::Config::new(base64::CharacterSet::UrlSafe, false),
     );
+
+    let (site_privkey, site_pubkey) = match site_row.get(1) {
+        None => {
+            let rsa = openssl::rsa::Rsa::generate(crate::KEY_BITS)?;
+            let private_key = rsa.private_key_to_pem()?;
+            let public_key = String::from_utf8(rsa.public_key_to_pem()?).unwrap();
+
+            db.execute(
+                "UPDATE site SET private_key=$1, public_key=$2 WHERE local=TRUE",
+                &[&private_key, &public_key.as_bytes()],
+            )
+            .await?;
+
+            (openssl::pkey::PKey::from_rsa(rsa)?, public_key)
+        }
+        Some(privkey_bytes) => (
+            openssl::pkey::PKey::private_key_from_pem(privkey_bytes)?,
+            site_row
+                .get::<_, Option<_>>(2)
+                .expect("Missing public key for site actor"),
+        ),
+    };
 
     let host_url_apub: url::Url = config
         .host_url_activitypub
@@ -1090,6 +1118,8 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         api_ratelimit: henry::RatelimitBucket::new(300),
         vapid_public_key_base64,
         vapid_signature_builder,
+        privkey: site_privkey,
+        pubkey: site_pubkey,
 
         worker_trigger,
     });

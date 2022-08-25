@@ -1,0 +1,4 @@
+BEGIN;
+	ALTER TABLE site ADD COLUMN private_key BYTEA;
+	ALTER TABLE site ADD COLUMN public_key BYTEA;
+COMMIT;
