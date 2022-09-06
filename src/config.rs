@@ -20,7 +20,9 @@ pub struct Config {
     #[serde(default)]
     pub allow_forwarded: bool,
 
+    pub media_storage: Option<String>,
     pub media_location: Option<std::path::PathBuf>,
+
     pub smtp_url: Option<String>,
     pub smtp_from: Option<String>,
 

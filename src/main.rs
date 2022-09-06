@@ -1,3 +1,4 @@
+use futures::Stream;
 pub use lotide_types as types;
 use rand::Rng;
 use serde_derive::{Deserialize, Serialize};
@@ -155,7 +156,7 @@ pub struct BaseContext {
     pub host_url_apub: BaseURL,
     pub http_client: HttpClient,
     pub apub_proxy_rewrites: bool,
-    pub media_location: Option<std::path::PathBuf>,
+    pub media_storage: Option<MediaStorage>,
     pub api_ratelimit: henry::RatelimitBucket<std::net::IpAddr>,
     pub vapid_public_key_base64: String,
     pub vapid_signature_builder: web_push::PartialVapidSignatureBuilder,
@@ -952,6 +953,56 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
     });
 }
 
+pub enum MediaStorage {
+    Local(std::path::PathBuf),
+}
+
+impl MediaStorage {
+    pub async fn open(
+        &self,
+        path: &str,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<bytes::BytesMut, std::io::Error>> + Send>>,
+        crate::Error,
+    > {
+        match self {
+            MediaStorage::Local(root) => {
+                let path = root.join(path);
+
+                let file = tokio::fs::File::open(path).await?;
+                Ok(Box::pin(tokio_util::codec::FramedRead::new(
+                    file,
+                    tokio_util::codec::BytesCodec::new(),
+                )))
+            }
+        }
+    }
+
+    pub async fn save(
+        &self,
+        src: impl Stream<Item = Result<bytes::Bytes, std::io::Error>>,
+    ) -> Result<String, crate::Error> {
+        match self {
+            MediaStorage::Local(root) => {
+                let filename = uuid::Uuid::new_v4().to_string();
+                let path = root.join(&filename);
+
+                {
+                    use futures::TryStreamExt;
+                    use tokio::io::AsyncWriteExt;
+                    let file = tokio::fs::File::create(path).await?;
+                    src.try_fold(file, |mut file, chunk| async move {
+                        file.write_all(chunk.as_ref()).await.map(|_| file)
+                    })
+                    .await?;
+                }
+
+                Ok(filename)
+            }
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
@@ -1083,7 +1134,18 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         db_pool,
         mailer,
         mail_from,
-        media_location: config.media_location.clone(),
+        media_storage: match config.media_storage.as_deref() {
+            None => match config.media_location {
+                None => None,
+                Some(path) => Some(MediaStorage::Local(path)),
+            },
+            Some("local") => Some(MediaStorage::Local(
+                config.media_location.expect("Missing media_location"),
+            )),
+            Some(_) => {
+                panic!("Unknown media_storage type");
+            }
+        },
         host_url_api: config.host_url_api.clone(),
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),
