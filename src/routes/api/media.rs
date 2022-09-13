@@ -37,6 +37,7 @@ async fn route_unstable_media_create(
             .save(
                 req.into_body()
                     .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)),
+                content_type.as_ref(),
             )
             .await?;
 

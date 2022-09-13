@@ -21,7 +21,12 @@ pub struct Config {
     pub allow_forwarded: bool,
 
     pub media_storage: Option<String>,
-    pub media_location: Option<std::path::PathBuf>,
+    pub media_location: Option<String>,
+
+    pub media_s3_region: Option<String>,
+    pub media_s3_endpoint: Option<String>,
+    pub media_s3_access_key_id: Option<String>,
+    pub media_s3_secret_key: Option<String>,
 
     pub smtp_url: Option<String>,
     pub smtp_from: Option<String>,
