@@ -1,4 +1,5 @@
 use crate::lang;
+use futures::TryStreamExt;
 use std::sync::Arc;
 
 async fn route_unstable_media_create(
@@ -31,27 +32,20 @@ async fn route_unstable_media_create(
 
     let user = crate::require_login(&req, &db).await?;
 
-    if let Some(media_location) = &ctx.media_location {
-        let filename = uuid::Uuid::new_v4().to_string();
-        let path = media_location.join(&filename);
-
-        {
-            use futures::TryStreamExt;
-            use tokio::io::AsyncWriteExt;
-            let file = tokio::fs::File::create(path).await?;
-            req.into_body()
-                .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
-                .try_fold(file, |mut file, chunk| async move {
-                    file.write_all(chunk.as_ref()).await.map(|_| file)
-                })
-                .await?;
-        }
+    if let Some(media_storage) = &ctx.media_storage {
+        let path = media_storage
+            .save(
+                req.into_body()
+                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)),
+                content_type.as_ref(),
+            )
+            .await?;
 
         let id = crate::Pineapple::generate();
 
         db.execute(
             "INSERT INTO media (id, path, person, mime) VALUES ($1, $2, $3, $4)",
-            &[&id.as_int(), &filename, &user, &content_type.as_ref()],
+            &[&id.as_int(), &path, &user, &content_type.as_ref()],
         )
         .await?;
 

@@ -53,16 +53,9 @@ async fn route_stable_comments_attachments_0_href_get(
                                 let path: &str = media_row.get(0);
                                 let mime: &str = media_row.get(1);
 
-                                if let Some(media_location) = &ctx.media_location {
-                                    let path = media_location.join(path);
-
-                                    let file = tokio::fs::File::open(path).await?;
-                                    let body = hyper::Body::wrap_stream(
-                                        tokio_util::codec::FramedRead::new(
-                                            file,
-                                            tokio_util::codec::BytesCodec::new(),
-                                        ),
-                                    );
+                                if let Some(media_storage) = &ctx.media_storage {
+                                    let body =
+                                        hyper::Body::wrap_stream(media_storage.open(path).await?);
 
                                     Ok(crate::common_response_builder()
                                         .header(hyper::header::CONTENT_TYPE, mime)
@@ -279,16 +272,10 @@ async fn route_stable_posts_href_get(
                                 let path: &str = media_row.get(0);
                                 let mime: &str = media_row.get(1);
 
-                                if let Some(media_location) = &ctx.media_location {
-                                    let path = media_location.join(path);
+                                if let Some(media_storage) = &ctx.media_storage {
+                                    let file = media_storage.open(path).await?;
 
-                                    let file = tokio::fs::File::open(path).await?;
-                                    let body = hyper::Body::wrap_stream(
-                                        tokio_util::codec::FramedRead::new(
-                                            file,
-                                            tokio_util::codec::BytesCodec::new(),
-                                        ),
-                                    );
+                                    let body = hyper::Body::wrap_stream(file);
 
                                     Ok(crate::common_response_builder()
                                         .header(hyper::header::CONTENT_TYPE, mime)
@@ -359,16 +346,9 @@ async fn route_unstable_users_avatar_href_get(
                                 let path: &str = media_row.get(0);
                                 let mime: &str = media_row.get(1);
 
-                                if let Some(media_location) = &ctx.media_location {
-                                    let path = media_location.join(path);
-
-                                    let file = tokio::fs::File::open(path).await?;
-                                    let body = hyper::Body::wrap_stream(
-                                        tokio_util::codec::FramedRead::new(
-                                            file,
-                                            tokio_util::codec::BytesCodec::new(),
-                                        ),
-                                    );
+                                if let Some(media_storage) = &ctx.media_storage {
+                                    let file = media_storage.open(path).await?;
+                                    let body = hyper::Body::wrap_stream(file);
 
                                     Ok(crate::common_response_builder()
                                         .header(hyper::header::CONTENT_TYPE, mime)

@@ -1,3 +1,4 @@
+use futures::{Stream, StreamExt, TryStreamExt};
 pub use lotide_types as types;
 use rand::Rng;
 use serde_derive::{Deserialize, Serialize};
@@ -155,7 +156,7 @@ pub struct BaseContext {
     pub host_url_apub: BaseURL,
     pub http_client: HttpClient,
     pub apub_proxy_rewrites: bool,
-    pub media_location: Option<std::path::PathBuf>,
+    pub media_storage: Option<MediaStorage>,
     pub api_ratelimit: henry::RatelimitBucket<std::net::IpAddr>,
     pub vapid_public_key_base64: String,
     pub vapid_signature_builder: web_push::PartialVapidSignatureBuilder,
@@ -952,6 +953,209 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
     });
 }
 
+pub enum MediaStorage {
+    Local(std::path::PathBuf),
+    S3 {
+        client: rusoto_s3::S3Client,
+        bucket: String,
+    },
+}
+
+impl MediaStorage {
+    pub async fn open(
+        &self,
+        path: &str,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send>>,
+        crate::Error,
+    > {
+        match self {
+            MediaStorage::Local(root) => {
+                let path = root.join(path);
+
+                let file = tokio::fs::File::open(path).await?;
+                Ok(Box::pin(
+                    tokio_util::codec::FramedRead::new(file, tokio_util::codec::BytesCodec::new())
+                        .map_ok(|x| x.freeze()),
+                ))
+            }
+            MediaStorage::S3 { client, bucket } => {
+                use rusoto_s3::S3;
+
+                let mut req: rusoto_s3::GetObjectRequest = Default::default();
+                req.bucket = bucket.clone();
+                req.key = path.to_owned();
+
+                let res = client.get_object(req).await?;
+                let body = res
+                    .body
+                    .ok_or(crate::Error::InternalStrStatic("Missing body in S3 return"))?;
+
+                Ok(Box::pin(body))
+            }
+        }
+    }
+
+    pub async fn save(
+        &self,
+        src: impl Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send + 'static,
+        content_type: &str,
+    ) -> Result<String, crate::Error> {
+        match self {
+            MediaStorage::Local(root) => {
+                let filename = uuid::Uuid::new_v4().to_string();
+                let path = root.join(&filename);
+
+                {
+                    use tokio::io::AsyncWriteExt;
+                    let file = tokio::fs::File::create(path).await?;
+                    src.try_fold(file, |mut file, chunk| async move {
+                        file.write_all(chunk.as_ref()).await.map(|_| file)
+                    })
+                    .await?;
+                }
+
+                Ok(filename)
+            }
+            MediaStorage::S3 { client, bucket } => {
+                use rusoto_s3::S3;
+
+                let key = uuid::Uuid::new_v4().to_string();
+
+                struct MultipartUploadState {
+                    upload_id: String,
+                    parts: Vec<rusoto_s3::CompletedPart>,
+                }
+
+                match src.map_err(crate::Error::from).fold(((None, vec![], 0), None), {
+                    |(mut multipart_state, err), chunk| {
+                        let key = key.clone();
+                        async move {
+                        match (err, chunk) {
+                            (Some(err), _) => (multipart_state, Some(err)),
+                            (None, Err(err)) => (multipart_state, Some(err)),
+                            (None, Ok(chunk)) => {
+                                multipart_state.2 += chunk.len();
+                                multipart_state.1.push(chunk);
+
+                                const MIN_PART_SIZE: usize = 5_000_000; // 5 MB
+
+                                if multipart_state.2 > MIN_PART_SIZE {
+                                    let upload_state = match &mut multipart_state.0 {
+                                        Some(state) => state,
+                                        None => {
+                                            let output = match client.create_multipart_upload(rusoto_s3::CreateMultipartUploadRequest {
+                                                bucket: bucket.clone(),
+                                                key: key.clone(),
+                                                content_type: Some(content_type.to_owned()),
+                                                ..Default::default()
+                                            }).await {
+                                                Ok(output) => output,
+                                                Err(err) => return (multipart_state, Some(err.into())),
+                                            };
+
+                                            let upload_id = match output.upload_id {
+                                                Some(x) => x,
+                                                None => return (multipart_state, Some(crate::Error::InternalStrStatic("Missing upload_id in S3 response"))),
+                                            };
+
+                                            multipart_state.0 = Some(MultipartUploadState {
+                                                upload_id,
+                                                parts: Vec::new(),
+                                            });
+                                            multipart_state.0.as_mut().unwrap()
+                                        }
+                                    };
+
+                                    let part_number = (upload_state.parts.len() + 1) as i64;
+
+                                    let current_part_contents = std::mem::replace(&mut multipart_state.1, Vec::new());
+                                    let current_part_size = multipart_state.2;
+                                    multipart_state.2 = 0;
+
+                                    match client.upload_part(rusoto_s3::UploadPartRequest {
+                                        body: Some(rusoto_core::ByteStream::new_with_size(futures::stream::iter(current_part_contents.into_iter().map(Ok)), current_part_size)),
+                                        bucket: bucket.clone(),
+                                        key: key.clone(),
+                                        part_number,
+                                        upload_id: upload_state.upload_id.clone(),
+                                        ..Default::default()
+                                    }).await {
+                                        Err(err) => {
+                                            return (multipart_state, Some(err.into()));
+                                        }
+                                        Ok(result) => {
+                                            upload_state.parts.push(rusoto_s3::CompletedPart {
+                                                e_tag: result.e_tag,
+                                                part_number: Some(part_number),
+                                            });
+                                        }
+                                    }
+
+                                }
+
+                                (multipart_state, None)
+                            }
+                        }
+                    }
+                    }
+                }).await {
+                    (multipart_state, None) => {
+                        let current_part_contents = multipart_state.1;
+                        let current_part_size = multipart_state.2;
+                        if let Some(mut upload_state) = multipart_state.0 {
+                            let part_number = (upload_state.parts.len() + 1) as i64;
+
+                            let result = client.upload_part(rusoto_s3::UploadPartRequest {
+                                body: Some(rusoto_core::ByteStream::new_with_size(futures::stream::iter(current_part_contents.into_iter().map(Ok)), current_part_size)),
+                                bucket: bucket.clone(),
+                                key: key.clone(),
+                                part_number,
+                                upload_id: upload_state.upload_id.clone(),
+                                ..Default::default()
+                            }).await?;
+                            upload_state.parts.push(rusoto_s3::CompletedPart {
+                                e_tag: result.e_tag,
+                                part_number: Some(part_number),
+                            });
+
+                            client.complete_multipart_upload(rusoto_s3::CompleteMultipartUploadRequest {
+                                bucket: bucket.clone(),
+                                key: key.clone(),
+                                upload_id: upload_state.upload_id,
+                                ..Default::default()
+                            }).await?;
+                        } else {
+                            client.put_object(rusoto_s3::PutObjectRequest {
+                                bucket: bucket.clone(),
+                                key: key.clone(),
+                                body: Some(rusoto_core::ByteStream::new_with_size(futures::stream::iter(current_part_contents.into_iter().map(Ok)), current_part_size)),
+                                ..Default::default()
+                            }).await?;
+                        }
+
+                        Ok(key)
+                    }
+                    (multipart_state, Some(err)) => {
+                        if let Some(upload_state) = multipart_state.0 {
+                            if let Err(err) = client.abort_multipart_upload(rusoto_s3::AbortMultipartUploadRequest {
+                                bucket: bucket.clone(),
+                                key: key.clone(),
+                                upload_id: upload_state.upload_id,
+                                ..Default::default()
+                            }).await {
+                                log::error!("Failed to abort multipart upload: {:?}", err);
+                            }
+                        }
+
+                        Err(err.into())
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
@@ -1083,7 +1287,60 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         db_pool,
         mailer,
         mail_from,
-        media_location: config.media_location.clone(),
+        media_storage: match config.media_storage.as_deref() {
+            None => match config.media_location {
+                None => None,
+                Some(path) => Some(MediaStorage::Local(path.into())),
+            },
+            Some("local") => Some(MediaStorage::Local(
+                config
+                    .media_location
+                    .expect("Missing media_location")
+                    .into(),
+            )),
+            Some("s3") => {
+                let region = match config.media_s3_endpoint {
+                    None => match config.media_s3_region {
+                        None => Default::default(),
+                        Some(src) => src.parse().expect("Unknown AWS region"),
+                    },
+                    Some(endpoint) => rusoto_core::Region::Custom {
+                        name: match config.media_s3_region {
+                            None => "us-east-1".to_string(),
+                            Some(name) => name,
+                        },
+                        endpoint,
+                    },
+                };
+
+                let credentials: Box<dyn rusoto_credential::ProvideAwsCredentials + Send + Sync> =
+                    match config.media_s3_access_key_id {
+                        None => {
+                            Box::new(rusoto_credential::DefaultCredentialsProvider::new().unwrap())
+                        }
+                        Some(key_id) => Box::new(rusoto_credential::StaticProvider::new(
+                            key_id,
+                            config
+                                .media_s3_secret_key
+                                .expect("Missing secret key for media S3"),
+                            None,
+                            None,
+                        )),
+                    };
+
+                Some(MediaStorage::S3 {
+                    client: rusoto_s3::S3Client::new_with(
+                        rusoto_core::request::HttpClient::new().unwrap(),
+                        credentials,
+                        region,
+                    ),
+                    bucket: config.media_location.expect("Missing media_location"),
+                })
+            }
+            Some(_) => {
+                panic!("Unknown media_storage type");
+            }
+        },
         host_url_api: config.host_url_api.clone(),
         host_url_apub,
         http_client: hyper::Client::builder().build(hyper_tls::HttpsConnector::new()),

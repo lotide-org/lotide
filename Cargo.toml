@@ -65,6 +65,9 @@ lotide_types = { path = "./types" }
 date_duration = "0.1.0"
 web-push = "0.9.1"
 sha2 = "0.10.2"
+rusoto_s3 = "0.48.0"
+rusoto_core = "0.48.0"
+rusoto_credential = "0.48.0"
 
 [dev-dependencies]
 rand = "0.7.3"
@@ -77,3 +80,4 @@ fluent-syntax = "0.11.0"
 
 [patch.crates-io]
 activitystreams = { git = "https://git.sr.ht/~vpzom/activitystreams", rev = "e692dc" }
+rusoto_credential = { git = "https://github.com/vpzomtrrfrt/rusoto", branch = "box-credential" }
