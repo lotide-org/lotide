@@ -151,8 +151,7 @@ impl TaskDef for FetchCommunityFeatured {
     async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
         use activitystreams::prelude::*;
 
-        let obj =
-            crate::apub_util::fetch_ap_object_raw(&self.featured_url, &ctx.http_client).await?;
+        let obj = crate::apub_util::fetch_ap_object_raw(&self.featured_url, &ctx).await?;
         let obj: crate::apub_util::AnyCollection = serde_json::from_value(obj)?;
 
         let items = match &obj {

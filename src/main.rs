@@ -161,6 +161,7 @@ pub struct BaseContext {
     pub vapid_public_key_base64: String,
     pub vapid_signature_builder: web_push::PartialVapidSignatureBuilder,
     pub break_stuff: bool,
+    pub dev_mode: bool,
 
     pub local_hostname: String,
 
@@ -1284,6 +1285,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
             .expect("Couldn't find host in HOST_URL_ACTIVITYPUB"),
 
         break_stuff: config.break_stuff,
+        dev_mode: config.dev_mode,
         db_pool,
         mailer,
         mail_from,

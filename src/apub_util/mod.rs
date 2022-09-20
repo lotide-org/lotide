@@ -322,13 +322,18 @@ pub fn require_containment(object_id: &url::Url, actor_id: &url::Url) -> Result<
 
 pub async fn fetch_ap_object_raw(
     ap_id: &url::Url,
-    http_client: &crate::HttpClient,
+    ctx: &crate::BaseContext,
 ) -> Result<serde_json::Value, crate::Error> {
     let mut current_id = hyper::Uri::try_from(ap_id.as_str())?;
     for _ in 0..3u8 {
+        if current_id.scheme() != Some(&http::uri::Scheme::HTTPS) && !ctx.dev_mode {
+            return Err(crate::Error::InternalStrStatic(
+                "AP URLs must be HTTPS in non-dev mode",
+            ));
+        }
         // avoid infinite loop in malicious or broken cases
         let res = crate::res_to_error(
-            http_client
+            ctx.http_client
                 .request(
                     hyper::Request::get(&current_id)
                         .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
@@ -361,9 +366,9 @@ pub async fn fetch_ap_object_raw(
 
 pub async fn fetch_ap_object(
     ap_id: &url::Url,
-    http_client: &crate::HttpClient,
+    ctx: &crate::BaseContext,
 ) -> Result<Verified<KnownObject>, crate::Error> {
-    let value = fetch_ap_object_raw(ap_id, http_client).await?;
+    let value = fetch_ap_object_raw(ap_id, ctx).await?;
     let value: KnownObject = serde_json::from_value(value)?;
     Ok(Verified(value))
 }
@@ -373,7 +378,7 @@ pub async fn fetch_and_ingest(
     found_from: ingest::FoundFrom,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<Option<ingest::IngestResult>, crate::Error> {
-    let obj = fetch_ap_object(req_ap_id, &ctx.http_client).await?;
+    let obj = fetch_ap_object(req_ap_id, &ctx).await?;
     ingest::ingest_object_boxed(obj, found_from, ctx).await
 }
 
@@ -1985,7 +1990,7 @@ pub async fn verify_incoming_object(
                 "Missing id in received activity",
             ))?;
 
-            let res_body = fetch_ap_object(&ap_id, &ctx.http_client).await?;
+            let res_body = fetch_ap_object(&ap_id, &ctx).await?;
 
             Ok(res_body)
         }

@@ -165,9 +165,7 @@ pub async fn ingest_object(
                             }
                         } else {
                             // don't need announces for local objects
-                            let obj =
-                                crate::apub_util::fetch_ap_object(object_id, &ctx.http_client)
-                                    .await?;
+                            let obj = crate::apub_util::fetch_ap_object(object_id, &ctx).await?;
 
                             ingest_object_boxed(
                                 obj,
@@ -222,8 +220,7 @@ pub async fn ingest_object(
                         }
                     } else {
                         // don't need announces for local objects
-                        let obj =
-                            crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?;
+                        let obj = crate::apub_util::fetch_ap_object(object_id, &ctx).await?;
 
                         ingest_object_boxed(
                             obj,
@@ -865,7 +862,7 @@ pub async fn ingest_create(
             } {
                 Verified(serde_json::from_value(serde_json::to_value(&req_obj)?)?)
             } else {
-                crate::apub_util::fetch_ap_object(object_id, &ctx.http_client).await?
+                crate::apub_util::fetch_ap_object(object_id, &ctx).await?
             };
 
             ingest_object_boxed(obj, FoundFrom::Other, ctx.clone()).await?;

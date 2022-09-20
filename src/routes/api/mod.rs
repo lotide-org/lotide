@@ -842,7 +842,7 @@ async fn route_unstable_objects_lookup(
 
     let res = match &uri {
         Some(uri) => {
-            let obj = crate::apub_util::fetch_ap_object(uri, &ctx.http_client).await?;
+            let obj = crate::apub_util::fetch_ap_object(uri, &ctx).await?;
 
             crate::apub_util::ingest::ingest_object(
                 obj,

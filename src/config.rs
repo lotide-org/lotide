@@ -16,9 +16,10 @@ pub struct Config {
 
     #[serde(default)]
     pub apub_proxy_rewrites: bool,
-
     #[serde(default)]
     pub allow_forwarded: bool,
+    #[serde(default)]
+    pub dev_mode: bool,
 
     pub media_storage: Option<String>,
     pub media_location: Option<String>,
