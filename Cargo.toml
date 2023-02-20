@@ -40,14 +40,14 @@ http = "0.2.1"
 fluent = "0.12.0"
 fluent-langneg = "0.13.0"
 unic-langid = { version = "0.9.0", features = ["macros"] }
-activitystreams = "0.7.0-alpha.11"
+activitystreams = "=0.7.0-alpha.11"
 activitystreams-ext = "0.1.0-alpha.2"
 fast_chemail = "0.9.6"
 lettre = { version = "0.10.0-rc.3", features = ["tokio1", "tokio1-native-tls"] }
 rand = "0.7.3"
 bs58 = "0.3.1"
 bumpalo = "3.4.0"
-tokio-util = "0.6.7"
+tokio-util = { version = "0.6.7", features = ["codec"] }
 henry = "0.2.0"
 ammonia = "3.1.0"
 base64 = "0.13.0"
