@@ -3689,9 +3689,9 @@ checksum = "0046fef7e28c3804e5e38bfa31ea2a0f73905319b677e57ebe37e49358989b5d"
 
 [[package]]
 name = "web-push"
-version = "0.9.3"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "890ba149bd4a7f6a30d7396b5cdbfc9fadb9e1da2ca04fbc62f7b550d842e56e"
+checksum = "8086b88fc29927a0eec28e7136738bb15a52172111d17414e352df743b8432c4"
 dependencies = [
  "base64 0.13.1",
  "chrono",
