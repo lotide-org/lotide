@@ -40,10 +40,17 @@ location /.well-known {
 	proxy_pass http://c_backend_1:3333;
 }
 location / {
-	if ($http_accept ~* "application/activity\+json") {
-		rewrite ^(.*)$ /apub$1;
+	set $apub 0;
+	if ($http_accept ~* "(application/activity\+json)|(application/ld\+json; profile=\"https://www.w3.org/ns/activitystreams\")") {
+		set $apub 1;
 	}
 	if ($http_content_type = application/activity+json) {
+		set $apub 1;
+	}
+	if ($http_content_type = "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"") {
+		set $apub 1;
+	}
+	if ($apub = 1) {
 		rewrite ^(.*)$ /apub$1;
 	}
 	proxy_pass http://c_hitide_1:4333;
