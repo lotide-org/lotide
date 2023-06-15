@@ -103,17 +103,18 @@ pub async fn ingest_object(
             Ok(None)
         }
         KnownObject::Add(activity) => {
+            let (actor, object, _origin, target, activity) = activity.into_parts();
+
             let activity_id = activity
                 .id_unchecked()
                 .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
-            let target = activity
-                .target()
+            let target = target
+                .as_ref()
                 .and_then(|x| x.as_single_id())
                 .ok_or(crate::Error::InternalStrStatic("Missing target for Add"))?;
 
-            let community_ap_id = activity
-                .actor_unchecked()
+            let community_ap_id = actor
                 .as_single_id()
                 .ok_or(crate::Error::InternalStrStatic("Missing actor for Add"))?;
 
@@ -149,7 +150,7 @@ pub async fn ingest_object(
                     crate::apub_util::require_containment(activity_id, community_ap_id)?;
                     crate::apub_util::require_containment(target, community_ap_id)?;
 
-                    let object_id = activity.object().as_single_id();
+                    let object_id = object.as_single_id();
 
                     if let Some(object_id) = object_id {
                         if let Some(remaining) =
@@ -164,8 +165,12 @@ pub async fn ingest_object(
                                 ).await?;
                             }
                         } else {
-                            // don't need announces for local objects
-                            let obj = crate::apub_util::fetch_ap_object(object_id, &ctx).await?;
+                            let obj = crate::apub_util::fetch_or_verify(
+                                community_ap_id,
+                                object.one().unwrap(),
+                                &ctx,
+                            )
+                            .await?;
 
                             ingest_object_boxed(
                                 obj,
@@ -185,13 +190,15 @@ pub async fn ingest_object(
             Ok(None)
         }
         KnownObject::Announce(activity) => {
+            let (actor, object, _target, activity) = activity.into_parts();
+
             let activity_id = activity
                 .id_unchecked()
                 .ok_or(crate::Error::InternalStrStatic("Missing activity ID"))?;
 
-            let community_ap_id = activity.actor_unchecked().as_single_id().ok_or(
-                crate::Error::InternalStrStatic("Missing actor for Announce"),
-            )?;
+            let community_ap_id = actor.as_single_id().ok_or(crate::Error::InternalStrStatic(
+                "Missing actor for Announce",
+            ))?;
 
             let community_local_info = db
                 .query_opt(
@@ -204,7 +211,7 @@ pub async fn ingest_object(
             if let Some((community_local_id, community_is_local)) = community_local_info {
                 crate::apub_util::require_containment(activity_id, community_ap_id)?;
 
-                let object_id = activity.object().as_single_id();
+                let object_id = object.as_single_id();
 
                 if let Some(object_id) = object_id {
                     if let Some(remaining) =
@@ -219,8 +226,12 @@ pub async fn ingest_object(
                             ).await?;
                         }
                     } else {
-                        // don't need announces for local objects
-                        let obj = crate::apub_util::fetch_ap_object(object_id, &ctx).await?;
+                        let obj = crate::apub_util::fetch_or_verify(
+                            community_ap_id,
+                            object.one().unwrap(),
+                            &ctx,
+                        )
+                        .await?;
 
                         ingest_object_boxed(
                             obj,

@@ -373,6 +373,23 @@ pub async fn fetch_ap_object(
     Ok(Verified(value))
 }
 
+pub async fn fetch_or_verify(
+    sender_ap_id: &url::Url,
+    obj: activitystreams::base::AnyBase,
+    ctx: &crate::BaseContext,
+) -> Result<Verified<KnownObject>, crate::Error> {
+    let object_id = obj
+        .id()
+        .ok_or(crate::Error::InternalStrStatic("Missing ID in object"))?;
+    if is_contained(object_id, sender_ap_id) {
+        if let Some(base) = obj.as_base() {
+            return Ok(serde_json::from_value(serde_json::to_value(base)?).map(Verified)?);
+        }
+    }
+
+    fetch_ap_object(&object_id, ctx).await
+}
+
 pub async fn fetch_and_ingest(
     req_ap_id: &url::Url,
     found_from: ingest::FoundFrom,
