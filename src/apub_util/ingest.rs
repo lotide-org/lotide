@@ -10,6 +10,7 @@ use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
 
+#[derive(Debug, Clone)]
 pub enum FoundFrom {
     Announce {
         url: url::Url,
@@ -252,7 +253,7 @@ pub async fn ingest_object(
             ingest_postlike(Verified(KnownObject::Article(obj)), found_from, ctx).await
         }
         KnownObject::Create(activity) => {
-            ingest_create(Verified(activity), ctx).await?;
+            ingest_create(Verified(activity), found_from, ctx).await?;
             Ok(None)
         }
         KnownObject::Delete(activity) => {
@@ -860,6 +861,7 @@ pub async fn ingest_undo(
 
 pub async fn ingest_create(
     activity: Verified<activitystreams::activity::Create>,
+    found_from: FoundFrom,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<(), crate::Error> {
     for req_obj in activity.object().iter() {
@@ -876,7 +878,7 @@ pub async fn ingest_create(
                 crate::apub_util::fetch_ap_object(object_id, &ctx).await?
             };
 
-            ingest_object_boxed(obj, FoundFrom::Other, ctx.clone()).await?;
+            ingest_object_boxed(obj, found_from.clone(), ctx.clone()).await?;
         }
     }
 
@@ -1263,6 +1265,7 @@ async fn ingest_postlike(
                 Ok(None)
             }
         } else {
+            log::debug!("Couldn't find community for post");
             Ok(None)
         }
     }
