@@ -429,10 +429,7 @@ async fn route_unstable_users_patch(
         changes.push(("description_markdown", &Option::<&str>::None));
         changes.push(("description_html", &Option::<&str>::None));
     } else if let Some(description) = body.description_markdown {
-        let (html, md) = tokio::task::spawn_blocking(move || {
-            (crate::render_markdown(&description), description)
-        })
-        .await?;
+        let (html, md) = super::render_markdown_with_mentions(description.into_owned()).await?;
 
         changes.push(("description", &Option::<&str>::None));
         changes.push(("description_markdown", arena.alloc(md)));

@@ -450,43 +450,7 @@ async fn route_unstable_actors_lookup(
     let uri = match lookup {
         Lookup::Url(uri) => Some(uri),
         Lookup::WebFinger { user, host } => {
-            let uri = format!(
-                "https://{}/.well-known/webfinger?{}",
-                host,
-                serde_urlencoded::to_string(FingerRequestQuery {
-                    resource: format!("acct:{}@{}", user, host).into(),
-                    rel: Some("self".into()),
-                })?
-            );
-            log::debug!("{}", uri);
-            let res = ctx
-                .http_client
-                .request(hyper::Request::get(uri).body(Default::default())?)
-                .await?;
-
-            if res.status() == hyper::StatusCode::NOT_FOUND {
-                log::debug!("not found");
-                None
-            } else {
-                let res = crate::res_to_error(res).await?;
-
-                let res = hyper::body::to_bytes(res.into_body()).await?;
-                let res: FingerResponse = serde_json::from_slice(&res)?;
-
-                let mut found_uri = None;
-                for entry in res.links {
-                    if entry.rel == "self"
-                        && entry.type_.as_deref() == Some(crate::apub_util::ACTIVITY_TYPE)
-                    {
-                        if let Some(href) = entry.href {
-                            found_uri = Some(href.parse()?);
-                            break;
-                        }
-                    }
-                }
-
-                found_uri
-            }
+            crate::apub_util::fetch_url_from_webfinger(user, host, &ctx).await?
         }
     };
 
@@ -755,10 +719,7 @@ async fn route_unstable_instance_patch(
             )
             .await?;
         } else if let Some(description) = body.description_markdown {
-            let (html, md) = tokio::task::spawn_blocking(move || {
-                (crate::render_markdown(&description), description)
-            })
-            .await?;
+            let (html, md) = render_markdown_with_mentions(description.into_owned()).await?;
 
             db.execute(
                 "UPDATE site SET description=NULL, description_markdown=$1, description_html=$2",
@@ -1385,8 +1346,7 @@ async fn route_unstable_misc_render_markdown(
 
     let body: RenderMarkdownBody = serde_json::from_slice(&body)?;
 
-    let html =
-        tokio::task::spawn_blocking(move || crate::render_markdown(&body.content_markdown)).await?;
+    let (html, _) = render_markdown_with_mentions(body.content_markdown.into_owned()).await?;
 
     crate::json_response(&serde_json::json!({ "content_html": html }))
 }
@@ -1414,8 +1374,7 @@ pub async fn process_comment_content<'a, 'b>(
                 )));
             }
 
-            let (html, md) =
-                tokio::task::spawn_blocking(move || (crate::render_markdown(&md), md)).await?;
+            let (html, md) = render_markdown_with_mentions(md).await?;
             (None, Some(md), Some(html))
         }
         None => match content_text {
@@ -1462,4 +1421,10 @@ pub async fn fetch_login_info(
             },
         },
     })
+}
+
+pub async fn render_markdown_with_mentions(src: String) -> Result<(String, String), crate::Error> {
+    // TODO actually do mentions
+
+    Ok(tokio::task::spawn_blocking(move || (crate::markdown::render_markdown(&src), src)).await?)
 }

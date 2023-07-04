@@ -995,8 +995,7 @@ async fn route_unstable_posts_create(
 
     let (content_text, content_markdown, content_html) = match body.content_markdown {
         Some(md) => {
-            let (html, md) =
-                tokio::task::spawn_blocking(move || (crate::render_markdown(&md), md)).await?;
+            let (html, md) = super::render_markdown_with_mentions(md).await?;
             (None, Some(md), Some(html))
         }
         None => match body.content_text {

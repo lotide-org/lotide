@@ -675,10 +675,7 @@ async fn route_unstable_communities_patch(
 
         crate::apub_util::spawn_enqueue_send_new_community_update(community_id, ctx);
     } else if let Some(description) = body.description_markdown {
-        let (html, md) = tokio::task::spawn_blocking(move || {
-            (crate::render_markdown(&description), description)
-        })
-        .await?;
+        let (html, md) = super::render_markdown_with_mentions(description.into_owned()).await?;
 
         db.execute(
             "UPDATE community SET description=NULL, description_markdown=$1, description_html=$3 WHERE id=$2",

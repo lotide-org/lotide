@@ -11,6 +11,7 @@ use std::sync::Arc;
 mod apub_util;
 mod config;
 mod lang;
+mod markdown;
 mod migrate;
 mod routes;
 mod tasks;
@@ -686,17 +687,6 @@ pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 's
     tokio::spawn(task.map_err(|err| {
         log::error!("Error in task: {:?}", err);
     }));
-}
-
-pub fn render_markdown(src: &str) -> String {
-    let parser = pulldown_cmark::Parser::new(src);
-
-    let stream = pdcm_linkify::AutoLinker::new(parser);
-
-    let mut output = String::new();
-    pulldown_cmark::html::push_html(&mut output, stream);
-
-    output
 }
 
 lazy_static::lazy_static! {
