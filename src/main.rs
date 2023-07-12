@@ -1159,6 +1159,7 @@ impl MediaStorage {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
+    let _ = dotenvy::dotenv();
 
     let matches = clap::Command::new("lotide")
         .arg(

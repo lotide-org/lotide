@@ -68,6 +68,7 @@ sha2 = "0.10.2"
 rusoto_s3 = "0.48.0"
 rusoto_core = "0.48.0"
 rusoto_credential = "0.48.0"
+dotenvy = "0.15.7"
 
 [dev-dependencies]
 rand = "0.7.3"
