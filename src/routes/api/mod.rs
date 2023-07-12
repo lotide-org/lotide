@@ -720,7 +720,9 @@ async fn route_unstable_instance_patch(
             )
             .await?;
         } else if let Some(description) = body.description_markdown {
-            let html = render_markdown_with_mentions(&description, &ctx).await?;
+            let html = tokio::task::block_in_place(|| {
+                crate::markdown::render_markdown_simple(&description)
+            });
 
             db.execute(
                 "UPDATE site SET description=NULL, description_markdown=$1, description_html=$2",
@@ -1347,7 +1349,7 @@ async fn route_unstable_misc_render_markdown(
 
     let body: RenderMarkdownBody = serde_json::from_slice(&body)?;
 
-    let html = render_markdown_with_mentions(&body.content_markdown, &ctx).await?;
+    let (html, _) = render_markdown_with_mentions(&body.content_markdown, &ctx).await?;
 
     crate::json_response(&serde_json::json!({ "content_html": html }))
 }
@@ -1359,7 +1361,15 @@ pub async fn process_comment_content<'a, 'b>(
     content_text: Option<Cow<'a, str>>,
     content_markdown: Option<String>,
     ctx: &Arc<crate::BaseContext>,
-) -> Result<(Option<Cow<'a, str>>, Option<String>, Option<String>), crate::Error> {
+) -> Result<
+    (
+        Option<Cow<'a, str>>,
+        Option<String>,
+        Option<String>,
+        Vec<MentionInfo>,
+    ),
+    crate::Error,
+> {
     if !(content_markdown.is_some() ^ content_text.is_some()) {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
@@ -1376,8 +1386,8 @@ pub async fn process_comment_content<'a, 'b>(
                 )));
             }
 
-            let html = render_markdown_with_mentions(&md, &ctx).await?;
-            (None, Some(md), Some(html))
+            let (html, mentions) = render_markdown_with_mentions(&md, &ctx).await?;
+            (None, Some(md), Some(html), mentions)
         }
         None => match content_text {
             Some(text) => {
@@ -1388,9 +1398,9 @@ pub async fn process_comment_content<'a, 'b>(
                     )));
                 }
 
-                (Some(text), None, None)
+                (Some(text), None, None, vec![])
             }
-            None => (None, None, None),
+            None => (None, None, None, vec![]),
         },
     })
 }
@@ -1425,10 +1435,15 @@ pub async fn fetch_login_info(
     })
 }
 
+pub struct MentionInfo {
+    text: String,
+    person: UserLocalID,
+}
+
 pub async fn render_markdown_with_mentions(
     src: &str,
     ctx: &Arc<crate::BaseContext>,
-) -> Result<String, crate::Error> {
+) -> Result<(String, Vec<MentionInfo>), crate::Error> {
     #[derive(PartialEq, Eq, Hash, Clone)]
     struct Mention {
         userpart: String,
@@ -1499,8 +1514,8 @@ pub async fn render_markdown_with_mentions(
             .await;
             match result {
                 Ok(crate::apub_util::ingest::IngestResult::Actor(
-                    crate::apub_util::ActorLocalInfo::User { id, .. },
-                )) => (mention, Ok(id)),
+                    crate::apub_util::ActorLocalInfo::User { id, remote_url, .. },
+                )) => (mention, Ok((id, remote_url))),
                 Ok(_) => (
                     mention,
                     Err(crate::Error::InternalStrStatic(
@@ -1518,10 +1533,10 @@ pub async fn render_markdown_with_mentions(
         StreamItem::Mention(mention) => {
             let text = format!("@{}@{}", mention.userpart, mention.host);
 
-            if let Some(Ok(id)) = mention_map.get(&mention) {
+            if let Some(Ok((_, remote_url))) = mention_map.get(&mention) {
                 let tag = pulldown_cmark::Tag::Link(
                     pulldown_cmark::LinkType::Inline,
-                    "/unimplemented".into(),
+                    remote_url.as_str().into(),
                     "".into(),
                 );
 
@@ -1542,5 +1557,17 @@ pub async fn render_markdown_with_mentions(
     let result =
         tokio::task::block_in_place(|| crate::markdown::render_markdown_from_stream(content));
 
-    Ok(result)
+    Ok((
+        result,
+        mention_map
+            .into_iter()
+            .filter_map(|(key, value)| match value {
+                Err(_) => None,
+                Ok((id, _)) => Some(MentionInfo {
+                    text: format!("@{}@{}", key.userpart, key.host),
+                    person: id,
+                }),
+            })
+            .collect(),
+    ))
 }

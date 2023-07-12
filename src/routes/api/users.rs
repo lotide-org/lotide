@@ -429,7 +429,8 @@ async fn route_unstable_users_patch(
         changes.push(("description_markdown", &Option::<&str>::None));
         changes.push(("description_html", &Option::<&str>::None));
     } else if let Some(description) = &body.description_markdown {
-        let html = super::render_markdown_with_mentions(&description, &ctx).await?;
+        let html =
+            tokio::task::block_in_place(|| crate::markdown::render_markdown_simple(&description));
 
         changes.push(("description", &Option::<&str>::None));
         changes.push(("description_markdown", description));

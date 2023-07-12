@@ -280,6 +280,7 @@ pub enum ActorLocalInfo {
     User {
         id: UserLocalID,
         public_key: Option<PubKeyInfo>,
+        remote_url: url::Url,
     },
     Community {
         id: CommunityLocalID,

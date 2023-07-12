@@ -659,7 +659,7 @@ async fn route_unstable_comments_replies_create(
     let (parent_id,) = params;
 
     let lang = crate::get_lang_for_req(&req);
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
 
@@ -683,7 +683,7 @@ async fn route_unstable_comments_replies_create(
         }
     }
 
-    let (content_text, content_markdown, content_html) =
+    let (content_text, content_markdown, content_html, mentions) =
         super::process_comment_content(&lang, body.content_text, body.content_markdown, &ctx)
             .await?;
 
@@ -700,13 +700,31 @@ async fn route_unstable_comments_replies_create(
 
     let sensitive = body.sensitive.unwrap_or(false);
 
-    let row = db.query_one(
-        "INSERT INTO reply (post, parent, author, created, local, content_text, content_markdown, content_html, attachment_href, sensitive) VALUES ($1, $2, $3, current_timestamp, TRUE, $4, $5, $6, $7, $8) RETURNING id, created",
-        &[&post, &parent_id, &user, &content_text, &content_markdown, &content_html, &body.attachment, &sensitive],
-    ).await?;
+    let (reply_id, created) = {
+        let trans = db.transaction().await?;
 
-    let reply_id = CommentLocalID(row.get(0));
-    let created = row.get(1);
+        let row = trans.query_one(
+            "INSERT INTO reply (post, parent, author, created, local, content_text, content_markdown, content_html, attachment_href, sensitive) VALUES ($1, $2, $3, current_timestamp, TRUE, $4, $5, $6, $7, $8) RETURNING id, created",
+            &[&post, &parent_id, &user, &content_text, &content_markdown, &content_html, &body.attachment, &sensitive],
+        ).await?;
+
+        let reply_id = CommentLocalID(row.get(0));
+        let created = row.get(1);
+
+        let (nest_person, nest_text): (Vec<_>, Vec<_>) = mentions
+            .into_iter()
+            .map(|info| (info.person, info.text))
+            .unzip();
+
+        trans.execute(
+            "INSERT INTO reply_mention (reply, person, text) SELECT $1, * FROM UNNEST($2::BIGINT[], $3::TEXT[])",
+            &[&reply_id, &nest_person, &nest_text],
+        ).await?;
+
+        trans.commit().await?;
+
+        (reply_id, created)
+    };
 
     let info = crate::CommentInfo {
         id: reply_id,

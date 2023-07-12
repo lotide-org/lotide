@@ -19,3 +19,7 @@ pub fn render_markdown_from_stream<'a>(
 
     output
 }
+
+pub fn render_markdown_simple(src: &str) -> String {
+    render_markdown_from_stream(parse_markdown(src))
+}

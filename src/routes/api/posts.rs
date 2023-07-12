@@ -993,14 +993,14 @@ async fn route_unstable_posts_create(
 
     // TODO validate permissions to post
 
-    let (content_text, content_markdown, content_html) = match body.content_markdown {
+    let (content_text, content_markdown, content_html, mentions) = match body.content_markdown {
         Some(md) => {
-            let html = super::render_markdown_with_mentions(&md, &ctx).await?;
-            (None, Some(md), Some(html))
+            let (html, mentions) = super::render_markdown_with_mentions(&md, &ctx).await?;
+            (None, Some(md), Some(html), mentions)
         }
         None => match body.content_text {
-            Some(text) => (Some(text), None, None),
-            None => (None, None, None),
+            Some(text) => (Some(text), None, None, vec![]),
+            None => (None, None, None, vec![]),
         },
     };
 
@@ -1098,6 +1098,16 @@ async fn route_unstable_posts_create(
 
         let id = PostLocalID(res_row.get(0));
         let created = res_row.get(1);
+
+        let (nest_person, nest_text): (Vec<_>, Vec<_>) = mentions
+            .into_iter()
+            .map(|info| (info.person, info.text))
+            .unzip();
+
+        trans.execute(
+            "INSERT INTO post_mention (post, person, text) SELECT $1, * FROM UNNEST($2::BIGINT[], $3::TEXT[])",
+            &[&id, &nest_person, &nest_text],
+        ).await?;
 
         trans.commit().await?;
 
@@ -1834,7 +1844,7 @@ async fn route_unstable_posts_replies_create(
     let (post_id,) = params;
 
     let lang = crate::get_lang_for_req(&req);
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
 
@@ -1859,19 +1869,36 @@ async fn route_unstable_posts_replies_create(
         }
     }
 
-    let (content_text, content_markdown, content_html) =
+    let (content_text, content_markdown, content_html, mentions) =
         super::process_comment_content(&lang, body.content_text, body.content_markdown, &ctx)
             .await?;
 
     let sensitive = body.sensitive.unwrap_or(false);
 
-    let row = db.query_one(
-        "INSERT INTO reply (post, author, created, local, content_text, content_markdown, content_html, attachment_href, sensitive) VALUES ($1, $2, current_timestamp, TRUE, $3, $4, $5, $6, $7) RETURNING id, created",
-        &[&post_id, &user, &content_text, &content_markdown, &content_html, &body.attachment, &sensitive],
-    ).await?;
+    let (reply_id, created) = {
+        let trans = db.transaction().await?;
+        let row = trans.query_one(
+            "INSERT INTO reply (post, author, created, local, content_text, content_markdown, content_html, attachment_href, sensitive) VALUES ($1, $2, current_timestamp, TRUE, $3, $4, $5, $6, $7) RETURNING id, created",
+            &[&post_id, &user, &content_text, &content_markdown, &content_html, &body.attachment, &sensitive],
+        ).await?;
 
-    let reply_id = CommentLocalID(row.get(0));
-    let created = row.get(1);
+        let reply_id = CommentLocalID(row.get(0));
+        let created = row.get(1);
+
+        let (nest_person, nest_text): (Vec<_>, Vec<_>) = mentions
+            .into_iter()
+            .map(|info| (info.person, info.text))
+            .unzip();
+
+        trans.execute(
+            "INSERT INTO reply_mention (reply, person, text) SELECT $1, * FROM UNNEST($2::BIGINT[], $3::TEXT[])",
+            &[&reply_id, &nest_person, &nest_text],
+        ).await?;
+
+        trans.commit().await?;
+
+        (reply_id, created)
+    };
 
     let comment = crate::CommentInfo {
         id: reply_id,

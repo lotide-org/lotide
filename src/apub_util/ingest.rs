@@ -1399,6 +1399,7 @@ async fn ingest_personlike<
             algorithm: super::get_message_digest(public_key_sigalg),
             key: key.to_owned(),
         }),
+        remote_url: ap_id.clone(),
     })))
 }
 
