@@ -995,7 +995,7 @@ async fn route_unstable_posts_create(
 
     let (content_text, content_markdown, content_html) = match body.content_markdown {
         Some(md) => {
-            let (html, md) = super::render_markdown_with_mentions(md).await?;
+            let html = super::render_markdown_with_mentions(&md, &ctx).await?;
             (None, Some(md), Some(html))
         }
         None => match body.content_text {
@@ -1860,7 +1860,8 @@ async fn route_unstable_posts_replies_create(
     }
 
     let (content_text, content_markdown, content_html) =
-        super::process_comment_content(&lang, body.content_text, body.content_markdown).await?;
+        super::process_comment_content(&lang, body.content_text, body.content_markdown, &ctx)
+            .await?;
 
     let sensitive = body.sensitive.unwrap_or(false);
 

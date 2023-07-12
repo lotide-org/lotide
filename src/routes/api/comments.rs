@@ -684,7 +684,8 @@ async fn route_unstable_comments_replies_create(
     }
 
     let (content_text, content_markdown, content_html) =
-        super::process_comment_content(&lang, body.content_text, body.content_markdown).await?;
+        super::process_comment_content(&lang, body.content_text, body.content_markdown, &ctx)
+            .await?;
 
     let post: PostLocalID = match db
         .query_opt("SELECT post FROM reply WHERE id=$1", &[&parent_id])
