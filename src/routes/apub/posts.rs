@@ -57,6 +57,8 @@ async fn handler_posts_get(
                 )));
             }
 
+            let mentions = fetch_post_mentions(post_id, &db).await?;
+
             if row.get(6) {
                 let had_href: Option<bool> = row.get(7);
                 let poll_id = row.get::<_, Option<_>>(18).map(PollLocalID);
@@ -157,6 +159,7 @@ async fn handler_posts_get(
                 title: row.get(2),
                 poll,
                 sensitive: row.get(19),
+                mentions: &mentions,
             };
 
             let body = crate::apub_util::post_to_ap(&post_info, community_ap_id.into(), community_ap_outbox.map(Into::into), community_ap_followers.map(Into::into), &ctx)?;
@@ -203,6 +206,8 @@ async fn handler_posts_create_get(
                     "Requested post is not owned by this instance",
                 )));
             }
+
+            let mentions = fetch_post_mentions(post_id, &db).await?;
 
             if row.get(6) {
                 return Err(crate::Error::UserError(crate::simple_response(
@@ -287,6 +292,7 @@ async fn handler_posts_create_get(
                 title: row.get(2),
                 poll,
                 sensitive: row.get(17),
+                mentions: &mentions,
             };
 
             let body = crate::apub_util::local_post_to_create_ap(&post_info, community_ap_id.into(), community_ap_outbox.map(Into::into), community_ap_followers.map(Into::into), &ctx)?;
@@ -427,4 +433,39 @@ async fn handler_posts_likes_get(
             "No such like",
         ))
     }
+}
+
+async fn fetch_post_mentions(
+    post_id: PostLocalID,
+    db: &tokio_postgres::Client,
+) -> Result<Vec<crate::MentionInfo>, crate::Error> {
+    let mention_rows = db.query(
+        "SELECT text, person.id, person.local, person.ap_id FROM post_mention INNER JOIN person ON (person.id = post_mention.person) WHERE post_mention.post = $1",
+        &[&post_id],
+    ).await?;
+
+    Ok(mention_rows
+        .into_iter()
+        .filter_map(|row| {
+            let text: String = row.get(0);
+            let person = UserLocalID(row.get(1));
+            if row.get(2) {
+                // local
+
+                Some(crate::MentionInfo {
+                    text,
+                    person,
+                    ap_id: crate::APIDOrLocal::Local,
+                })
+            } else {
+                row.get::<_, Option<String>>(3)
+                    .and_then(|x| x.parse().ok())
+                    .map(|remote_url| crate::MentionInfo {
+                        text,
+                        person,
+                        ap_id: crate::APIDOrLocal::APID(remote_url),
+                    })
+            }
+        })
+        .collect())
 }

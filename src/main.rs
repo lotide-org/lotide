@@ -348,6 +348,7 @@ pub struct PostInfo<'a> {
     community: CommunityLocalID,
     poll: Option<Cow<'a, PollInfo<'a>>>,
     sensitive: bool,
+    mentions: &'a [MentionInfo],
 }
 
 pub struct PostInfoOwned {
@@ -362,6 +363,7 @@ pub struct PostInfoOwned {
     community: CommunityLocalID,
     poll: Option<PollInfoOwned>,
     sensitive: bool,
+    mentions: Vec<MentionInfo>,
 }
 
 impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
@@ -378,6 +380,7 @@ impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
             community: src.community,
             poll: src.poll.as_ref().map(|x| Cow::Owned(x.into())),
             sensitive: src.sensitive,
+            mentions: &src.mentions,
         }
     }
 }
@@ -444,6 +447,13 @@ pub struct CommentInfo<'a> {
     ap_id: APIDOrLocal,
     attachment_href: Option<Cow<'a, str>>,
     sensitive: bool,
+}
+
+#[derive(Debug)]
+pub struct MentionInfo {
+    text: String,
+    person: UserLocalID,
+    ap_id: APIDOrLocal,
 }
 
 pub const KEY_BITS: u32 = 2048;

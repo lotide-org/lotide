@@ -1182,6 +1182,24 @@ pub fn post_to_ap(
             props.set_content(text).set_media_type(mime::TEXT_PLAIN);
         }
 
+        for mention in post.mentions {
+            let mentioned_ap_id = match &mention.ap_id {
+                crate::APIDOrLocal::APID(apid) => apid.clone(),
+                crate::APIDOrLocal::Local => crate::apub_util::LocalObjectRef::User(mention.person)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into(),
+            };
+
+            let mut tag = activitystreams::link::Mention::new();
+
+            tag.set_href(mentioned_ap_id.clone());
+            tag.set_name(mention.text.clone());
+
+            props.add_tag(tag.into_any_base()?);
+
+            props.add_cc(mentioned_ap_id);
+        }
+
         Ok(())
     }
 

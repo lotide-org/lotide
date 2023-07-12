@@ -1100,8 +1100,8 @@ async fn route_unstable_posts_create(
         let created = res_row.get(1);
 
         let (nest_person, nest_text): (Vec<_>, Vec<_>) = mentions
-            .into_iter()
-            .map(|info| (info.person, info.text))
+            .iter()
+            .map(|info| (info.person, &info.text))
             .unzip();
 
         trans.execute(
@@ -1126,6 +1126,7 @@ async fn route_unstable_posts_create(
         community: body.community,
         poll,
         sensitive: body.sensitive,
+        mentions,
     };
 
     crate::spawn_task(async move {

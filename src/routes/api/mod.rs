@@ -1366,7 +1366,7 @@ pub async fn process_comment_content<'a, 'b>(
         Option<Cow<'a, str>>,
         Option<String>,
         Option<String>,
-        Vec<MentionInfo>,
+        Vec<crate::MentionInfo>,
     ),
     crate::Error,
 > {
@@ -1435,15 +1435,10 @@ pub async fn fetch_login_info(
     })
 }
 
-pub struct MentionInfo {
-    text: String,
-    person: UserLocalID,
-}
-
 pub async fn render_markdown_with_mentions(
     src: &str,
     ctx: &Arc<crate::BaseContext>,
-) -> Result<(String, Vec<MentionInfo>), crate::Error> {
+) -> Result<(String, Vec<crate::MentionInfo>), crate::Error> {
     #[derive(PartialEq, Eq, Hash, Clone)]
     struct Mention {
         userpart: String,
@@ -1563,9 +1558,10 @@ pub async fn render_markdown_with_mentions(
             .into_iter()
             .filter_map(|(key, value)| match value {
                 Err(_) => None,
-                Ok((id, _)) => Some(MentionInfo {
+                Ok((id, remote_url)) => Some(crate::MentionInfo {
                     text: format!("@{}@{}", key.userpart, key.host),
                     person: id,
+                    ap_id: crate::APIDOrLocal::APID(remote_url),
                 }),
             })
             .collect(),
