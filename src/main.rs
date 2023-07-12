@@ -288,7 +288,7 @@ impl<T: 'static + std::error::Error + Send> From<T> for Error {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum APIDOrLocal {
     Local,
     APID(url::Url),
@@ -447,9 +447,10 @@ pub struct CommentInfo<'a> {
     ap_id: APIDOrLocal,
     attachment_href: Option<Cow<'a, str>>,
     sensitive: bool,
+    mentions: Cow<'a, [MentionInfo]>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MentionInfo {
     text: String,
     person: UserLocalID,

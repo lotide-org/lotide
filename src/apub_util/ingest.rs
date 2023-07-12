@@ -1504,6 +1504,7 @@ async fn handle_recieved_reply(
                         ap_id: crate::APIDOrLocal::APID(object_id.to_owned()),
                         attachment_href: attachment_href.map(|x| Cow::Owned(x.to_owned())),
                         sensitive,
+                        mentions: Cow::Borrowed(&[]),
                     };
 
                     crate::on_post_add_comment(info, ctx);

@@ -436,6 +436,7 @@ async fn handler_users_outbox_page_get(
                     ap_id: crate::APIDOrLocal::Local,
                     attachment_href: row.get::<_, Option<_>>(18).map(Cow::Borrowed),
                     sensitive: row.get(24),
+                    mentions: mentions.into(),
                 };
 
                 let res = crate::apub_util::local_comment_to_create_ap(
@@ -535,6 +536,8 @@ async fn handler_comments_get(
                 )));
             }
 
+            let mentions = fetch_comment_mentions(comment_id, &db).await?;
+
             if row.get(19) {
                 let mut body = activitystreams::object::Tombstone::new();
                 body
@@ -590,6 +593,7 @@ async fn handler_comments_get(
                 ap_id: crate::APIDOrLocal::Local,
                 attachment_href,
                 sensitive: row.get(23),
+                mentions: mentions.into(),
             };
 
             let parent_ap_id = match row.get(11) {
@@ -670,6 +674,8 @@ async fn handler_comments_create_get(
                 )));
             }
 
+            let mentions = fetch_comment_mentions(comment_id, &db).await?;
+
             if row.get(19) {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::GONE,
@@ -713,6 +719,7 @@ async fn handler_comments_create_get(
                 ap_id: crate::APIDOrLocal::Local,
                 attachment_href,
                 sensitive: row.get(23),
+                mentions: mentions.into(),
             };
 
             let parent_ap_id = match row.get(11) {
@@ -1049,4 +1056,39 @@ async fn handler_post_like_undos_get(
             "No such unlike",
         ))
     }
+}
+
+async fn fetch_comment_mentions(
+    comment_id: CommentLocalID,
+    db: &tokio_postgres::Client,
+) -> Result<Vec<crate::MentionInfo>, crate::Error> {
+    let mention_rows = db.query(
+        "SELECT text, person.id, person.local, person.ap_id FROM reply_mention INNER JOIN person ON (person.id = reply_mention.person) WHERE reply_mention.reply = $1",
+        &[&comment_id],
+    ).await?;
+
+    Ok(mention_rows
+        .into_iter()
+        .filter_map(|row| {
+            let text: String = row.get(0);
+            let person = UserLocalID(row.get(1));
+            if row.get(2) {
+                // local
+
+                Some(crate::MentionInfo {
+                    text,
+                    person,
+                    ap_id: crate::APIDOrLocal::Local,
+                })
+            } else {
+                row.get::<_, Option<String>>(3)
+                    .and_then(|x| x.parse().ok())
+                    .map(|remote_url| crate::MentionInfo {
+                        text,
+                        person,
+                        ap_id: crate::APIDOrLocal::APID(remote_url),
+                    })
+            }
+        })
+        .collect())
 }

@@ -1887,8 +1887,8 @@ async fn route_unstable_posts_replies_create(
         let created = row.get(1);
 
         let (nest_person, nest_text): (Vec<_>, Vec<_>) = mentions
-            .into_iter()
-            .map(|info| (info.person, info.text))
+            .iter()
+            .map(|info| (info.person, &info.text))
             .unzip();
 
         trans.execute(
@@ -1913,6 +1913,7 @@ async fn route_unstable_posts_replies_create(
         ap_id: crate::APIDOrLocal::Local,
         attachment_href: body.attachment,
         sensitive,
+        mentions: mentions.into(),
     };
 
     crate::on_post_add_comment(comment, ctx);
