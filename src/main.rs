@@ -1189,10 +1189,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    let tls_connector = {
+        let mut builder = native_tls::TlsConnector::builder();
+
+        if let Some(path) = config.database_certificate_path {
+            builder.add_root_certificate(native_tls::Certificate::from_pem(&std::fs::read(path)?)?);
+        }
+
+        builder.build()?
+    };
+
     let db_pool = deadpool_postgres::Pool::new(
         deadpool_postgres::Manager::new(
             config.database_url.parse().unwrap(),
-            tokio_postgres::NoTls,
+            postgres_native_tls::MakeTlsConnector::new(tls_connector),
         ),
         16,
     );

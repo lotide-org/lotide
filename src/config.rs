@@ -8,6 +8,8 @@ fn default_port() -> u16 {
 #[derive(Deserialize)]
 pub struct Config {
     pub database_url: String,
+    pub database_certificate_path: Option<std::path::PathBuf>,
+
     pub host_url_activitypub: String,
     pub host_url_api: String,
 
