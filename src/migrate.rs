@@ -22,6 +22,10 @@ pub fn run(config: crate::Config, matches: &clap::ArgMatches) {
             std::str::from_utf8(db_cfg.get_password().expect("Missing password")).unwrap(),
         );
 
+    if let Some(path) = config.database_certificate_path {
+        settings.ssl_cert_file(path);
+    }
+
     let hosts = db_cfg.get_hosts();
     if !hosts.is_empty() {
         let host = hosts
