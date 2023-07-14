@@ -1501,23 +1501,60 @@ pub async fn render_markdown_with_mentions(
 
     let mention_map: HashMap<_, _> = futures::stream::iter(found_mentions)
         .then(|mention| async move {
-            let result = crate::apub_util::fetch_from_webfinger(
-                &mention.userpart,
-                &mention.host,
-                ctx.clone(),
-            )
-            .await;
-            match result {
-                Ok(crate::apub_util::ingest::IngestResult::Actor(
-                    crate::apub_util::ActorLocalInfo::User { id, remote_url, .. },
-                )) => (mention, Ok((id, remote_url))),
-                Ok(_) => (
-                    mention,
-                    Err(crate::Error::InternalStrStatic(
-                        "unsupported mention target",
-                    )),
-                ),
-                Err(err) => (mention, Err(err)),
+            if mention.host == ctx.local_hostname {
+                let db = match ctx.db_pool.get().await {
+                    Ok(db) => db,
+                    Err(err) => return (mention, Err(err.into())),
+                };
+
+                let row = match db
+                    .query_opt(
+                        "SELECT id FROM person WHERE LOWER(username)=LOWER($1) AND local",
+                        &[&mention.userpart],
+                    )
+                    .await
+                {
+                    Ok(row) => row,
+                    Err(err) => return (mention, Err(err.into())),
+                };
+                if let Some(row) = row {
+                    let id = UserLocalID(row.get(0));
+
+                    (
+                        mention,
+                        Ok((
+                            id,
+                            true,
+                            crate::apub_util::LocalObjectRef::User(id)
+                                .to_local_uri(&ctx.host_url_apub)
+                                .into(),
+                        )),
+                    )
+                } else {
+                    (
+                        mention,
+                        Err(crate::Error::InternalStrStatic("No such user found")),
+                    )
+                }
+            } else {
+                let result = crate::apub_util::fetch_from_webfinger(
+                    &mention.userpart,
+                    &mention.host,
+                    ctx.clone(),
+                )
+                .await;
+                match result {
+                    Ok(crate::apub_util::ingest::IngestResult::Actor(
+                        crate::apub_util::ActorLocalInfo::User { id, remote_url, .. },
+                    )) => (mention, Ok((id, false, remote_url))),
+                    Ok(_) => (
+                        mention,
+                        Err(crate::Error::InternalStrStatic(
+                            "unsupported mention target",
+                        )),
+                    ),
+                    Err(err) => (mention, Err(err)),
+                }
             }
         })
         .collect()
@@ -1528,7 +1565,7 @@ pub async fn render_markdown_with_mentions(
         StreamItem::Mention(mention) => {
             let text = format!("@{}@{}", mention.userpart, mention.host);
 
-            if let Some(Ok((_, remote_url))) = mention_map.get(&mention) {
+            if let Some(Ok((_, _, remote_url))) = mention_map.get(&mention) {
                 let tag = pulldown_cmark::Tag::Link(
                     pulldown_cmark::LinkType::Inline,
                     remote_url.as_str().into(),
@@ -1558,10 +1595,14 @@ pub async fn render_markdown_with_mentions(
             .into_iter()
             .filter_map(|(key, value)| match value {
                 Err(_) => None,
-                Ok((id, remote_url)) => Some(crate::MentionInfo {
+                Ok((id, local, remote_url)) => Some(crate::MentionInfo {
                     text: format!("@{}@{}", key.userpart, key.host),
                     person: id,
-                    ap_id: crate::APIDOrLocal::APID(remote_url),
+                    ap_id: if local {
+                        crate::APIDOrLocal::Local
+                    } else {
+                        crate::APIDOrLocal::APID(remote_url)
+                    },
                 }),
             })
             .collect(),
