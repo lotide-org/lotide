@@ -1,0 +1,15 @@
+BEGIN;
+	CREATE TABLE post_mention (
+		post BIGINT REFERENCES post ON DELETE CASCADE,
+		person BIGINT REFERENCES person ON DELETE CASCADE,
+		text TEXT NOT NULL,
+		PRIMARY KEY (post, person)
+	);
+
+	CREATE TABLE reply_mention (
+		reply BIGINT REFERENCES reply ON DELETE CASCADE,
+		person BIGINT REFERENCES person ON DELETE CASCADE,
+		text TEXT NOT NULL,
+		PRIMARY KEY (reply, person)
+	);
+COMMIT;

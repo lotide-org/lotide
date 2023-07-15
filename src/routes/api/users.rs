@@ -428,14 +428,12 @@ async fn route_unstable_users_patch(
         changes.push(("description", description));
         changes.push(("description_markdown", &Option::<&str>::None));
         changes.push(("description_html", &Option::<&str>::None));
-    } else if let Some(description) = body.description_markdown {
-        let (html, md) = tokio::task::spawn_blocking(move || {
-            (crate::render_markdown(&description), description)
-        })
-        .await?;
+    } else if let Some(description) = &body.description_markdown {
+        let html =
+            tokio::task::block_in_place(|| crate::markdown::render_markdown_simple(&description));
 
         changes.push(("description", &Option::<&str>::None));
-        changes.push(("description_markdown", arena.alloc(md)));
+        changes.push(("description_markdown", description));
         changes.push(("description_html", arena.alloc(html)));
     } else if let Some(description) = body.description_html.as_ref() {
         changes.push(("description", &Option::<&str>::None));
@@ -547,7 +545,82 @@ async fn route_unstable_users_notifications_list(
         let trans = db.transaction().await?;
 
         let rows = trans.query(
-            "SELECT notification.kind, (notification.created_at > (SELECT last_checked_notifications FROM person WHERE id=$1)), reply.id, reply.content_text, reply.content_html, parent_reply.id, parent_reply.content_text, parent_reply.content_html, parent_post.id, parent_post.title, parent_post.ap_id, parent_post.local, reply.ap_id, reply.local, parent_post.href, parent_post.content_text, parent_post.created, parent_post.content_markdown, parent_post.content_html, community.id, community.local, community.ap_id, parent_post_author.id, parent_post_author.username, parent_post_author.local, parent_post_author.ap_id, parent_post_author.avatar, (SELECT COUNT(*) FROM post_like WHERE post_like.post = parent_post.id), (SELECT COUNT(*) FROM reply WHERE reply.post = parent_post.id), parent_post.sticky, parent_post_author.is_bot, parent_reply_author.id, parent_reply_author.is_bot, parent_reply_author.username, parent_reply_author.ap_id, parent_reply_author.local, parent_reply_author.avatar, parent_reply.ap_id, parent_reply.local, EXISTS(SELECT 1 FROM post_like WHERE post_like.post = parent_post.id AND post_like.person = $1), reply.attachment_href, parent_reply.attachment_href, reply.content_markdown, parent_reply.content_markdown, reply.created, parent_reply.created, (SELECT COUNT(*) FROM reply_like WHERE reply_like.reply = parent_reply.id), EXISTS(SELECT 1 FROM reply_like WHERE reply_like.reply = parent_reply.id AND reply_like.person = $1), (SELECT COUNT(*) FROM reply_like WHERE reply_like.reply = reply.id), EXISTS(SELECT 1 FROM reply_like WHERE reply_like.reply = reply.id AND reply_like.person = $1), reply_author.id, reply_author.is_bot, reply_author.username, reply_author.ap_id, reply_author.local, reply_author.avatar, community.name, EXISTS(SELECT 1 FROM reply AS reply_reply WHERE reply_reply.parent = reply.id), community.deleted, parent_post.sensitive, reply.sensitive, parent_reply.sensitive FROM notification LEFT OUTER JOIN reply ON (reply.id = notification.reply) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = notification.parent_reply) LEFT OUTER JOIN post AS parent_post ON (parent_post.id = COALESCE(parent_reply.post, notification.parent_post)) LEFT OUTER JOIN community ON (community.id = parent_post.community) LEFT OUTER JOIN person AS parent_post_author ON (parent_post_author.id = parent_post.author) LEFT OUTER JOIN person AS parent_reply_author ON (parent_reply_author.id = parent_reply.author) LEFT OUTER JOIN person AS reply_author ON (reply_author.id = reply.author) WHERE notification.to_user = $1 AND NOT COALESCE(reply.deleted OR parent_reply.deleted OR parent_post.deleted, FALSE) ORDER BY created_at DESC LIMIT $2",
+            "SELECT
+                notification.kind,
+                (notification.created_at > (SELECT last_checked_notifications FROM person WHERE id=$1)),
+                reply.id,
+                reply.content_text,
+                reply.content_html,
+                parent_reply.id,
+                parent_reply.content_text,
+                parent_reply.content_html,
+                post.id,
+                post.title,
+                post.ap_id,
+                post.local,
+                reply.ap_id,
+                reply.local,
+                post.href,
+                post.content_text,
+                post.created,
+                post.content_markdown,
+                post.content_html,
+                community.id,
+                community.local,
+                community.ap_id,
+                post_author.id,
+                post_author.username,
+                post_author.local,
+                post_author.ap_id,
+                post_author.avatar,
+                (SELECT COUNT(*) FROM post_like WHERE post_like.post = post.id),
+                (SELECT COUNT(*) FROM reply WHERE reply.post = post.id),
+                post.sticky,
+                post_author.is_bot,
+                parent_reply_author.id,
+                parent_reply_author.is_bot,
+                parent_reply_author.username,
+                parent_reply_author.ap_id,
+                parent_reply_author.local,
+                parent_reply_author.avatar,
+                parent_reply.ap_id,
+                parent_reply.local,
+                EXISTS(SELECT 1 FROM post_like WHERE post_like.post = post.id AND post_like.person = $1),
+                reply.attachment_href,
+                parent_reply.attachment_href,
+                reply.content_markdown,
+                parent_reply.content_markdown,
+                reply.created,
+                parent_reply.created,
+                (SELECT COUNT(*) FROM reply_like WHERE reply_like.reply = parent_reply.id),
+                EXISTS(SELECT 1 FROM reply_like WHERE reply_like.reply = parent_reply.id AND reply_like.person = $1),
+                (SELECT COUNT(*) FROM reply_like WHERE reply_like.reply = reply.id),
+                EXISTS(SELECT 1 FROM reply_like WHERE reply_like.reply = reply.id AND reply_like.person = $1),
+                reply_author.id,
+                reply_author.is_bot,
+                reply_author.username,
+                reply_author.ap_id,
+                reply_author.local,
+                reply_author.avatar,
+                community.name,
+                EXISTS(SELECT 1 FROM reply AS reply_reply WHERE reply_reply.parent = reply.id),
+                community.deleted,
+                post.sensitive,
+                reply.sensitive,
+                parent_reply.sensitive
+                FROM notification
+                    LEFT OUTER JOIN reply ON (reply.id = notification.reply)
+                    LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = notification.parent_reply)
+                    LEFT OUTER JOIN post ON (
+                        post.id = COALESCE(notification.post, parent_reply.post, notification.parent_post)
+                    )
+                    LEFT OUTER JOIN community ON (community.id = post.community OR community.id = post.community)
+                    LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author)
+                    LEFT OUTER JOIN person AS parent_reply_author ON (parent_reply_author.id = parent_reply.author)
+                    LEFT OUTER JOIN person AS reply_author ON (reply_author.id = reply.author)
+                WHERE notification.to_user = $1
+                AND NOT COALESCE(reply.deleted OR parent_reply.deleted OR post.deleted OR post.deleted, FALSE)
+                ORDER BY created_at DESC LIMIT $2",
             &[&user, &limit],
         ).await?;
         trans
@@ -836,6 +909,13 @@ async fn route_unstable_users_notifications_list(
                         None
                     }
                 }
+                "post_mention" => {
+                    if let Some(post) = post {
+                        Some(RespNotificationInfo::PostMention { post })
+                    } else {
+                        None
+                    }
+                }
                 "reply_reply" => {
                     if let Some(reply) = reply {
                         if let Some(post) = post {
@@ -848,6 +928,20 @@ async fn route_unstable_users_notifications_list(
                             } else {
                                 None
                             }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                "reply_mention" => {
+                    if let Some(reply) = reply {
+                        if let Some(post) = post {
+                            Some(RespNotificationInfo::CommentMention {
+                                comment: reply,
+                                post,
+                            })
                         } else {
                             None
                         }

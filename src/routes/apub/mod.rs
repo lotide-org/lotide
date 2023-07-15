@@ -296,7 +296,7 @@ async fn handler_users_outbox_page_get(
         }
     };
 
-    let sql: &str = &format!("(SELECT TRUE, post.id, post.href, post.title, post.created, post.content_text, post.content_markdown, post.content_html, community.id, community.local, community.ap_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, community.ap_outbox, community.ap_followers, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id)) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.closed_at, post.sensitive FROM post INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.author = $1 AND NOT post.deleted{}) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, parent_or_post_author.ap_id, reply.content_markdown, parent_reply.ap_id, post.id, post.local, post.ap_id, parent_reply.id, parent_reply.local, parent_or_post_author.id, parent_or_post_author.local, community.id, community.local, community.ap_id, reply.attachment_href, community.ap_outbox, community.ap_followers, NULL, NULL, NULL, reply.sensitive FROM reply INNER JOIN post ON (post.id = reply.post) INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = reply.parent) LEFT OUTER JOIN person AS parent_or_post_author ON (parent_or_post_author.id = COALESCE(parent_reply.author, post.author)) WHERE reply.author = $1 AND NOT reply.deleted{}) ORDER BY created DESC LIMIT $2", extra_conditions_posts, extra_conditions_comments);
+    let sql: &str = &format!("(SELECT TRUE, post.id, post.href, post.title, post.created, post.content_text, post.content_markdown, post.content_html, community.id, community.local, community.ap_id, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, community.ap_outbox, community.ap_followers, poll.multiple, (SELECT array_agg(jsonb_build_array(id, name, (SELECT COUNT(*) FROM poll_vote WHERE poll_id = poll.id AND option_id = poll_option.id)) ORDER BY position ASC) FROM poll_option WHERE poll_id=poll.id), poll.closed_at, post.sensitive, (SELECT array_agg(jsonb_build_array(text, person.id, person.local, person.ap_id)) FROM post_mention INNER JOIN person ON (person.id = post_mention.person) WHERE post_mention.post = post.id) FROM post INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN poll ON (poll.id = post.poll_id) WHERE post.author = $1 AND NOT post.deleted{}) UNION ALL (SELECT FALSE, reply.id, reply.content_text, reply.content_html, reply.created, parent_or_post_author.ap_id, reply.content_markdown, parent_reply.ap_id, post.id, post.local, post.ap_id, parent_reply.id, parent_reply.local, parent_or_post_author.id, parent_or_post_author.local, community.id, community.local, community.ap_id, reply.attachment_href, community.ap_outbox, community.ap_followers, NULL, NULL, NULL, reply.sensitive, (SELECT array_agg(jsonb_build_array(text, person.id, person.local, person.ap_id)) FROM reply_mention INNER JOIN person ON (person.id = reply_mention.person) WHERE reply_mention.reply = reply.id) FROM reply INNER JOIN post ON (post.id = reply.post) INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN reply AS parent_reply ON (parent_reply.id = reply.parent) LEFT OUTER JOIN person AS parent_or_post_author ON (parent_or_post_author.id = COALESCE(parent_reply.author, post.author)) WHERE reply.author = $1 AND NOT reply.deleted{}) ORDER BY created DESC LIMIT $2", extra_conditions_posts, extra_conditions_comments);
 
     let rows = db.query(sql, &values[..]).await?;
 
@@ -306,6 +306,36 @@ async fn handler_users_outbox_page_get(
         .into_iter()
         .map(|row| {
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
+
+            let mentions = match row.get::<_, Option<
+                postgres_types::Json<Vec<(String, i64, bool, Option<String>)>>,
+            >>(25)
+            {
+                None => vec![],
+                Some(list) => list
+                    .0
+                    .into_iter()
+                    .filter_map(|(text, person_raw_id, local, ap_id)| {
+                        let person = UserLocalID(person_raw_id);
+
+                        if local {
+                            Some(crate::MentionInfo {
+                                text,
+                                person,
+                                ap_id: crate::APIDOrLocal::Local,
+                            })
+                        } else {
+                            ap_id.and_then(|x| x.parse().ok()).map(|remote_url| {
+                                crate::MentionInfo {
+                                    text,
+                                    person,
+                                    ap_id: crate::APIDOrLocal::APID(remote_url),
+                                }
+                            })
+                        }
+                    })
+                    .collect(),
+            };
 
             if row.get(0) {
                 let community_id = CommunityLocalID(row.get(8));
@@ -367,16 +397,18 @@ async fn handler_users_outbox_page_get(
 
                 let post_info = crate::PostInfo {
                     id: PostLocalID(row.get(1)),
+                    ap_id: &crate::APIDOrLocal::Local,
                     author: Some(user),
                     href: row.get(2),
                     content_text: row.get(5),
                     content_markdown: row.get(6),
                     content_html: row.get(7),
                     title: row.get(3),
-                    created: &created,
+                    created,
                     community: community_id,
                     poll,
                     sensitive: row.get(24),
+                    mentions: &mentions,
                 };
 
                 let res = crate::apub_util::local_post_to_create_ap(
@@ -405,6 +437,7 @@ async fn handler_users_outbox_page_get(
                     ap_id: crate::APIDOrLocal::Local,
                     attachment_href: row.get::<_, Option<_>>(18).map(Cow::Borrowed),
                     sensitive: row.get(24),
+                    mentions: mentions.into(),
                 };
 
                 let res = crate::apub_util::local_comment_to_create_ap(
@@ -504,6 +537,8 @@ async fn handler_comments_get(
                 )));
             }
 
+            let mentions = fetch_comment_mentions(comment_id, &db).await?;
+
             if row.get(19) {
                 let mut body = activitystreams::object::Tombstone::new();
                 body
@@ -559,6 +594,7 @@ async fn handler_comments_get(
                 ap_id: crate::APIDOrLocal::Local,
                 attachment_href,
                 sensitive: row.get(23),
+                mentions: mentions.into(),
             };
 
             let parent_ap_id = match row.get(11) {
@@ -639,6 +675,8 @@ async fn handler_comments_create_get(
                 )));
             }
 
+            let mentions = fetch_comment_mentions(comment_id, &db).await?;
+
             if row.get(19) {
                 return Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::GONE,
@@ -682,6 +720,7 @@ async fn handler_comments_create_get(
                 ap_id: crate::APIDOrLocal::Local,
                 attachment_href,
                 sensitive: row.get(23),
+                mentions: mentions.into(),
             };
 
             let parent_ap_id = match row.get(11) {
@@ -1018,4 +1057,39 @@ async fn handler_post_like_undos_get(
             "No such unlike",
         ))
     }
+}
+
+async fn fetch_comment_mentions(
+    comment_id: CommentLocalID,
+    db: &tokio_postgres::Client,
+) -> Result<Vec<crate::MentionInfo>, crate::Error> {
+    let mention_rows = db.query(
+        "SELECT text, person.id, person.local, person.ap_id FROM reply_mention INNER JOIN person ON (person.id = reply_mention.person) WHERE reply_mention.reply = $1",
+        &[&comment_id],
+    ).await?;
+
+    Ok(mention_rows
+        .into_iter()
+        .filter_map(|row| {
+            let text: String = row.get(0);
+            let person = UserLocalID(row.get(1));
+            if row.get(2) {
+                // local
+
+                Some(crate::MentionInfo {
+                    text,
+                    person,
+                    ap_id: crate::APIDOrLocal::Local,
+                })
+            } else {
+                row.get::<_, Option<String>>(3)
+                    .and_then(|x| x.parse().ok())
+                    .map(|remote_url| crate::MentionInfo {
+                        text,
+                        person,
+                        ap_id: crate::APIDOrLocal::APID(remote_url),
+                    })
+            }
+        })
+        .collect())
 }

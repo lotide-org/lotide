@@ -6,6 +6,7 @@ use crate::types::{
     RespPermissionInfo, RespPostCommentInfo, RespPostListPost, RespSiteModlogEvent,
     RespSiteModlogEventDetails, UserLocalID,
 };
+use futures::StreamExt;
 use serde_derive::Deserialize;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -450,43 +451,7 @@ async fn route_unstable_actors_lookup(
     let uri = match lookup {
         Lookup::Url(uri) => Some(uri),
         Lookup::WebFinger { user, host } => {
-            let uri = format!(
-                "https://{}/.well-known/webfinger?{}",
-                host,
-                serde_urlencoded::to_string(FingerRequestQuery {
-                    resource: format!("acct:{}@{}", user, host).into(),
-                    rel: Some("self".into()),
-                })?
-            );
-            log::debug!("{}", uri);
-            let res = ctx
-                .http_client
-                .request(hyper::Request::get(uri).body(Default::default())?)
-                .await?;
-
-            if res.status() == hyper::StatusCode::NOT_FOUND {
-                log::debug!("not found");
-                None
-            } else {
-                let res = crate::res_to_error(res).await?;
-
-                let res = hyper::body::to_bytes(res.into_body()).await?;
-                let res: FingerResponse = serde_json::from_slice(&res)?;
-
-                let mut found_uri = None;
-                for entry in res.links {
-                    if entry.rel == "self"
-                        && entry.type_.as_deref() == Some(crate::apub_util::ACTIVITY_TYPE)
-                    {
-                        if let Some(href) = entry.href {
-                            found_uri = Some(href.parse()?);
-                            break;
-                        }
-                    }
-                }
-
-                found_uri
-            }
+            crate::apub_util::fetch_url_from_webfinger(user, host, &ctx).await?
         }
     };
 
@@ -755,14 +720,13 @@ async fn route_unstable_instance_patch(
             )
             .await?;
         } else if let Some(description) = body.description_markdown {
-            let (html, md) = tokio::task::spawn_blocking(move || {
-                (crate::render_markdown(&description), description)
-            })
-            .await?;
+            let html = tokio::task::block_in_place(|| {
+                crate::markdown::render_markdown_simple(&description)
+            });
 
             db.execute(
                 "UPDATE site SET description=NULL, description_markdown=$1, description_html=$2",
-                &[&md, &html],
+                &[&description, &html],
             )
             .await?;
         } else if let Some(description) = body.description_html {
@@ -1373,7 +1337,7 @@ async fn route_unstable_instance_modlog_events_list(
 
 async fn route_unstable_misc_render_markdown(
     _: (),
-    _ctx: Arc<crate::RouteContext>,
+    ctx: Arc<crate::RouteContext>,
     req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let body = hyper::body::to_bytes(req.into_body()).await?;
@@ -1385,8 +1349,7 @@ async fn route_unstable_misc_render_markdown(
 
     let body: RenderMarkdownBody = serde_json::from_slice(&body)?;
 
-    let html =
-        tokio::task::spawn_blocking(move || crate::render_markdown(&body.content_markdown)).await?;
+    let (html, _) = render_markdown_with_mentions(&body.content_markdown, &ctx).await?;
 
     crate::json_response(&serde_json::json!({ "content_html": html }))
 }
@@ -1397,7 +1360,16 @@ pub async fn process_comment_content<'a, 'b>(
     lang: &'b crate::Translator,
     content_text: Option<Cow<'a, str>>,
     content_markdown: Option<String>,
-) -> Result<(Option<Cow<'a, str>>, Option<String>, Option<String>), crate::Error> {
+    ctx: &Arc<crate::BaseContext>,
+) -> Result<
+    (
+        Option<Cow<'a, str>>,
+        Option<String>,
+        Option<String>,
+        Vec<crate::MentionInfo>,
+    ),
+    crate::Error,
+> {
     if !(content_markdown.is_some() ^ content_text.is_some()) {
         return Err(crate::Error::UserError(crate::simple_response(
             hyper::StatusCode::BAD_REQUEST,
@@ -1414,9 +1386,8 @@ pub async fn process_comment_content<'a, 'b>(
                 )));
             }
 
-            let (html, md) =
-                tokio::task::spawn_blocking(move || (crate::render_markdown(&md), md)).await?;
-            (None, Some(md), Some(html))
+            let (html, mentions) = render_markdown_with_mentions(&md, &ctx).await?;
+            (None, Some(md), Some(html), mentions)
         }
         None => match content_text {
             Some(text) => {
@@ -1427,9 +1398,9 @@ pub async fn process_comment_content<'a, 'b>(
                     )));
                 }
 
-                (Some(text), None, None)
+                (Some(text), None, None, vec![])
             }
-            None => (None, None, None),
+            None => (None, None, None, vec![]),
         },
     })
 }
@@ -1462,4 +1433,178 @@ pub async fn fetch_login_info(
             },
         },
     })
+}
+
+pub async fn render_markdown_with_mentions(
+    src: &str,
+    ctx: &Arc<crate::BaseContext>,
+) -> Result<(String, Vec<crate::MentionInfo>), crate::Error> {
+    #[derive(PartialEq, Eq, Hash, Clone)]
+    struct Mention {
+        userpart: String,
+        host: String,
+    }
+
+    enum StreamItem<'a> {
+        Event(pulldown_cmark::Event<'a>),
+        Mention(Mention),
+    }
+
+    let mut found_mentions = HashSet::new();
+
+    let parsed = tokio::task::block_in_place(|| {
+        let parsed: Vec<StreamItem> = crate::markdown::parse_markdown(&src)
+            .flat_map(|evt| match evt {
+                pulldown_cmark::Event::Text(text) => {
+                    let mentions = crate::markdown::MENTION_REGEX.captures_iter(&text);
+                    let mut covered = 0;
+
+                    let mut result = Vec::new();
+
+                    for mention in mentions {
+                        let full = mention.get(0).unwrap();
+                        if covered < full.start() {
+                            result.push(StreamItem::Event(pulldown_cmark::Event::Text(
+                                text[covered..full.start()].to_owned().into(),
+                            )));
+                        }
+
+                        let mention = Mention {
+                            userpart: mention[1].to_owned(),
+                            host: mention[2].to_owned(),
+                        };
+                        result.push(StreamItem::Mention(mention.clone()));
+                        found_mentions.insert(mention);
+                        covered = full.end();
+                    }
+
+                    if covered == 0 {
+                        either::Either::Left(std::iter::once(StreamItem::Event(
+                            pulldown_cmark::Event::Text(text),
+                        )))
+                    } else {
+                        if covered < text.len() {
+                            result.push(StreamItem::Event(pulldown_cmark::Event::Text(
+                                text[covered..].to_owned().into(),
+                            )));
+                        }
+
+                        either::Either::Right(result.into_iter())
+                    }
+                }
+                other => either::Either::Left(std::iter::once(StreamItem::Event(other))),
+            })
+            .collect();
+
+        parsed
+    });
+
+    let mention_map: HashMap<_, _> = futures::stream::iter(found_mentions)
+        .then(|mention| async move {
+            if mention.host == ctx.local_hostname {
+                let db = match ctx.db_pool.get().await {
+                    Ok(db) => db,
+                    Err(err) => return (mention, Err(err.into())),
+                };
+
+                let row = match db
+                    .query_opt(
+                        "SELECT id FROM person WHERE LOWER(username)=LOWER($1) AND local",
+                        &[&mention.userpart],
+                    )
+                    .await
+                {
+                    Ok(row) => row,
+                    Err(err) => return (mention, Err(err.into())),
+                };
+                if let Some(row) = row {
+                    let id = UserLocalID(row.get(0));
+
+                    (
+                        mention,
+                        Ok((
+                            id,
+                            true,
+                            crate::apub_util::LocalObjectRef::User(id)
+                                .to_local_uri(&ctx.host_url_apub)
+                                .into(),
+                        )),
+                    )
+                } else {
+                    (
+                        mention,
+                        Err(crate::Error::InternalStrStatic("No such user found")),
+                    )
+                }
+            } else {
+                let result = crate::apub_util::fetch_from_webfinger(
+                    &mention.userpart,
+                    &mention.host,
+                    ctx.clone(),
+                )
+                .await;
+                match result {
+                    Ok(crate::apub_util::ingest::IngestResult::Actor(
+                        crate::apub_util::ActorLocalInfo::User { id, remote_url, .. },
+                    )) => (mention, Ok((id, false, remote_url))),
+                    Ok(_) => (
+                        mention,
+                        Err(crate::Error::InternalStrStatic(
+                            "unsupported mention target",
+                        )),
+                    ),
+                    Err(err) => (mention, Err(err)),
+                }
+            }
+        })
+        .collect()
+        .await;
+
+    let content = parsed.into_iter().flat_map(|item| match item {
+        StreamItem::Event(evt) => either::Either::Left(std::iter::once(evt)),
+        StreamItem::Mention(mention) => {
+            let text = format!("@{}@{}", mention.userpart, mention.host);
+
+            if let Some(Ok((_, _, remote_url))) = mention_map.get(&mention) {
+                let tag = pulldown_cmark::Tag::Link(
+                    pulldown_cmark::LinkType::Inline,
+                    remote_url.as_str().into(),
+                    "".into(),
+                );
+
+                either::Either::Right(
+                    vec![
+                        pulldown_cmark::Event::Start(tag.clone()),
+                        pulldown_cmark::Event::Text(text.into()),
+                        pulldown_cmark::Event::End(tag),
+                    ]
+                    .into_iter(),
+                )
+            } else {
+                either::Either::Left(std::iter::once(pulldown_cmark::Event::Text(text.into())))
+            }
+        }
+    });
+
+    let result =
+        tokio::task::block_in_place(|| crate::markdown::render_markdown_from_stream(content));
+
+    Ok((
+        result,
+        mention_map
+            .into_iter()
+            .filter_map(|(key, value)| match value {
+                Err(_) => None,
+                Ok((id, local, remote_url)) => Some(crate::MentionInfo {
+                    text: format!("@{}@{}", key.userpart, key.host),
+                    person: id,
+                    ap_id: if local {
+                        crate::APIDOrLocal::Local
+                    } else {
+                        crate::APIDOrLocal::APID(remote_url)
+                    },
+                }),
+            })
+            .collect(),
+    ))
 }

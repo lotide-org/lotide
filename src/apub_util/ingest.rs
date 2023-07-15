@@ -5,6 +5,7 @@ use crate::types::{
 use activitystreams::prelude::*;
 use serde::Deserialize;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::future::Future;
 use std::ops::Deref;
@@ -898,16 +899,38 @@ async fn ingest_postlike(
     found_from: FoundFrom,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let (ext, to, in_reply_to, obj_id, poll_info) = match obj.deref() {
-        KnownObject::Page(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
-        KnownObject::Image(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
-        KnownObject::Article(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
+    let (ext, to, in_reply_to, obj_id, poll_info, tag) = match obj.deref() {
+        KnownObject::Page(obj) => (
+            Some(&obj.ext_one),
+            obj.to(),
+            None,
+            obj.id_unchecked(),
+            None,
+            obj.tag(),
+        ),
+        KnownObject::Image(obj) => (
+            Some(&obj.ext_one),
+            obj.to(),
+            None,
+            obj.id_unchecked(),
+            None,
+            obj.tag(),
+        ),
+        KnownObject::Article(obj) => (
+            Some(&obj.ext_one),
+            obj.to(),
+            None,
+            obj.id_unchecked(),
+            None,
+            obj.tag(),
+        ),
         KnownObject::Note(obj) => (
             Some(&obj.ext_one),
             obj.to(),
             obj.in_reply_to(),
             obj.id_unchecked(),
             None,
+            obj.tag(),
         ),
         KnownObject::Question(obj) => (
             None,
@@ -961,10 +984,88 @@ async fn ingest_postlike(
                     closed_at,
                 }
             }),
+            obj.tag(),
         ),
         _ => return Ok(None), // shouldn't happen?
     };
     let target = ext.as_ref().and_then(|x| x.target.as_ref());
+
+    let mentions = {
+        let tag = match tag {
+            None => vec![],
+            Some(value) => value.iter().collect(),
+        };
+
+        let mut mentions = Vec::new();
+
+        let mut map: HashMap<url::Url, String> = tag
+            .into_iter()
+            .filter_map(|tag| {
+                if let Ok(Some::<activitystreams::link::Mention>(mut mention)) =
+                    tag.clone().extend()
+                {
+                    if let Some(url) = mention.take_href() {
+                        if let Some(name) = mention
+                            .name()
+                            .as_ref()
+                            .and_then(|x| x.as_single_xsd_string())
+                        {
+                            return Some((url, name.to_owned()));
+                        }
+                    }
+                }
+
+                None
+            })
+            .filter_map(|(url, text)| {
+                if let Some(local_ref) =
+                    crate::apub_util::LocalObjectRef::try_from_uri(&url, &ctx.host_url_apub)
+                {
+                    if let crate::apub_util::LocalObjectRef::User(user_id) = local_ref {
+                        mentions.push(crate::MentionInfo {
+                            text,
+                            person: user_id,
+                            ap_id: crate::APIDOrLocal::Local,
+                        });
+                    }
+
+                    None
+                } else {
+                    Some((url, text))
+                }
+            })
+            .collect();
+
+        log::debug!("handling mentions: {} {}", mentions.len(), map.len());
+
+        if !map.is_empty() {
+            let urls: Vec<&str> = map.keys().map(|x| x.as_str()).collect();
+
+            log::debug!("looking up mentioned users {:?}", urls);
+
+            let db = ctx.db_pool.get().await?;
+
+            let rows = db
+                .query(
+                    "SELECT id, ap_id FROM person WHERE ap_id=ANY($1::TEXT[])",
+                    &[&urls],
+                )
+                .await?;
+
+            mentions.extend(rows.into_iter().map(|row| {
+                let ap_id: &str = row.get(1);
+                let ap_id: url::Url = ap_id.parse().unwrap();
+
+                crate::MentionInfo {
+                    text: map.remove(&ap_id).unwrap(),
+                    person: UserLocalID(row.get(0)),
+                    ap_id: crate::APIDOrLocal::APID(ap_id),
+                }
+            }));
+        }
+
+        mentions
+    };
 
     let community_found = match target
         .as_ref()
@@ -1024,6 +1125,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
+                mentions,
                 Verified(obj).into(),
                 ctx,
             )
@@ -1034,6 +1136,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
+                mentions,
                 Verified(obj).into(),
                 ctx,
             )
@@ -1044,6 +1147,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
+                mentions,
                 Verified(obj).into(),
                 ctx,
             )
@@ -1054,6 +1158,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
+                mentions,
                 Verified(try_transform_inner(obj)?),
                 ctx,
             )
@@ -1105,6 +1210,7 @@ async fn ingest_postlike(
                             in_reply_to,
                             attachment_href,
                             sensitive,
+                            mentions,
                             ctx,
                         )
                         .await?
@@ -1189,6 +1295,7 @@ async fn ingest_postlike(
                                 found_from.as_announce(),
                                 poll_info,
                                 sensitive,
+                                mentions,
                                 ctx,
                             )
                             .await?,
@@ -1253,6 +1360,7 @@ async fn ingest_postlike(
                         in_reply_to,
                         attachment_href,
                         sensitive,
+                        mentions,
                         ctx,
                     )
                     .await?;
@@ -1399,6 +1507,7 @@ async fn ingest_personlike<
             algorithm: super::get_message_digest(public_key_sigalg),
             key: key.to_owned(),
         }),
+        remote_url: ap_id.clone(),
     })))
 }
 
@@ -1411,9 +1520,10 @@ async fn handle_recieved_reply(
     in_reply_to: &activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>,
     attachment_href: Option<&str>,
     sensitive: Option<bool>,
+    mentions: Vec<crate::MentionInfo>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<CommentLocalID>, crate::Error> {
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let author = match author {
         Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
@@ -1481,10 +1591,33 @@ async fn handle_recieved_reply(
 
                 let sensitive = sensitive.unwrap_or(false);
 
-                let row = db.query_opt(
-                    "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id, attachment_href, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7, $8, $9) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
-                    &[&post, &parent, &author, &content_text, &content_html, &created, &object_id.as_str(), &attachment_href, &sensitive],
+                let row = {
+                    let trans = db.transaction().await?;
+                    let row = trans.query_opt(
+                        "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id, attachment_href, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7, $8, $9) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
+                        &[&post, &parent, &author, &content_text, &content_html, &created, &object_id.as_str(), &attachment_href, &sensitive],
                     ).await?;
+
+                    if let Some(row) = &row {
+                        let id = CommentLocalID(row.get(0));
+
+                        if !mentions.is_empty() {
+                            let (nest_person, nest_text): (Vec<_>, Vec<_>) = mentions
+                                .iter()
+                                .map(|info| (info.person, &info.text))
+                                .unzip();
+
+                            trans.execute(
+                                "INSERT INTO reply_mention (reply, person, text) SELECT $1, * FROM UNNEST($2::BIGINT[], $3::TEXT[]) ON CONFLICT DO NOTHING",
+                                &[&id, &nest_person, &nest_text],
+                            ).await?;
+                        }
+                    }
+
+                    trans.commit().await?;
+
+                    row
+                };
 
                 if let Some(row) = row {
                     let id = CommentLocalID(row.get(0));
@@ -1503,6 +1636,7 @@ async fn handle_recieved_reply(
                         ap_id: crate::APIDOrLocal::APID(object_id.to_owned()),
                         attachment_href: attachment_href.map(|x| Cow::Owned(x.to_owned())),
                         sensitive,
+                        mentions: Cow::Owned(mentions),
                     };
 
                     crate::on_post_add_comment(info, ctx);
@@ -1536,6 +1670,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     community_is_local: bool,
     is_announce: Option<&url::Url>,
     poll_info: Option<PollIngestInfo>,
+    mentions: Vec<crate::MentionInfo>,
     obj: Verified<ExtendedPostlike<activitystreams::object::Object<Kind>>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<PostIngestResult>, crate::Error> {
@@ -1586,6 +1721,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
                 is_announce,
                 poll_info,
                 sensitive,
+                mentions,
                 ctx,
             )
             .await?,
@@ -1608,6 +1744,7 @@ async fn handle_recieved_post(
     is_announce: Option<&url::Url>,
     poll_info: Option<PollIngestInfo>,
     sensitive: Option<bool>,
+    mentions: Vec<crate::MentionInfo>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<PostIngestResult, crate::Error> {
     let mut db = ctx.db_pool.get().await?;
@@ -1618,23 +1755,38 @@ async fn handle_recieved_post(
 
     let content_is_html = media_type.is_none() || media_type == Some(&mime::TEXT_HTML);
     let (content_text, content_html) = if content_is_html {
-        (None, Some(content))
+        (None, Some(content.unwrap_or("")))
     } else {
-        (Some(content), None)
+        (Some(content.unwrap_or("")), None)
     };
 
     let approved = is_announce.is_some() || community_is_local;
 
     let sensitive = sensitive.unwrap_or(false);
 
-    let (post_local_id, poll_output) = {
+    let (post_local_id, poll_output, created, is_new) = {
         let trans = db.transaction().await?;
         let row = trans.query_one(
-            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp, $11) ON CONFLICT (ap_id) DO UPDATE SET approved=($9 OR post.approved), approved_ap_id=(CASE WHEN $9 THEN $10 ELSE post.approved_ap_id END), updated_local=current_timestamp, sensitive=$11 RETURNING id, poll_id",
+            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp, $11) ON CONFLICT (ap_id) DO UPDATE SET approved=($9 OR post.approved), approved_ap_id=(CASE WHEN $9 THEN $10 ELSE post.approved_ap_id END), updated_local=current_timestamp, sensitive=$11 RETURNING id, poll_id, created, (xmax = 0)",
             &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str()), &sensitive],
         ).await?;
         let post_local_id = PostLocalID(row.get(0));
         let existing_poll_id: Option<i64> = row.get(1);
+        let created = row.get(2);
+        let is_new = row.get(3);
+
+        if !mentions.is_empty() {
+            log::debug!("inserting mentions {:?}", mentions);
+            let (nest_person, nest_text): (Vec<_>, Vec<_>) = mentions
+                .iter()
+                .map(|info| (info.person, &info.text))
+                .unzip();
+
+            trans.execute(
+                "INSERT INTO post_mention (post, person, text) SELECT $1, * FROM UNNEST($2::BIGINT[], $3::TEXT[]) ON CONFLICT DO NOTHING",
+                &[&post_local_id, &nest_person, &nest_text],
+            ).await?;
+        }
 
         let poll_output = if let Some(poll_id) = existing_poll_id {
             if let Some(poll_info) = &poll_info {
@@ -1736,12 +1888,8 @@ async fn handle_recieved_post(
 
         trans.commit().await?;
 
-        (post_local_id, poll_output)
+        (post_local_id, poll_output, created, is_new)
     };
-
-    if community_is_local {
-        crate::on_local_community_add_post(community_local_id, post_local_id, object_id, ctx);
-    }
 
     let poll = poll_output.map(|(options, is_closed)| {
         let info = poll_info.unwrap();
@@ -1761,6 +1909,24 @@ async fn handle_recieved_post(
             closed_at: info.closed_at,
         }
     });
+
+    let post = crate::PostInfoOwned {
+        id: post_local_id,
+        ap_id: crate::APIDOrLocal::APID(object_id),
+        author,
+        href: href.map(|x| x.to_owned()),
+        content_text: content_text.map(|x| x.to_owned()),
+        content_markdown: None,
+        content_html: content_html.map(|x| x.to_owned()),
+        title: title.to_owned(),
+        created,
+        community: community_local_id,
+        poll: poll.clone(),
+        sensitive,
+        mentions,
+    };
+
+    crate::on_add_post(post, community_is_local, is_new, ctx);
 
     Ok(PostIngestResult {
         id: post_local_id,

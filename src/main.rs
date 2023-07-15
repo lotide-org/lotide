@@ -11,6 +11,7 @@ use std::sync::Arc;
 mod apub_util;
 mod config;
 mod lang;
+mod markdown;
 mod migrate;
 mod routes;
 mod tasks;
@@ -287,7 +288,7 @@ impl<T: 'static + std::error::Error + Send> From<T> for Error {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum APIDOrLocal {
     Local,
     APID(url::Url),
@@ -335,6 +336,8 @@ impl std::str::FromStr for TimestampOrLatest {
 #[derive(Debug)]
 pub struct PostInfo<'a> {
     id: PostLocalID,
+    #[allow(dead_code)]
+    ap_id: &'a APIDOrLocal,
     author: Option<UserLocalID>,
     href: Option<&'a str>,
     content_text: Option<&'a str>,
@@ -342,15 +345,18 @@ pub struct PostInfo<'a> {
     content_markdown: Option<&'a str>,
     content_html: Option<&'a str>,
     title: &'a str,
-    created: &'a chrono::DateTime<chrono::FixedOffset>,
+    created: chrono::DateTime<chrono::FixedOffset>,
     #[allow(dead_code)]
     community: CommunityLocalID,
     poll: Option<Cow<'a, PollInfo<'a>>>,
     sensitive: bool,
+    mentions: &'a [MentionInfo],
 }
 
+#[derive(Clone)]
 pub struct PostInfoOwned {
     id: PostLocalID,
+    ap_id: APIDOrLocal,
     author: Option<UserLocalID>,
     href: Option<String>,
     content_text: Option<String>,
@@ -361,22 +367,25 @@ pub struct PostInfoOwned {
     community: CommunityLocalID,
     poll: Option<PollInfoOwned>,
     sensitive: bool,
+    mentions: Vec<MentionInfo>,
 }
 
 impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
     fn from(src: &'a PostInfoOwned) -> PostInfo<'a> {
         PostInfo {
             id: src.id,
+            ap_id: &src.ap_id,
             author: src.author,
             href: src.href.as_deref(),
             content_text: src.content_text.as_deref(),
             content_markdown: src.content_markdown.as_deref(),
             content_html: src.content_html.as_deref(),
             title: &src.title,
-            created: &src.created,
+            created: src.created,
             community: src.community,
             poll: src.poll.as_ref().map(|x| Cow::Owned(x.into())),
             sensitive: src.sensitive,
+            mentions: &src.mentions,
         }
     }
 }
@@ -388,6 +397,7 @@ pub struct PollInfo<'a> {
     closed_at: Option<&'a chrono::DateTime<chrono::FixedOffset>>,
 }
 
+#[derive(Clone)]
 pub struct PollInfoOwned {
     multiple: bool,
     options: Vec<PollOptionOwned>,
@@ -429,7 +439,7 @@ impl<'a> From<&'a PollOptionOwned> for PollOption<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CommentInfo<'a> {
     id: CommentLocalID,
     author: Option<UserLocalID>,
@@ -443,6 +453,14 @@ pub struct CommentInfo<'a> {
     ap_id: APIDOrLocal,
     attachment_href: Option<Cow<'a, str>>,
     sensitive: bool,
+    mentions: Cow<'a, [MentionInfo]>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MentionInfo {
+    text: String,
+    person: UserLocalID,
+    ap_id: APIDOrLocal,
 }
 
 pub const KEY_BITS: u32 = 2048;
@@ -688,17 +706,6 @@ pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 's
     }));
 }
 
-pub fn render_markdown(src: &str) -> String {
-    let parser = pulldown_cmark::Parser::new(src);
-
-    let stream = pdcm_linkify::AutoLinker::new(parser);
-
-    let mut output = String::new();
-    pulldown_cmark::html::push_html(&mut output, stream);
-
-    output
-}
-
 lazy_static::lazy_static! {
     static ref SANITIZER: ammonia::Builder<'static> = {
         let mut builder = ammonia::Builder::default();
@@ -711,6 +718,63 @@ lazy_static::lazy_static! {
 
 pub fn clean_html(src: &str) -> String {
     SANITIZER.clean(src).to_string()
+}
+
+pub fn on_add_post(
+    post: crate::PostInfoOwned,
+    community_local: bool,
+    is_new: bool, // TODO if not, is this really an "add"?
+    ctx: Arc<crate::RouteContext>,
+) {
+    crate::spawn_task(async move {
+        let author = post.author;
+        if community_local {
+            on_local_community_add_post(
+                post.community,
+                post.id,
+                match post.ap_id {
+                    crate::APIDOrLocal::Local => crate::apub_util::LocalObjectRef::Post(post.id)
+                        .to_local_uri(&ctx.host_url_apub)
+                        .into(),
+                    crate::APIDOrLocal::APID(url) => url,
+                },
+                ctx.clone(),
+            );
+        } else if let APIDOrLocal::Local = post.ap_id {
+            apub_util::spawn_enqueue_send_local_post_to_community(post.clone(), ctx.clone());
+        }
+
+        if is_new {
+            let local_mentions: Vec<_> = post
+                .mentions
+                .iter()
+                .filter(|x| x.ap_id == APIDOrLocal::Local && Some(x.person) != author)
+                .map(|x| x.person)
+                .collect();
+            if !local_mentions.is_empty() {
+                // local users should get notifications when mentioned
+
+                let rows = {
+                    let db = ctx.db_pool.get().await?;
+
+                    db.query(
+                        "INSERT INTO notification (kind, created_at, post, to_user) SELECT 'post_mention', current_timestamp, $1, * FROM UNNEST($2::BIGINT[])",
+                        &[&post.id, &local_mentions],
+                    ).await?
+                };
+
+                let tasks: Vec<_> = rows
+                    .iter()
+                    .map(|row| tasks::SendNotification {
+                        notification: NotificationID(row.get(0)),
+                    })
+                    .collect();
+                ctx.enqueue_tasks(&tasks).await?;
+            }
+        }
+
+        Ok(())
+    });
 }
 
 pub fn on_local_community_add_post(
@@ -851,6 +915,8 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                 },
             };
 
+            let mut already_notified = None;
+
             // Generate notifications
             match comment.parent {
                 Some(parent_id) => {
@@ -859,6 +925,9 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             if let Some(parent_author_id) = parent_author_id {
                                 let ctx = ctx.clone();
                                 let comment_id = comment.id;
+
+                                already_notified = Some(parent_author_id);
+
                                 crate::spawn_task(async move {
                                     let db = ctx.db_pool.get().await?;
                                     let row = db.query_one(
@@ -883,6 +952,9 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             let ctx = ctx.clone();
                             let comment_id = comment.id;
                             let comment_post = comment.post;
+
+                            already_notified = Some(post_or_parent_author_local_id);
+
                             crate::spawn_task(async move {
                                 let db = ctx.db_pool.get().await?;
                                 let row = db.query_one(
@@ -938,15 +1010,46 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
 
                         crate::apub_util::spawn_enqueue_send_comment(
                             inboxes,
-                            comment,
+                            comment.clone(),
                             community_ap_id,
                             post_ap_id.into(),
                             parent_ap_id.map(|x| x.deref().clone()),
                             post_or_parent_author_ap_id.map(|x| x.into_owned().into()),
-                            ctx,
+                            ctx.clone(),
                         );
                     }
                 }
+            }
+
+            let local_mentions: Vec<_> = comment
+                .mentions
+                .iter()
+                .filter(|x| {
+                    x.ap_id == APIDOrLocal::Local
+                        && Some(x.person) != already_notified
+                        && Some(x.person) != comment.author
+                })
+                .map(|x| x.person)
+                .collect();
+            if !local_mentions.is_empty() {
+                // local users should get notifications when mentioned
+
+                let rows = {
+                    let db = ctx.db_pool.get().await?;
+
+                    db.query(
+                        "INSERT INTO notification (kind, created_at, reply, parent_reply, parent_post, to_user) SELECT 'reply_mention', current_timestamp, $1, $2, $3, * FROM UNNEST($4::BIGINT[])",
+                        &[&comment.id, &comment.parent, &comment.post, &local_mentions],
+                    ).await?
+                };
+
+                let tasks: Vec<_> = rows
+                    .iter()
+                    .map(|row| tasks::SendNotification {
+                        notification: NotificationID(row.get(0)),
+                    })
+                    .collect();
+                ctx.enqueue_tasks(&tasks).await?;
             }
         }
 

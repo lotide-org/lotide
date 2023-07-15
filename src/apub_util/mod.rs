@@ -1,6 +1,6 @@
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, FlagLocalID, PollLocalID, PollOptionLocalID,
-    PostLocalID, ThingLocalRef, UserLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, FingerRequestQuery, FingerResponse,
+    FlagLocalID, PollLocalID, PollOptionLocalID, PostLocalID, ThingLocalRef, UserLocalID,
 };
 use crate::BaseURL;
 use activitystreams::prelude::*;
@@ -280,6 +280,7 @@ pub enum ActorLocalInfo {
     User {
         id: UserLocalID,
         public_key: Option<PubKeyInfo>,
+        remote_url: url::Url,
     },
     Community {
         id: CommunityLocalID,
@@ -1149,7 +1150,7 @@ pub fn post_to_ap(
             .set_attributed_to(
                 LocalObjectRef::User(post.author.unwrap()).to_local_uri(&ctx.host_url_apub),
             )
-            .set_published(*post.created)
+            .set_published(post.created)
             .set_to(community_ap_id)
             .set_cc(activitystreams::public());
 
@@ -1179,6 +1180,24 @@ pub fn post_to_ap(
             }
         } else if let Some(text) = post.content_text {
             props.set_content(text).set_media_type(mime::TEXT_PLAIN);
+        }
+
+        for mention in post.mentions {
+            let mentioned_ap_id = match &mention.ap_id {
+                crate::APIDOrLocal::APID(apid) => apid.clone(),
+                crate::APIDOrLocal::Local => crate::apub_util::LocalObjectRef::User(mention.person)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into(),
+            };
+
+            let mut tag = activitystreams::link::Mention::new();
+
+            tag.set_href(mentioned_ap_id.clone());
+            tag.set_name(mention.text.clone());
+
+            props.add_tag(tag.into_any_base()?);
+
+            props.add_cc(mentioned_ap_id);
         }
 
         Ok(())
@@ -1432,6 +1451,24 @@ pub fn local_comment_to_ap(
     } else {
         obj.set_to(community_ap_id)
             .set_cc(activitystreams::public());
+    }
+
+    for mention in comment.mentions.as_ref() {
+        let mentioned_ap_id = match &mention.ap_id {
+            crate::APIDOrLocal::APID(apid) => apid.clone(),
+            crate::APIDOrLocal::Local => crate::apub_util::LocalObjectRef::User(mention.person)
+                .to_local_uri(&ctx.host_url_apub)
+                .into(),
+        };
+
+        let mut tag = activitystreams::link::Mention::new();
+
+        tag.set_href(mentioned_ap_id.clone());
+        tag.set_name(mention.text.clone());
+
+        obj.add_tag(tag.into_any_base()?);
+
+        obj.add_cc(mentioned_ap_id);
     }
 
     Ok(activitystreams_ext::Ext1::new(
@@ -2074,5 +2111,79 @@ pub async fn verify_incoming_object(
                 )))
             }
         }
+    }
+}
+
+pub async fn fetch_from_webfinger(
+    userpart: &str,
+    host: &str,
+    ctx: Arc<crate::BaseContext>,
+) -> Result<ingest::IngestResult, crate::Error> {
+    let url = fetch_url_from_webfinger(userpart, host, &ctx)
+        .await?
+        .ok_or(crate::Error::InternalStrStatic("No AP object found"))?;
+    fetch_and_ingest(&url, ingest::FoundFrom::Other, ctx)
+        .await?
+        .ok_or(crate::Error::InternalStrStatic(
+            "No local object produced from ingest",
+        ))
+}
+
+pub async fn fetch_url_from_webfinger(
+    userpart: &str,
+    host: &str,
+    ctx: &Arc<crate::BaseContext>,
+) -> Result<Option<url::Url>, crate::Error> {
+    let query = serde_urlencoded::to_string(FingerRequestQuery {
+        resource: format!("acct:{}@{}", userpart, host).into(),
+        rel: Some("self".into()),
+    })?;
+
+    let uri = format!("https://{}/.well-known/webfinger?{}", host, query,);
+    log::debug!("{}", uri);
+    let res = ctx
+        .http_client
+        .request(hyper::Request::get(uri).body(Default::default())?)
+        .await;
+
+    let res = if ctx.dev_mode {
+        match res {
+            Ok(res) => res,
+            Err(_) => {
+                // In dev mode, so we try HTTP too
+
+                let uri = format!("http://{}/.well-known/webfinger?{}", host, query,);
+                log::debug!("{}", uri);
+                ctx.http_client
+                    .request(hyper::Request::get(uri).body(Default::default())?)
+                    .await?
+            }
+        }
+    } else {
+        res?
+    };
+
+    if res.status() == hyper::StatusCode::NOT_FOUND {
+        log::debug!("not found");
+        Ok(None)
+    } else {
+        let res = crate::res_to_error(res).await?;
+
+        let res = hyper::body::to_bytes(res.into_body()).await?;
+        let res: FingerResponse = serde_json::from_slice(&res)?;
+
+        let mut found_uri = None;
+        for entry in res.links {
+            if entry.rel == "self"
+                && entry.type_.as_deref() == Some(crate::apub_util::ACTIVITY_TYPE)
+            {
+                if let Some(href) = entry.href {
+                    found_uri = Some(href.parse()?);
+                    break;
+                }
+            }
+        }
+
+        Ok(found_uri)
     }
 }

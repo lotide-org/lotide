@@ -1772,6 +1772,7 @@ dependencies = [
  "postgres-types",
  "pulldown-cmark",
  "rand 0.7.3",
+ "regex",
  "reqwest",
  "rstest",
  "rusoto_core",

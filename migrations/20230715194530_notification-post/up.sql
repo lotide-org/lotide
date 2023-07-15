@@ -1,0 +1,3 @@
+BEGIN;
+	ALTER TABLE notification ADD COLUMN post BIGINT REFERENCES post;
+COMMIT;
