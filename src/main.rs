@@ -353,6 +353,7 @@ pub struct PostInfo<'a> {
     mentions: &'a [MentionInfo],
 }
 
+#[derive(Clone)]
 pub struct PostInfoOwned {
     id: PostLocalID,
     ap_id: APIDOrLocal,
@@ -722,6 +723,7 @@ pub fn clean_html(src: &str) -> String {
 pub fn on_add_post(
     post: crate::PostInfoOwned,
     community_local: bool,
+    is_new: bool, // TODO if not, is this really an "add"?
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
@@ -735,10 +737,39 @@ pub fn on_add_post(
                         .into(),
                     crate::APIDOrLocal::APID(url) => url,
                 },
-                ctx,
+                ctx.clone(),
             );
         } else if let APIDOrLocal::Local = post.ap_id {
-            apub_util::spawn_enqueue_send_local_post_to_community(post, ctx);
+            apub_util::spawn_enqueue_send_local_post_to_community(post.clone(), ctx.clone());
+        }
+
+        if is_new {
+            let local_mentions: Vec<_> = post
+                .mentions
+                .iter()
+                .filter(|x| x.ap_id == APIDOrLocal::Local)
+                .map(|x| x.person)
+                .collect();
+            if !local_mentions.is_empty() {
+                // local users should get notifications when mentioned
+
+                let rows = {
+                    let db = ctx.db_pool.get().await?;
+
+                    db.query(
+                        "INSERT INTO notification (kind, created_at, post, to_user) SELECT 'post_mention', current_timestamp, $1, * FROM UNNEST($2::BIGINT[])",
+                        &[&post.id, &local_mentions],
+                    ).await?
+                };
+
+                let tasks: Vec<_> = rows
+                    .iter()
+                    .map(|row| tasks::SendNotification {
+                        notification: NotificationID(row.get(0)),
+                    })
+                    .collect();
+                ctx.enqueue_tasks(&tasks).await?;
+            }
         }
 
         Ok(())

@@ -114,6 +114,9 @@ pub enum RespNotificationInfo<'a> {
         reply: RespPostCommentInfo<'a>,
         post: RespPostListPost<'a>,
     },
+    PostMention {
+        post: RespPostListPost<'a>,
+    },
     CommentReply {
         reply: RespPostCommentInfo<'a>,
         comment: RespPostCommentInfo<'a>,

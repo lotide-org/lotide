@@ -1130,7 +1130,7 @@ async fn route_unstable_posts_create(
         mentions,
     };
 
-    crate::on_add_post(post, community_local, ctx);
+    crate::on_add_post(post, community_local, true, ctx);
 
     crate::json_response(&serde_json::json!({ "id": id }))
 }

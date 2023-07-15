@@ -1764,15 +1764,16 @@ async fn handle_recieved_post(
 
     let sensitive = sensitive.unwrap_or(false);
 
-    let (post_local_id, poll_output, created) = {
+    let (post_local_id, poll_output, created, is_new) = {
         let trans = db.transaction().await?;
         let row = trans.query_one(
-            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp, $11) ON CONFLICT (ap_id) DO UPDATE SET approved=($9 OR post.approved), approved_ap_id=(CASE WHEN $9 THEN $10 ELSE post.approved_ap_id END), updated_local=current_timestamp, sensitive=$11 RETURNING id, poll_id, created",
+            "INSERT INTO post (author, href, content_text, content_html, title, created, community, local, ap_id, approved, approved_ap_id, updated_local, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), $7, FALSE, $8, $9, $10, current_timestamp, $11) ON CONFLICT (ap_id) DO UPDATE SET approved=($9 OR post.approved), approved_ap_id=(CASE WHEN $9 THEN $10 ELSE post.approved_ap_id END), updated_local=current_timestamp, sensitive=$11 RETURNING id, poll_id, created, (xmax = 0)",
             &[&author, &href, &content_text, &content_html, &title, &created, &community_local_id, &object_id.as_str(), &approved, &is_announce.map(|x| x.as_str()), &sensitive],
         ).await?;
         let post_local_id = PostLocalID(row.get(0));
         let existing_poll_id: Option<i64> = row.get(1);
         let created = row.get(2);
+        let is_new = row.get(3);
 
         if !mentions.is_empty() {
             log::debug!("inserting mentions {:?}", mentions);
@@ -1887,7 +1888,7 @@ async fn handle_recieved_post(
 
         trans.commit().await?;
 
-        (post_local_id, poll_output, created)
+        (post_local_id, poll_output, created, is_new)
     };
 
     let poll = poll_output.map(|(options, is_closed)| {
@@ -1925,7 +1926,7 @@ async fn handle_recieved_post(
         mentions,
     };
 
-    crate::on_add_post(post, community_is_local, ctx);
+    crate::on_add_post(post, community_is_local, is_new, ctx);
 
     Ok(PostIngestResult {
         id: post_local_id,
