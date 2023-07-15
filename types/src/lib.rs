@@ -122,6 +122,10 @@ pub enum RespNotificationInfo<'a> {
         comment: RespPostCommentInfo<'a>,
         post: RespPostListPost<'a>,
     },
+    CommentMention {
+        comment: RespPostCommentInfo<'a>,
+        post: RespPostListPost<'a>,
+    },
 }
 
 #[derive(Serialize, Clone)]

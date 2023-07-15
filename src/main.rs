@@ -439,7 +439,7 @@ impl<'a> From<&'a PollOptionOwned> for PollOption<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CommentInfo<'a> {
     id: CommentLocalID,
     author: Option<UserLocalID>,
@@ -914,6 +914,8 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                 },
             };
 
+            let mut already_notified = None;
+
             // Generate notifications
             match comment.parent {
                 Some(parent_id) => {
@@ -922,6 +924,9 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             if let Some(parent_author_id) = parent_author_id {
                                 let ctx = ctx.clone();
                                 let comment_id = comment.id;
+
+                                already_notified = Some(parent_author_id);
+
                                 crate::spawn_task(async move {
                                     let db = ctx.db_pool.get().await?;
                                     let row = db.query_one(
@@ -946,6 +951,9 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             let ctx = ctx.clone();
                             let comment_id = comment.id;
                             let comment_post = comment.post;
+
+                            already_notified = Some(post_or_parent_author_local_id);
+
                             crate::spawn_task(async move {
                                 let db = ctx.db_pool.get().await?;
                                 let row = db.query_one(
@@ -1001,15 +1009,42 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
 
                         crate::apub_util::spawn_enqueue_send_comment(
                             inboxes,
-                            comment,
+                            comment.clone(),
                             community_ap_id,
                             post_ap_id.into(),
                             parent_ap_id.map(|x| x.deref().clone()),
                             post_or_parent_author_ap_id.map(|x| x.into_owned().into()),
-                            ctx,
+                            ctx.clone(),
                         );
                     }
                 }
+            }
+
+            let local_mentions: Vec<_> = comment
+                .mentions
+                .iter()
+                .filter(|x| x.ap_id == APIDOrLocal::Local && Some(x.person) != already_notified)
+                .map(|x| x.person)
+                .collect();
+            if !local_mentions.is_empty() {
+                // local users should get notifications when mentioned
+
+                let rows = {
+                    let db = ctx.db_pool.get().await?;
+
+                    db.query(
+                        "INSERT INTO notification (kind, created_at, reply, parent_reply, parent_post, to_user) SELECT 'reply_mention', current_timestamp, $1, $2, $3, * FROM UNNEST($4::BIGINT[])",
+                        &[&comment.id, &comment.parent, &comment.post, &local_mentions],
+                    ).await?
+                };
+
+                let tasks: Vec<_> = rows
+                    .iter()
+                    .map(|row| tasks::SendNotification {
+                        notification: NotificationID(row.get(0)),
+                    })
+                    .collect();
+                ctx.enqueue_tasks(&tasks).await?;
             }
         }
 

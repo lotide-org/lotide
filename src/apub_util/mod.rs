@@ -2149,7 +2149,7 @@ pub async fn fetch_url_from_webfinger(
     let res = if ctx.dev_mode {
         match res {
             Ok(res) => res,
-            Err(err) => {
+            Err(_) => {
                 // In dev mode, so we try HTTP too
 
                 let uri = format!("http://{}/.well-known/webfinger?{}", host, query,);

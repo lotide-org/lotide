@@ -935,6 +935,20 @@ async fn route_unstable_users_notifications_list(
                         None
                     }
                 }
+                "reply_mention" => {
+                    if let Some(reply) = reply {
+                        if let Some(post) = post {
+                            Some(RespNotificationInfo::CommentMention {
+                                comment: reply,
+                                post,
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             };
 
