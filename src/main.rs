@@ -727,6 +727,7 @@ pub fn on_add_post(
     ctx: Arc<crate::RouteContext>,
 ) {
     crate::spawn_task(async move {
+        let author = post.author;
         if community_local {
             on_local_community_add_post(
                 post.community,
@@ -747,7 +748,7 @@ pub fn on_add_post(
             let local_mentions: Vec<_> = post
                 .mentions
                 .iter()
-                .filter(|x| x.ap_id == APIDOrLocal::Local)
+                .filter(|x| x.ap_id == APIDOrLocal::Local && Some(x.person) != author)
                 .map(|x| x.person)
                 .collect();
             if !local_mentions.is_empty() {
@@ -1023,7 +1024,11 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
             let local_mentions: Vec<_> = comment
                 .mentions
                 .iter()
-                .filter(|x| x.ap_id == APIDOrLocal::Local && Some(x.person) != already_notified)
+                .filter(|x| {
+                    x.ap_id == APIDOrLocal::Local
+                        && Some(x.person) != already_notified
+                        && Some(x.person) != comment.author
+                })
                 .map(|x| x.person)
                 .collect();
             if !local_mentions.is_empty() {
