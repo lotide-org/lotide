@@ -2134,19 +2134,34 @@ pub async fn fetch_url_from_webfinger(
     host: &str,
     ctx: &Arc<crate::BaseContext>,
 ) -> Result<Option<url::Url>, crate::Error> {
-    let uri = format!(
-        "https://{}/.well-known/webfinger?{}",
-        host,
-        serde_urlencoded::to_string(FingerRequestQuery {
-            resource: format!("acct:{}@{}", userpart, host).into(),
-            rel: Some("self".into()),
-        })?
-    );
+    let query = serde_urlencoded::to_string(FingerRequestQuery {
+        resource: format!("acct:{}@{}", userpart, host).into(),
+        rel: Some("self".into()),
+    })?;
+
+    let uri = format!("https://{}/.well-known/webfinger?{}", host, query,);
     log::debug!("{}", uri);
     let res = ctx
         .http_client
         .request(hyper::Request::get(uri).body(Default::default())?)
-        .await?;
+        .await;
+
+    let res = if ctx.dev_mode {
+        match res {
+            Ok(res) => res,
+            Err(err) => {
+                // In dev mode, so we try HTTP too
+
+                let uri = format!("http://{}/.well-known/webfinger?{}", host, query,);
+                log::debug!("{}", uri);
+                ctx.http_client
+                    .request(hyper::Request::get(uri).body(Default::default())?)
+                    .await?
+            }
+        }
+    } else {
+        res?
+    };
 
     if res.status() == hyper::StatusCode::NOT_FOUND {
         log::debug!("not found");
