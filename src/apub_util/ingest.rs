@@ -1210,6 +1210,7 @@ async fn ingest_postlike(
                             in_reply_to,
                             attachment_href,
                             sensitive,
+                            mentions,
                             ctx,
                         )
                         .await?
@@ -1359,6 +1360,7 @@ async fn ingest_postlike(
                         in_reply_to,
                         attachment_href,
                         sensitive,
+                        mentions,
                         ctx,
                     )
                     .await?;
@@ -1518,9 +1520,10 @@ async fn handle_recieved_reply(
     in_reply_to: &activitystreams::primitives::OneOrMany<activitystreams::base::AnyBase>,
     attachment_href: Option<&str>,
     sensitive: Option<bool>,
+    mentions: Vec<crate::MentionInfo>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<CommentLocalID>, crate::Error> {
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let author = match author {
         Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
@@ -1588,10 +1591,33 @@ async fn handle_recieved_reply(
 
                 let sensitive = sensitive.unwrap_or(false);
 
-                let row = db.query_opt(
-                    "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id, attachment_href, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7, $8, $9) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
-                    &[&post, &parent, &author, &content_text, &content_html, &created, &object_id.as_str(), &attachment_href, &sensitive],
+                let row = {
+                    let trans = db.transaction().await?;
+                    let row = trans.query_opt(
+                        "INSERT INTO reply (post, parent, author, content_text, content_html, created, local, ap_id, attachment_href, sensitive) VALUES ($1, $2, $3, $4, $5, COALESCE($6, current_timestamp), FALSE, $7, $8, $9) ON CONFLICT (ap_id) DO NOTHING RETURNING id",
+                        &[&post, &parent, &author, &content_text, &content_html, &created, &object_id.as_str(), &attachment_href, &sensitive],
                     ).await?;
+
+                    if let Some(row) = &row {
+                        let id = CommentLocalID(row.get(0));
+
+                        if !mentions.is_empty() {
+                            let (nest_person, nest_text): (Vec<_>, Vec<_>) = mentions
+                                .iter()
+                                .map(|info| (info.person, &info.text))
+                                .unzip();
+
+                            trans.execute(
+                                "INSERT INTO reply_mention (reply, person, text) SELECT $1, * FROM UNNEST($2::BIGINT[], $3::TEXT[]) ON CONFLICT DO NOTHING",
+                                &[&id, &nest_person, &nest_text],
+                            ).await?;
+                        }
+                    }
+
+                    trans.commit().await?;
+
+                    row
+                };
 
                 if let Some(row) = row {
                     let id = CommentLocalID(row.get(0));
@@ -1610,7 +1636,7 @@ async fn handle_recieved_reply(
                         ap_id: crate::APIDOrLocal::APID(object_id.to_owned()),
                         attachment_href: attachment_href.map(|x| Cow::Owned(x.to_owned())),
                         sensitive,
-                        mentions: Cow::Borrowed(&[]),
+                        mentions: Cow::Owned(mentions),
                     };
 
                     crate::on_post_add_comment(info, ctx);
