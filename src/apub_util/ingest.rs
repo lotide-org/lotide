@@ -5,6 +5,7 @@ use crate::types::{
 use activitystreams::prelude::*;
 use serde::Deserialize;
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::future::Future;
 use std::ops::Deref;
@@ -898,16 +899,38 @@ async fn ingest_postlike(
     found_from: FoundFrom,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let (ext, to, in_reply_to, obj_id, poll_info) = match obj.deref() {
-        KnownObject::Page(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
-        KnownObject::Image(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
-        KnownObject::Article(obj) => (Some(&obj.ext_one), obj.to(), None, obj.id_unchecked(), None),
+    let (ext, to, in_reply_to, obj_id, poll_info, tag) = match obj.deref() {
+        KnownObject::Page(obj) => (
+            Some(&obj.ext_one),
+            obj.to(),
+            None,
+            obj.id_unchecked(),
+            None,
+            obj.tag(),
+        ),
+        KnownObject::Image(obj) => (
+            Some(&obj.ext_one),
+            obj.to(),
+            None,
+            obj.id_unchecked(),
+            None,
+            obj.tag(),
+        ),
+        KnownObject::Article(obj) => (
+            Some(&obj.ext_one),
+            obj.to(),
+            None,
+            obj.id_unchecked(),
+            None,
+            obj.tag(),
+        ),
         KnownObject::Note(obj) => (
             Some(&obj.ext_one),
             obj.to(),
             obj.in_reply_to(),
             obj.id_unchecked(),
             None,
+            obj.tag(),
         ),
         KnownObject::Question(obj) => (
             None,
@@ -961,10 +984,88 @@ async fn ingest_postlike(
                     closed_at,
                 }
             }),
+            obj.tag(),
         ),
         _ => return Ok(None), // shouldn't happen?
     };
     let target = ext.as_ref().and_then(|x| x.target.as_ref());
+
+    let mentions = {
+        let tag = match tag {
+            None => vec![],
+            Some(value) => value.iter().collect(),
+        };
+
+        let mut mentions = Vec::new();
+
+        let mut map: HashMap<url::Url, String> = tag
+            .into_iter()
+            .filter_map(|tag| {
+                if let Ok(Some::<activitystreams::link::Mention>(mut mention)) =
+                    tag.clone().extend()
+                {
+                    if let Some(url) = mention.take_href() {
+                        if let Some(name) = mention
+                            .name()
+                            .as_ref()
+                            .and_then(|x| x.as_single_xsd_string())
+                        {
+                            return Some((url, name.to_owned()));
+                        }
+                    }
+                }
+
+                None
+            })
+            .filter_map(|(url, text)| {
+                if let Some(local_ref) =
+                    crate::apub_util::LocalObjectRef::try_from_uri(&url, &ctx.host_url_apub)
+                {
+                    if let crate::apub_util::LocalObjectRef::User(user_id) = local_ref {
+                        mentions.push(crate::MentionInfo {
+                            text,
+                            person: user_id,
+                            ap_id: crate::APIDOrLocal::Local,
+                        });
+                    }
+
+                    None
+                } else {
+                    Some((url, text))
+                }
+            })
+            .collect();
+
+        log::debug!("handling mentions: {} {}", mentions.len(), map.len());
+
+        if !map.is_empty() {
+            let urls: Vec<&str> = map.keys().map(|x| x.as_str()).collect();
+
+            log::debug!("looking up mentioned users {:?}", urls);
+
+            let db = ctx.db_pool.get().await?;
+
+            let rows = db
+                .query(
+                    "SELECT id, ap_id FROM person WHERE ap_id=ANY($1::TEXT[])",
+                    &[&urls],
+                )
+                .await?;
+
+            mentions.extend(rows.into_iter().map(|row| {
+                let ap_id: &str = row.get(1);
+                let ap_id: url::Url = ap_id.parse().unwrap();
+
+                crate::MentionInfo {
+                    text: map.remove(&ap_id).unwrap(),
+                    person: UserLocalID(row.get(0)),
+                    ap_id: crate::APIDOrLocal::APID(ap_id),
+                }
+            }));
+        }
+
+        mentions
+    };
 
     let community_found = match target
         .as_ref()
@@ -1024,6 +1125,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
+                mentions,
                 Verified(obj).into(),
                 ctx,
             )
@@ -1034,6 +1136,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
+                mentions,
                 Verified(obj).into(),
                 ctx,
             )
@@ -1044,6 +1147,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
+                mentions,
                 Verified(obj).into(),
                 ctx,
             )
@@ -1054,6 +1158,7 @@ async fn ingest_postlike(
                 community_is_local,
                 found_from.as_announce(),
                 poll_info,
+                mentions,
                 Verified(try_transform_inner(obj)?),
                 ctx,
             )
@@ -1189,6 +1294,7 @@ async fn ingest_postlike(
                                 found_from.as_announce(),
                                 poll_info,
                                 sensitive,
+                                mentions,
                                 ctx,
                             )
                             .await?,
@@ -1538,6 +1644,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     community_is_local: bool,
     is_announce: Option<&url::Url>,
     poll_info: Option<PollIngestInfo>,
+    mentions: Vec<crate::MentionInfo>,
     obj: Verified<ExtendedPostlike<activitystreams::object::Object<Kind>>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<PostIngestResult>, crate::Error> {
@@ -1588,6 +1695,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
                 is_announce,
                 poll_info,
                 sensitive,
+                mentions,
                 ctx,
             )
             .await?,
@@ -1610,6 +1718,7 @@ async fn handle_recieved_post(
     is_announce: Option<&url::Url>,
     poll_info: Option<PollIngestInfo>,
     sensitive: Option<bool>,
+    mentions: Vec<crate::MentionInfo>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<PostIngestResult, crate::Error> {
     let mut db = ctx.db_pool.get().await?;
@@ -1638,6 +1747,19 @@ async fn handle_recieved_post(
         let post_local_id = PostLocalID(row.get(0));
         let existing_poll_id: Option<i64> = row.get(1);
         let created = row.get(2);
+
+        if !mentions.is_empty() {
+            log::debug!("inserting mentions {:?}", mentions);
+            let (nest_person, nest_text): (Vec<_>, Vec<_>) = mentions
+                .iter()
+                .map(|info| (info.person, &info.text))
+                .unzip();
+
+            trans.execute(
+                "INSERT INTO post_mention (post, person, text) SELECT $1, * FROM UNNEST($2::BIGINT[], $3::TEXT[]) ON CONFLICT DO NOTHING",
+                &[&post_local_id, &nest_person, &nest_text],
+            ).await?;
+        }
 
         let poll_output = if let Some(poll_id) = existing_poll_id {
             if let Some(poll_info) = &poll_info {
@@ -1774,7 +1896,7 @@ async fn handle_recieved_post(
         community: community_local_id,
         poll: poll.clone(),
         sensitive,
-        mentions: vec![], // TODO
+        mentions,
     };
 
     crate::on_add_post(post, community_is_local, ctx);
