@@ -4,6 +4,7 @@ version = "0.13.0-dev"
 authors = ["Colin Reeder <colin@vpzom.click>"]
 edition = "2018"
 license = "AGPL-3.0-or-later"
+rust-version = "1.70.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
