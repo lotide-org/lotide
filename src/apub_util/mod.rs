@@ -1150,7 +1150,7 @@ pub fn post_to_ap(
             .set_attributed_to(
                 LocalObjectRef::User(post.author.unwrap()).to_local_uri(&ctx.host_url_apub),
             )
-            .set_published(*post.created)
+            .set_published(post.created)
             .set_to(community_ap_id)
             .set_cc(activitystreams::public());
 

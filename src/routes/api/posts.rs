@@ -1116,6 +1116,7 @@ async fn route_unstable_posts_create(
 
     let post = crate::PostInfoOwned {
         id,
+        ap_id: crate::APIDOrLocal::Local,
         author: Some(user),
         content_text,
         content_markdown,
@@ -1129,22 +1130,7 @@ async fn route_unstable_posts_create(
         mentions,
     };
 
-    crate::spawn_task(async move {
-        if community_local {
-            crate::on_local_community_add_post(
-                post.community,
-                post.id,
-                crate::apub_util::LocalObjectRef::Post(post.id)
-                    .to_local_uri(&ctx.host_url_apub)
-                    .into(),
-                ctx,
-            );
-        } else {
-            crate::apub_util::spawn_enqueue_send_local_post_to_community(post, ctx);
-        }
-
-        Ok(())
-    });
+    crate::on_add_post(post, community_local, ctx);
 
     crate::json_response(&serde_json::json!({ "id": id }))
 }

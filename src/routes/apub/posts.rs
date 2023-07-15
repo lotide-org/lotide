@@ -149,8 +149,9 @@ async fn handler_posts_get(
 
             let post_info = crate::PostInfo {
                 author: Some(UserLocalID(row.get(0))),
+                ap_id: &crate::APIDOrLocal::Local,
                 community: community_local_id,
-                created: &row.get(3),
+                created: row.get(3),
                 href: row.get(1),
                 content_text: row.get(8),
                 content_markdown: row.get(9),
@@ -282,8 +283,9 @@ async fn handler_posts_create_get(
 
             let post_info = crate::PostInfo {
                 author: Some(UserLocalID(row.get(0))),
+                ap_id: &crate::APIDOrLocal::Local,
                 community: community_local_id,
-                created: &row.get(3),
+                created: row.get(3),
                 href: row.get(1),
                 content_text: row.get(7),
                 content_markdown: row.get(8),

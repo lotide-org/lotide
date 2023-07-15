@@ -397,13 +397,14 @@ async fn handler_users_outbox_page_get(
 
                 let post_info = crate::PostInfo {
                     id: PostLocalID(row.get(1)),
+                    ap_id: &crate::APIDOrLocal::Local,
                     author: Some(user),
                     href: row.get(2),
                     content_text: row.get(5),
                     content_markdown: row.get(6),
                     content_html: row.get(7),
                     title: row.get(3),
-                    created: &created,
+                    created,
                     community: community_id,
                     poll,
                     sensitive: row.get(24),

@@ -336,6 +336,8 @@ impl std::str::FromStr for TimestampOrLatest {
 #[derive(Debug)]
 pub struct PostInfo<'a> {
     id: PostLocalID,
+    #[allow(dead_code)]
+    ap_id: &'a APIDOrLocal,
     author: Option<UserLocalID>,
     href: Option<&'a str>,
     content_text: Option<&'a str>,
@@ -343,7 +345,7 @@ pub struct PostInfo<'a> {
     content_markdown: Option<&'a str>,
     content_html: Option<&'a str>,
     title: &'a str,
-    created: &'a chrono::DateTime<chrono::FixedOffset>,
+    created: chrono::DateTime<chrono::FixedOffset>,
     #[allow(dead_code)]
     community: CommunityLocalID,
     poll: Option<Cow<'a, PollInfo<'a>>>,
@@ -353,6 +355,7 @@ pub struct PostInfo<'a> {
 
 pub struct PostInfoOwned {
     id: PostLocalID,
+    ap_id: APIDOrLocal,
     author: Option<UserLocalID>,
     href: Option<String>,
     content_text: Option<String>,
@@ -370,13 +373,14 @@ impl<'a> From<&'a PostInfoOwned> for PostInfo<'a> {
     fn from(src: &'a PostInfoOwned) -> PostInfo<'a> {
         PostInfo {
             id: src.id,
+            ap_id: &src.ap_id,
             author: src.author,
             href: src.href.as_deref(),
             content_text: src.content_text.as_deref(),
             content_markdown: src.content_markdown.as_deref(),
             content_html: src.content_html.as_deref(),
             title: &src.title,
-            created: &src.created,
+            created: src.created,
             community: src.community,
             poll: src.poll.as_ref().map(|x| Cow::Owned(x.into())),
             sensitive: src.sensitive,
@@ -392,6 +396,7 @@ pub struct PollInfo<'a> {
     closed_at: Option<&'a chrono::DateTime<chrono::FixedOffset>>,
 }
 
+#[derive(Clone)]
 pub struct PollInfoOwned {
     multiple: bool,
     options: Vec<PollOptionOwned>,
@@ -712,6 +717,32 @@ lazy_static::lazy_static! {
 
 pub fn clean_html(src: &str) -> String {
     SANITIZER.clean(src).to_string()
+}
+
+pub fn on_add_post(
+    post: crate::PostInfoOwned,
+    community_local: bool,
+    ctx: Arc<crate::RouteContext>,
+) {
+    crate::spawn_task(async move {
+        if community_local {
+            on_local_community_add_post(
+                post.community,
+                post.id,
+                match post.ap_id {
+                    crate::APIDOrLocal::Local => crate::apub_util::LocalObjectRef::Post(post.id)
+                        .to_local_uri(&ctx.host_url_apub)
+                        .into(),
+                    crate::APIDOrLocal::APID(url) => url,
+                },
+                ctx,
+            );
+        } else if let APIDOrLocal::Local = post.ap_id {
+            apub_util::spawn_enqueue_send_local_post_to_community(post, ctx);
+        }
+
+        Ok(())
+    });
 }
 
 pub fn on_local_community_add_post(
