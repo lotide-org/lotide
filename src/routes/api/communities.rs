@@ -675,12 +675,17 @@ async fn route_unstable_communities_patch(
 
         crate::apub_util::spawn_enqueue_send_new_community_update(community_id, ctx);
     } else if let Some(description) = body.description_markdown {
-        let html =
-            tokio::task::block_in_place(|| crate::markdown::render_markdown_simple(&description));
+        let (html, md) = tokio::task::spawn_blocking(move || {
+            (
+                crate::markdown::render_markdown_simple(&description),
+                description,
+            )
+        })
+        .await?;
 
         db.execute(
             "UPDATE community SET description=NULL, description_markdown=$1, description_html=$3 WHERE id=$2",
-            &[&description, &community_id, &html],
+            &[&md, &community_id, &html],
         )
         .await?;
 

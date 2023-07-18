@@ -428,12 +428,17 @@ async fn route_unstable_users_patch(
         changes.push(("description", description));
         changes.push(("description_markdown", &Option::<&str>::None));
         changes.push(("description_html", &Option::<&str>::None));
-    } else if let Some(description) = &body.description_markdown {
-        let html =
-            tokio::task::block_in_place(|| crate::markdown::render_markdown_simple(&description));
+    } else if let Some(description) = body.description_markdown {
+        let (html, md) = tokio::task::spawn_blocking(move || {
+            (
+                crate::markdown::render_markdown_simple(&description),
+                description,
+            )
+        })
+        .await?;
 
         changes.push(("description", &Option::<&str>::None));
-        changes.push(("description_markdown", description));
+        changes.push(("description_markdown", arena.alloc(md)));
         changes.push(("description_html", arena.alloc(html)));
     } else if let Some(description) = body.description_html.as_ref() {
         changes.push(("description", &Option::<&str>::None));

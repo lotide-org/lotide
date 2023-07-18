@@ -720,13 +720,17 @@ async fn route_unstable_instance_patch(
             )
             .await?;
         } else if let Some(description) = body.description_markdown {
-            let html = tokio::task::block_in_place(|| {
-                crate::markdown::render_markdown_simple(&description)
-            });
+            let (html, md) = tokio::task::spawn_blocking(move || {
+                (
+                    crate::markdown::render_markdown_simple(&description),
+                    description,
+                )
+            })
+            .await?;
 
             db.execute(
                 "UPDATE site SET description=NULL, description_markdown=$1, description_html=$2",
-                &[&description, &html],
+                &[&md, &html],
             )
             .await?;
         } else if let Some(description) = body.description_html {
@@ -1452,52 +1456,48 @@ pub async fn render_markdown_with_mentions(
 
     let mut found_mentions = HashSet::new();
 
-    let parsed = tokio::task::block_in_place(|| {
-        let parsed: Vec<StreamItem> = crate::markdown::parse_markdown(&src)
-            .flat_map(|evt| match evt {
-                pulldown_cmark::Event::Text(text) => {
-                    let mentions = crate::markdown::MENTION_REGEX.captures_iter(&text);
-                    let mut covered = 0;
+    let parsed: Vec<StreamItem> = crate::markdown::parse_markdown(&src)
+        .flat_map(|evt| match evt {
+            pulldown_cmark::Event::Text(text) => {
+                let mentions = crate::markdown::MENTION_REGEX.captures_iter(&text);
+                let mut covered = 0;
 
-                    let mut result = Vec::new();
+                let mut result = Vec::new();
 
-                    for mention in mentions {
-                        let full = mention.get(0).unwrap();
-                        if covered < full.start() {
-                            result.push(StreamItem::Event(pulldown_cmark::Event::Text(
-                                text[covered..full.start()].to_owned().into(),
-                            )));
-                        }
-
-                        let mention = Mention {
-                            userpart: mention[1].to_owned(),
-                            host: mention[2].to_owned(),
-                        };
-                        result.push(StreamItem::Mention(mention.clone()));
-                        found_mentions.insert(mention);
-                        covered = full.end();
+                for mention in mentions {
+                    let full = mention.get(0).unwrap();
+                    if covered < full.start() {
+                        result.push(StreamItem::Event(pulldown_cmark::Event::Text(
+                            text[covered..full.start()].to_owned().into(),
+                        )));
                     }
 
-                    if covered == 0 {
-                        either::Either::Left(std::iter::once(StreamItem::Event(
-                            pulldown_cmark::Event::Text(text),
-                        )))
-                    } else {
-                        if covered < text.len() {
-                            result.push(StreamItem::Event(pulldown_cmark::Event::Text(
-                                text[covered..].to_owned().into(),
-                            )));
-                        }
-
-                        either::Either::Right(result.into_iter())
-                    }
+                    let mention = Mention {
+                        userpart: mention[1].to_owned(),
+                        host: mention[2].to_owned(),
+                    };
+                    result.push(StreamItem::Mention(mention.clone()));
+                    found_mentions.insert(mention);
+                    covered = full.end();
                 }
-                other => either::Either::Left(std::iter::once(StreamItem::Event(other))),
-            })
-            .collect();
 
-        parsed
-    });
+                if covered == 0 {
+                    either::Either::Left(std::iter::once(StreamItem::Event(
+                        pulldown_cmark::Event::Text(text),
+                    )))
+                } else {
+                    if covered < text.len() {
+                        result.push(StreamItem::Event(pulldown_cmark::Event::Text(
+                            text[covered..].to_owned().into(),
+                        )));
+                    }
+
+                    either::Either::Right(result.into_iter())
+                }
+            }
+            other => either::Either::Left(std::iter::once(StreamItem::Event(other))),
+        })
+        .collect();
 
     let mention_map: HashMap<_, _> = futures::stream::iter(found_mentions)
         .then(|mention| async move {
@@ -1586,8 +1586,7 @@ pub async fn render_markdown_with_mentions(
         }
     });
 
-    let result =
-        tokio::task::block_in_place(|| crate::markdown::render_markdown_from_stream(content));
+    let result = crate::markdown::render_markdown_from_stream(content);
 
     Ok((
         result,
