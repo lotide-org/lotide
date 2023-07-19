@@ -1021,7 +1021,7 @@ async fn route_unstable_communities_modlog_events_list(
     let mut values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
         vec![&community, &inner_limit];
 
-    let rows = db.query(&format!("SELECT modlog_event.id, modlog_event.time, modlog_event.action, post.id, post.title, post.ap_id, post.local, post.sensitive FROM modlog_event LEFT OUTER JOIN post ON (post.id = modlog_event.post) WHERE modlog_event.by_community=$1{}ORDER BY modlog_event.id DESC LIMIT $2", if let Some(page) = &page {
+    let rows = db.query(&format!("SELECT modlog_event.id, modlog_event.time, modlog_event.action, post.id, post.title, post.ap_id, post.local, post.sensitive FROM modlog_event LEFT OUTER JOIN post ON (post.id = modlog_event.post) WHERE modlog_event.by_community=$1{} ORDER BY modlog_event.id DESC LIMIT $2", if let Some(page) = &page {
         values.push(page);
 
         " AND modlog_event.id <= $3"
