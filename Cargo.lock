@@ -1764,7 +1764,7 @@ checksum = "b06a4cde4c0f271a446782e3eff8de789548ce57dbc8eca9292c27f4a42004b4"
 
 [[package]]
 name = "lotide"
-version = "0.13.0-dev"
+version = "0.13.0-rc.1"
 dependencies = [
  "activitystreams",
  "activitystreams-ext",
