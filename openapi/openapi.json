@@ -1289,7 +1289,7 @@
 							"application/json": {
 								"schema": {
 									"type": "object",
-									"required": ["software", "description", "web_push_vapid_key", "signup_allowed"],
+									"required": ["software", "description", "web_push_vapid_key", "signup_allowed", "invitations_enabled", "community_creation_requirement", "invitation_creation_requirement"],
 									"properties": {
 										"software": {
 											"type": "object",
@@ -1307,6 +1307,19 @@
 										},
 										"signup_allowed": {
 											"type": "boolean"
+										},
+										"invitations_enabled": {
+											"type": "boolean"
+										},
+										"community_creation_requirement": {
+											"nullable": true,
+											"type": "string",
+											"enum": ["site_admin"]
+										},
+										"invitation_creation_requirement": {
+											"nullable": true,
+											"type": "string",
+											"enum": ["site_admin"]
 										}
 									}
 								}
@@ -1327,7 +1340,18 @@
 									"description_text": {"type": "string"},
 									"description_markdown": {"type": "string"},
 									"description_html": {"type": "string"},
-									"signup_allowed": {"type": "boolean"}
+									"signup_allowed": {"type": "boolean"},
+									"invitations_enabled": {"type": "boolean"},
+									"community_creation_requirement": {
+										"nullable": true,
+										"type": "string",
+										"enum": ["site_admin"]
+									},
+									"invitation_creation_requirement": {
+										"nullable": true,
+										"type": "string",
+										"enum": ["site_admin"]
+									}
 								}
 							}
 						}
