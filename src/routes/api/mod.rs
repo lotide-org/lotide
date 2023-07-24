@@ -649,12 +649,15 @@ async fn route_unstable_instance_get(
     let db = ctx.db_pool.get().await?;
 
     let row = db
-        .query_one("SELECT description, description_markdown, description_html, signup_allowed FROM site WHERE local = TRUE", &[])
+        .query_one("SELECT description, description_markdown, description_html, signup_allowed, community_creation_requirement, allow_invitations, users_create_invitations FROM site WHERE local = TRUE", &[])
         .await?;
     let description_text: Option<&str> = row.get(0);
     let description_markdown: Option<&str> = row.get(1);
     let description_html: Option<&str> = row.get(2);
     let signup_allowed: bool = row.get(3);
+    let community_creation_requirement: Option<&str> = row.get(4);
+    let allow_invitations: bool = row.get(5);
+    let users_create_invitations: bool = row.get(6);
 
     let body = serde_json::json!({
         "web_push_vapid_key": ctx.vapid_public_key_base64,
@@ -667,7 +670,14 @@ async fn route_unstable_instance_get(
             "name": "lotide",
             "version": env!("CARGO_PKG_VERSION"),
         },
-        "signup_allowed": signup_allowed
+        "signup_allowed": signup_allowed,
+        "invitations_enabled": allow_invitations,
+        "community_creation_requirement": community_creation_requirement,
+        "invitation_creation_requirement": if users_create_invitations {
+            None
+        } else {
+            Some("site_admin")
+        },
     });
 
     crate::json_response(&body)
@@ -684,6 +694,11 @@ async fn route_unstable_instance_patch(
         description_markdown: Option<Cow<'a, str>>,
         description_html: Option<Cow<'a, str>>,
         signup_allowed: Option<bool>,
+        invitations_enabled: Option<bool>,
+        #[serde(default, with = "::serde_with::rust::double_option")]
+        community_creation_requirement: Option<Option<Cow<'a, str>>>,
+        #[serde(default, with = "::serde_with::rust::double_option")]
+        invitation_creation_requirement: Option<Option<Cow<'a, str>>>,
     }
 
     let lang = crate::get_lang_for_req(&req);
@@ -713,33 +728,92 @@ async fn route_unstable_instance_patch(
             )));
         }
 
-        if let Some(description) = body.description_text {
-            db.execute(
-                "UPDATE site SET description=$1, description_markdown=NULL, description_html=NULL",
-                &[&description],
-            )
-            .await?;
-        } else if let Some(description) = body.description_markdown {
+        let mut changes = Vec::<(&str, &(dyn tokio_postgres::types::ToSql + Sync))>::new();
+
+        let arena = bumpalo::Bump::new();
+
+        if let Some(description) = body.description_text.as_ref() {
+            changes.push(("description", description));
+            changes.push(("description_markdown", &Option::<&str>::None));
+            changes.push(("description_html", &Option::<&str>::None));
+        } else if let Some(description) = &body.description_markdown {
             let html = tokio::task::block_in_place(|| {
                 crate::markdown::render_markdown_simple(&description)
             });
 
-            db.execute(
-                "UPDATE site SET description=NULL, description_markdown=$1, description_html=$2",
-                &[&description, &html],
-            )
-            .await?;
-        } else if let Some(description) = body.description_html {
-            db.execute(
-                "UPDATE site SET description=NULL, description_markdown=NULL, description_html=$1",
-                &[&description],
-            )
-            .await?;
+            changes.push(("description", &Option::<&str>::None));
+            changes.push(("description_markdown", description));
+            changes.push(("description_html", arena.alloc(html)));
+        } else if let Some(description) = body.description_html.as_ref() {
+            changes.push(("description", &Option::<&str>::None));
+            changes.push(("description_markdown", &Option::<&str>::None));
+            changes.push(("description_html", description));
         }
 
-        if let Some(signup_allowed) = body.signup_allowed {
-            db.execute("UPDATE site SET signup_allowed=$1", &[&signup_allowed])
-                .await?;
+        if let Some(signup_allowed) = &body.signup_allowed {
+            changes.push(("signup_allowed", signup_allowed));
+        }
+
+        if let Some(community_creation_requirement) = &body.community_creation_requirement {
+            match community_creation_requirement.as_deref() {
+                None | Some("site_admin") => {
+                    changes.push((
+                        "community_creation_requirement",
+                        community_creation_requirement,
+                    ));
+                }
+                _ => {
+                    return Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        "Invalid requirement",
+                    )));
+                }
+            }
+        }
+
+        if let Some(allow_invitations) = &body.invitations_enabled {
+            changes.push(("allow_invitations", allow_invitations));
+        }
+
+        if let Some(invitation_creation_requirement) = &body.invitation_creation_requirement {
+            let value = match invitation_creation_requirement.as_deref() {
+                None => &true,
+                Some("site_admin") => &false,
+                _ => {
+                    return Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        "Invalid requirement",
+                    )));
+                }
+            };
+
+            changes.push(("users_create_invitations", value));
+        }
+
+        if !changes.is_empty() {
+            use std::fmt::Write;
+
+            let mut sql = "UPDATE site SET ".to_owned();
+            let values: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = changes
+                .iter()
+                .enumerate()
+                .map(|(idx, (key, value))| {
+                    write!(
+                        sql,
+                        "{}{}=${}",
+                        if idx == 0 { "" } else { "," },
+                        key,
+                        idx + 1
+                    )
+                    .unwrap();
+
+                    *value
+                })
+                .collect();
+
+            let sql: &str = &sql;
+
+            db.execute(sql, &values).await?;
         }
 
         Ok(crate::empty_response())
