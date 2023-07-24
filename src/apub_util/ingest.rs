@@ -52,6 +52,11 @@ pub struct PostIngestResult {
     pub poll: Option<crate::PollInfoOwned>,
 }
 
+const UTC_OFFSET: chrono::offset::FixedOffset = match chrono::offset::FixedOffset::east_opt(0) {
+    Some(value) => value,
+    None => unreachable!(),
+};
+
 pub async fn ingest_object(
     object: Verified<KnownObject>,
     found_from: FoundFrom,
@@ -1630,8 +1635,7 @@ async fn handle_recieved_reply(
                         content_markdown: None,
                         content_html: content_html.map(|x| Cow::Owned(x.to_owned())),
                         created: created.copied().unwrap_or_else(|| {
-                            chrono::offset::Utc::now()
-                                .with_timezone(&chrono::offset::FixedOffset::west(0))
+                            chrono::offset::Utc::now().with_timezone(&UTC_OFFSET)
                         }),
                         ap_id: crate::APIDOrLocal::APID(object_id.to_owned()),
                         attachment_href: attachment_href.map(|x| Cow::Owned(x.to_owned())),
