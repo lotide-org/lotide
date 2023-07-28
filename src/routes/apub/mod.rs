@@ -308,13 +308,13 @@ async fn handler_users_outbox_page_get(
             let created: chrono::DateTime<chrono::FixedOffset> = row.get(4);
 
             let mentions = match row.get::<_, Option<
-                postgres_types::Json<Vec<(String, i64, bool, Option<String>)>>,
+                Vec<postgres_types::Json<(String, i64, bool, Option<String>)>>,
             >>(25)
             {
                 None => vec![],
                 Some(list) => list
-                    .0
                     .into_iter()
+                    .map(|x| x.0)
                     .filter_map(|(text, person_raw_id, local, ap_id)| {
                         let person = UserLocalID(person_raw_id);
 
