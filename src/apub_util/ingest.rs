@@ -904,7 +904,7 @@ async fn ingest_postlike(
     found_from: FoundFrom,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let (ext, to, in_reply_to, obj_id, poll_info, tag) = match obj.deref() {
+    let (ext, to, in_reply_to, obj_id, poll_info, tag, maybe_url, attachment) = match obj.deref() {
         KnownObject::Page(obj) => (
             Some(&obj.ext_one),
             obj.to(),
@@ -912,6 +912,8 @@ async fn ingest_postlike(
             obj.id_unchecked(),
             None,
             obj.tag(),
+            obj.url(),
+            obj.attachment(),
         ),
         KnownObject::Image(obj) => (
             Some(&obj.ext_one),
@@ -920,6 +922,8 @@ async fn ingest_postlike(
             obj.id_unchecked(),
             None,
             obj.tag(),
+            None,
+            obj.attachment(),
         ),
         KnownObject::Article(obj) => (
             Some(&obj.ext_one),
@@ -928,6 +932,8 @@ async fn ingest_postlike(
             obj.id_unchecked(),
             None,
             obj.tag(),
+            None,
+            obj.attachment(),
         ),
         KnownObject::Note(obj) => (
             Some(&obj.ext_one),
@@ -936,6 +942,8 @@ async fn ingest_postlike(
             obj.id_unchecked(),
             None,
             obj.tag(),
+            None,
+            obj.attachment(),
         ),
         KnownObject::Question(obj) => (
             None,
@@ -990,6 +998,8 @@ async fn ingest_postlike(
                 }
             }),
             obj.tag(),
+            None,
+            obj.attachment(),
         ),
         _ => return Ok(None), // shouldn't happen?
     };
@@ -1072,6 +1082,64 @@ async fn ingest_postlike(
         mentions
     };
 
+    // Interpret attachments (usually images) as links
+    let href = attachment
+        .and_then(|x| x.iter().next())
+        .and_then(|base: &activitystreams::base::AnyBase| {
+            match base.kind_str() {
+                Some("Document") => Some(
+                    activitystreams::object::Document::from_any_base(
+                        base.clone(),
+                    )
+                    .map(|obj| {
+                        obj.unwrap()
+                            .take_url()
+                            .as_ref()
+                            .and_then(|href| {
+                                href.iter()
+                                    .filter_map(|x| x.as_xsd_any_uri())
+                                    .next()
+                            })
+                            .map(|href| href.as_str().to_owned())
+                    }),
+                ),
+                Some("Image") => Some(
+                    activitystreams::object::Image::from_any_base(base.clone())
+                        .map(|obj| {
+                            obj.unwrap()
+                                .take_url()
+                                .as_ref()
+                                .and_then(|href| {
+                                    href.iter()
+                                        .filter_map(|x| x.as_xsd_any_uri())
+                                        .next()
+                                })
+                                .map(|href| href.as_str().to_owned())
+                        }),
+                ),
+                Some("Link") => Some(
+                    activitystreams::link::Link::<
+                        activitystreams::link::kind::LinkType,
+                    >::from_any_base(
+                        base.clone()
+                    )
+                    .map(|obj| {
+                        obj.unwrap()
+                            .take_href()
+                            .map(|href| href.as_str().to_owned())
+                    }),
+                ),
+                _ => None,
+            }
+        })
+        .transpose()?
+        .flatten()
+        .or_else(|| {
+            maybe_url
+                .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
+                .map(|href| href.as_str().to_owned())
+        });
+
     let community_found = match target
         .as_ref()
         .and_then(|target| target.as_one().and_then(|x| x.id()))
@@ -1131,6 +1199,7 @@ async fn ingest_postlike(
                 found_from.as_announce(),
                 poll_info,
                 mentions,
+                href,
                 Verified(obj).into(),
                 ctx,
             )
@@ -1142,6 +1211,7 @@ async fn ingest_postlike(
                 found_from.as_announce(),
                 poll_info,
                 mentions,
+                href,
                 Verified(obj).into(),
                 ctx,
             )
@@ -1153,6 +1223,7 @@ async fn ingest_postlike(
                 found_from.as_announce(),
                 poll_info,
                 mentions,
+                href,
                 Verified(obj).into(),
                 ctx,
             )
@@ -1164,6 +1235,7 @@ async fn ingest_postlike(
                 found_from.as_announce(),
                 poll_info,
                 mentions,
+                href,
                 Verified(try_transform_inner(obj)?),
                 ctx,
             )
@@ -1176,35 +1248,37 @@ async fn ingest_postlike(
                 let created = obj.published();
                 let author = obj.attributed_to().and_then(|x| x.as_single_id());
 
-                // fetch first attachment
-                let attachment_href = obj
-                    .attachment()
-                    .and_then(|x| x.iter().next())
-                    .and_then(
-                        |base: &activitystreams::base::AnyBase| match base.kind_str() {
-                            Some("Document") => Some(
-                                activitystreams::object::Document::from_any_base(base.clone())
-                                    .map(|obj| obj.unwrap().take_url()),
-                            ),
-                            Some("Image") => Some(
-                                activitystreams::object::Image::from_any_base(base.clone())
-                                    .map(|obj| obj.unwrap().take_url()),
-                            ),
-                            _ => None,
-                        },
-                    )
-                    .transpose()?
-                    .flatten();
-                let attachment_href = attachment_href
-                    .as_ref()
-                    .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
-                    .map(|href| href.as_str());
-
                 if let Some(object_id) = obj.id_unchecked() {
                     let sensitive = obj.ext_two.sensitive;
 
                     if let Some(in_reply_to) = obj.in_reply_to() {
                         // it's a reply
+
+                        // fetch first attachment
+                        let attachment_href = obj
+                            .attachment()
+                            .and_then(|x| x.iter().next())
+                            .and_then(|base: &activitystreams::base::AnyBase| {
+                                match base.kind_str() {
+                                    Some("Document") => Some(
+                                        activitystreams::object::Document::from_any_base(
+                                            base.clone(),
+                                        )
+                                        .map(|obj| obj.unwrap().take_url()),
+                                    ),
+                                    Some("Image") => Some(
+                                        activitystreams::object::Image::from_any_base(base.clone())
+                                            .map(|obj| obj.unwrap().take_url()),
+                                    ),
+                                    _ => None,
+                                }
+                            })
+                            .transpose()?
+                            .flatten();
+                        let attachment_href = attachment_href
+                            .as_ref()
+                            .and_then(|href| href.iter().filter_map(|x| x.as_xsd_any_uri()).next())
+                            .map(|href| href.as_str());
 
                         Ok(handle_recieved_reply(
                             object_id,
@@ -1231,59 +1305,6 @@ async fn ingest_postlike(
                             .or_else(|| summary.as_ref().and_then(|x| x.as_single_xsd_string()))
                             .unwrap_or("");
 
-                        // Interpret attachments (usually images) as links
-                        let href = obj
-                            .attachment()
-                            .and_then(|x| x.iter().next())
-                            .and_then(|base: &activitystreams::base::AnyBase| {
-                                match base.kind_str() {
-                                    Some("Document") => Some(
-                                        activitystreams::object::Document::from_any_base(
-                                            base.clone(),
-                                        )
-                                        .map(|obj| {
-                                            obj.unwrap()
-                                                .take_url()
-                                                .as_ref()
-                                                .and_then(|href| {
-                                                    href.iter()
-                                                        .filter_map(|x| x.as_xsd_any_uri())
-                                                        .next()
-                                                })
-                                                .map(|href| href.as_str().to_owned())
-                                        }),
-                                    ),
-                                    Some("Image") => Some(
-                                        activitystreams::object::Image::from_any_base(base.clone())
-                                            .map(|obj| {
-                                                obj.unwrap()
-                                                    .take_url()
-                                                    .as_ref()
-                                                    .and_then(|href| {
-                                                        href.iter()
-                                                            .filter_map(|x| x.as_xsd_any_uri())
-                                                            .next()
-                                                    })
-                                                    .map(|href| href.as_str().to_owned())
-                                            }),
-                                    ),
-                                    Some("Link") => Some(
-                                        activitystreams::link::Link::<
-                                            activitystreams::link::kind::LinkType,
-                                        >::from_any_base(
-                                            base.clone()
-                                        )
-                                        .map(|obj| {
-                                            obj.unwrap()
-                                                .take_href()
-                                                .map(|href| href.as_str().to_owned())
-                                        }),
-                                    ),
-                                    _ => None,
-                                }
-                            })
-                            .transpose()?
-                            .flatten();
                         let sensitive = obj.ext_two.sensitive;
 
                         Ok(Some(IngestResult::Post(
@@ -1675,6 +1696,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
     is_announce: Option<&url::Url>,
     poll_info: Option<PollIngestInfo>,
     mentions: Vec<crate::MentionInfo>,
+    href: Option<String>,
     obj: Verified<ExtendedPostlike<activitystreams::object::Object<Kind>>>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<PostIngestResult>, crate::Error> {
@@ -1687,18 +1709,6 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
         .filter_map(|maybe| maybe.as_xsd_string())
         .next()
         .unwrap_or("");
-    let href = obj
-        .url()
-        .iter()
-        .map(|x| x.iter())
-        .flatten()
-        .filter_map(|maybe| {
-            maybe
-                .as_xsd_any_uri()
-                .map(|x| x.as_str())
-                .or_else(|| maybe.as_xsd_string())
-        })
-        .next();
     let content = obj.content();
     let content = content.as_ref().and_then(|x| x.as_single_xsd_string());
     let media_type = obj.media_type();
@@ -1715,7 +1725,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
             handle_recieved_post(
                 object_id.clone(),
                 title,
-                href,
+                href.as_deref(),
                 content,
                 media_type,
                 created.as_ref(),
