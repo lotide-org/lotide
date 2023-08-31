@@ -36,6 +36,9 @@ pub struct Config {
 
     #[serde(default)]
     pub break_stuff: bool,
+
+    #[serde(default)]
+    pub debug_stuck: bool,
 }
 
 impl Config {

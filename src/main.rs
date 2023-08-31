@@ -1292,6 +1292,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+    if config.debug_stuck {
+        log::debug!("Starting stuck detector");
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+
+        tokio::spawn(async move {
+            while rx.recv().await.is_some() {
+                // do nothing, we just need to consume the value
+            }
+        });
+
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                match tx.try_send(()) {
+                    Ok(()) => {
+                        // ok
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        log::warn!("Loop appears to be stuck");
+                        break;
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        log::warn!("Stuck detector disappeared");
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
     let tls_connector = {
         let mut builder = native_tls::TlsConnector::builder();
 
