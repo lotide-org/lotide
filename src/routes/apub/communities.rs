@@ -232,15 +232,12 @@ async fn handler_communities_get(
 
                 let info = activitystreams_ext::Ext1::new(info, featured_ext);
 
-                let key_id = format!(
-                    "{}/communities/{}#main-key",
-                    ctx.host_url_apub, community_id
-                );
+                let key_id = crate::apub_util::get_local_community_pubkey_apub_id(community_id, &ctx.host_url_apub);
 
                 let body = if let Some(public_key) = public_key {
                     let public_key_ext = crate::apub_util::PublicKeyExtension {
                         public_key: Some(crate::apub_util::PublicKey {
-                            id: (&key_id).into(),
+                            id: key_id.as_str().into(),
                             owner: community_ap_id.as_str().into(),
                             public_key_pem: public_key.into(),
                             signature_algorithm: Some(crate::apub_util::SIGALG_RSA_SHA256.into()),
