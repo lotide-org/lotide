@@ -2,11 +2,7 @@ use std::sync::Arc;
 
 const TASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
-pub fn start_worker(ctx: Arc<crate::BaseContext>, rx: tokio::sync::mpsc::Receiver<()>) {
-    crate::spawn_task(run_worker(ctx, rx));
-}
-
-async fn run_worker(
+pub async fn run_worker(
     ctx: Arc<crate::BaseContext>,
     mut recv: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<(), crate::Error> {

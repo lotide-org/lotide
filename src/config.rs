@@ -35,6 +35,9 @@ pub struct Config {
     pub smtp_from: Option<String>,
 
     #[serde(default)]
+    pub separate_worker: bool,
+
+    #[serde(default)]
     pub break_stuff: bool,
 
     #[serde(default)]

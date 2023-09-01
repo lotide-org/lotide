@@ -166,7 +166,7 @@ pub struct BaseContext {
 
     pub local_hostname: String,
 
-    worker_trigger: tokio::sync::mpsc::Sender<()>,
+    worker_trigger: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 impl BaseContext {
@@ -232,11 +232,18 @@ impl BaseContext {
             &[&T::KIND, &tokio_postgres::types::Json(task), &T::MAX_ATTEMPTS],
         ).await?;
 
-        match self.worker_trigger.clone().try_send(()) {
-            Ok(_) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Ok(()),
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                Err(crate::Error::InternalStrStatic("Worker channel closed"))
+        if let Some(worker_trigger) = &self.worker_trigger {
+            match worker_trigger.clone().try_send(()) {
+                Ok(_) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Ok(()),
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    Err(crate::Error::InternalStrStatic("Worker channel closed"))
+                }
             }
+        } else {
+            // separate worker, send notification through database
+
+            db.execute("NOTIFY new_task", &[]).await?;
+            Ok(())
         }
     }
 
@@ -253,11 +260,18 @@ impl BaseContext {
             &[&T::KIND, &tasks_param, &T::MAX_ATTEMPTS],
         ).await?;
 
-        match self.worker_trigger.clone().try_send(()) {
-            Ok(_) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Ok(()),
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                Err(crate::Error::InternalStrStatic("Worker channel closed"))
+        if let Some(worker_trigger) = &self.worker_trigger {
+            match worker_trigger.clone().try_send(()) {
+                Ok(_) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Ok(()),
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    Err(crate::Error::InternalStrStatic("Worker channel closed"))
+                }
             }
+        } else {
+            // separate worker, send notification through database
+
+            db.execute("NOTIFY new_task", &[]).await?;
+            Ok(())
         }
     }
 }
@@ -1278,6 +1292,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .possible_values(&["up", "down", "setup"]),
             ),
         )
+        .subcommand(clap::Command::new("worker"))
         .get_matches();
 
     let config = Config::load(matches.value_of_os("config")).expect("Failed to load config");
@@ -1285,13 +1300,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(matches) = matches.subcommand_matches("migrate") {
         crate::migrate::run(config, matches);
         Ok(())
+    } else if matches.subcommand_matches("worker").is_some() {
+        run(config, RunType::Worker)
     } else {
-        run(config)
+        run(config, RunType::Main)
     }
 }
 
+enum RunType {
+    Worker,
+    Main,
+}
+
 #[tokio::main]
-async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(config: Config, run_type: RunType) -> Result<(), Box<dyn std::error::Error>> {
     if config.debug_stuck {
         log::debug!("Starting stuck detector");
 
@@ -1323,7 +1345,7 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let tls_connector = {
+    let pg_tls_connector = postgres_native_tls::MakeTlsConnector::new({
         let mut builder = native_tls::TlsConnector::builder();
 
         if let Some(path) = config.database_certificate_path {
@@ -1331,13 +1353,12 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         builder.build()?
-    };
+    });
+
+    let pg_config: tokio_postgres::config::Config = config.database_url.parse().unwrap();
 
     let db_pool = deadpool_postgres::Pool::new(
-        deadpool_postgres::Manager::new(
-            config.database_url.parse().unwrap(),
-            postgres_native_tls::MakeTlsConnector::new(tls_connector),
-        ),
+        deadpool_postgres::Manager::new(pg_config.clone(), pg_tls_connector.clone()),
         16,
     );
 
@@ -1421,6 +1442,17 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
 
     let allow_forwarded = config.allow_forwarded;
 
+    let (run_worker, run_server) = match run_type {
+        RunType::Worker => {
+            if !config.separate_worker {
+                panic!("Cannot run worker without SEPARATE_WORKER");
+            }
+
+            (true, false)
+        }
+        RunType::Main => (!config.separate_worker, true),
+    };
+
     let (worker_trigger, worker_rx) = tokio::sync::mpsc::channel(1);
 
     let routes = Arc::new(routes::route_root());
@@ -1495,124 +1527,191 @@ async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
         vapid_public_key_base64,
         vapid_signature_builder,
 
-        worker_trigger,
+        worker_trigger: if run_worker {
+            Some(worker_trigger.clone())
+        } else {
+            None
+        },
     });
 
-    worker::start_worker(context.clone(), worker_rx);
-
-    let server = hyper::Server::bind(&(std::net::Ipv6Addr::UNSPECIFIED, config.port).into()).serve(
-        hyper::service::make_service_fn(|sock: &hyper::server::conn::AddrStream| {
-            let addr_direct = sock.remote_addr().ip();
-            let routes = routes.clone();
+    tokio::join!(
+        {
             let context = context.clone();
-            async move {
-                Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
-                    let routes = routes.clone();
-                    let context = context.clone();
-                    async move {
-                        let ratelimit_addr = if allow_forwarded {
-                            if let Some(value) = req
-                                .headers()
-                                .get(hyper::header::HeaderName::from_static("x-forwarded-for"))
-                            {
-                                match value
-                                    .to_str()
-                                    .map_err(|_| ())
-                                    .and_then(|value| value.split(", ").next().ok_or(()))
-                                    .and_then(|value| value.parse().map_err(|_| ()))
-                                {
-                                    Err(_) => {
-                                        return Ok(simple_response(
-                                            hyper::StatusCode::BAD_REQUEST,
-                                            "Invalid X-Forwarded-For value",
-                                        ));
-                                    }
-                                    Ok(value) => Some(value),
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            Some(addr_direct)
-                        };
-
-                        let ratelimit_ok = match ratelimit_addr {
-                            Some(addr) => context.api_ratelimit.try_call(addr),
-                            None => true,
-                        };
-                        let result = if !ratelimit_ok {
-                            Ok(simple_response(
-                                hyper::StatusCode::TOO_MANY_REQUESTS,
-                                "Ratelimit exceeded.",
-                            ))
-                        } else if req.method() == hyper::Method::OPTIONS
-                            && req.uri().path().starts_with("/api")
-                        {
-                            hyper::Response::builder()
-                                .status(hyper::StatusCode::NO_CONTENT)
-                                .header(hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                                .header(
-                                    hyper::header::ACCESS_CONTROL_ALLOW_METHODS,
-                                    "GET, POST, PUT, PATCH, DELETE",
-                                )
-                                .header(
-                                    hyper::header::ACCESS_CONTROL_ALLOW_HEADERS,
-                                    "Content-Type, Authorization",
-                                )
-                                .body(Default::default())
-                                .map_err(Into::into)
-                        } else {
-                            match routes.route(req, context) {
-                                Ok(fut) => fut.await,
-                                Err(err) => Err(Error::RoutingError(err)),
-                            }
-                        };
-
-                        Ok::<_, hyper::Error>(match result {
-                            Ok(val) => val,
-                            Err(Error::UserError(res)) => res,
-                            Err(Error::RoutingError(err)) => {
-                                let code = match err {
-                                    trout::RoutingFailure::NotFound => hyper::StatusCode::NOT_FOUND,
-                                    trout::RoutingFailure::MethodNotAllowed => {
-                                        hyper::StatusCode::METHOD_NOT_ALLOWED
-                                    }
-                                };
-
-                                simple_response(code, code.canonical_reason().unwrap())
-                            }
-                            Err(Error::Internal(err)) => {
-                                log::error!("Error: {:?}", err);
-
-                                simple_response(
-                                    hyper::StatusCode::INTERNAL_SERVER_ERROR,
-                                    "Internal Server Error",
-                                )
-                            }
-                            Err(Error::InternalStr(err)) => {
-                                log::error!("Error: {}", err);
-
-                                simple_response(
-                                    hyper::StatusCode::INTERNAL_SERVER_ERROR,
-                                    "Internal Server Error",
-                                )
-                            }
-                            Err(Error::InternalStrStatic(err)) => {
-                                log::error!("Error: {}", err);
-
-                                simple_response(
-                                    hyper::StatusCode::INTERNAL_SERVER_ERROR,
-                                    "Internal Server Error",
-                                )
-                            }
-                        })
-                    }
-                }))
+            async {
+                if run_worker {
+                    tokio::spawn(worker::run_worker(context, worker_rx))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                }
             }
-        }),
-    );
+        },
+        {
+            let port = config.port;
+            async move {
+                if run_server {
+                    let server = hyper::Server::bind(
+                        &(std::net::Ipv6Addr::UNSPECIFIED, port).into(),
+                    )
+                    .serve(hyper::service::make_service_fn(
+                        |sock: &hyper::server::conn::AddrStream| {
+                            let addr_direct = sock.remote_addr().ip();
+                            let routes = routes.clone();
+                            let context = context.clone();
+                            async move {
+                                Ok::<_, hyper::Error>(hyper::service::service_fn(move |req| {
+                                    let routes = routes.clone();
+                                    let context = context.clone();
+                                    async move {
+                                        let ratelimit_addr = if allow_forwarded {
+                                            if let Some(value) = req.headers().get(
+                                                hyper::header::HeaderName::from_static(
+                                                    "x-forwarded-for",
+                                                ),
+                                            ) {
+                                                match value
+                                                    .to_str()
+                                                    .map_err(|_| ())
+                                                    .and_then(|value| {
+                                                        value.split(", ").next().ok_or(())
+                                                    })
+                                                    .and_then(|value| value.parse().map_err(|_| ()))
+                                                {
+                                                    Err(_) => {
+                                                        return Ok(simple_response(
+                                                            hyper::StatusCode::BAD_REQUEST,
+                                                            "Invalid X-Forwarded-For value",
+                                                        ));
+                                                    }
+                                                    Ok(value) => Some(value),
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            Some(addr_direct)
+                                        };
 
-    server.await?;
+                                        let ratelimit_ok = match ratelimit_addr {
+                                            Some(addr) => context.api_ratelimit.try_call(addr),
+                                            None => true,
+                                        };
+                                        let result = if !ratelimit_ok {
+                                            Ok(simple_response(
+                                                hyper::StatusCode::TOO_MANY_REQUESTS,
+                                                "Ratelimit exceeded.",
+                                            ))
+                                        } else if req.method() == hyper::Method::OPTIONS
+                                            && req.uri().path().starts_with("/api")
+                                        {
+                                            hyper::Response::builder()
+                                                .status(hyper::StatusCode::NO_CONTENT)
+                                                .header(
+                                                    hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+                                                    "*",
+                                                )
+                                                .header(
+                                                    hyper::header::ACCESS_CONTROL_ALLOW_METHODS,
+                                                    "GET, POST, PUT, PATCH, DELETE",
+                                                )
+                                                .header(
+                                                    hyper::header::ACCESS_CONTROL_ALLOW_HEADERS,
+                                                    "Content-Type, Authorization",
+                                                )
+                                                .body(Default::default())
+                                                .map_err(Into::into)
+                                        } else {
+                                            match routes.route(req, context) {
+                                                Ok(fut) => fut.await,
+                                                Err(err) => Err(Error::RoutingError(err)),
+                                            }
+                                        };
+
+                                        Ok::<_, hyper::Error>(match result {
+                                            Ok(val) => val,
+                                            Err(Error::UserError(res)) => res,
+                                            Err(Error::RoutingError(err)) => {
+                                                let code = match err {
+                                                    trout::RoutingFailure::NotFound => {
+                                                        hyper::StatusCode::NOT_FOUND
+                                                    }
+                                                    trout::RoutingFailure::MethodNotAllowed => {
+                                                        hyper::StatusCode::METHOD_NOT_ALLOWED
+                                                    }
+                                                };
+
+                                                simple_response(
+                                                    code,
+                                                    code.canonical_reason().unwrap(),
+                                                )
+                                            }
+                                            Err(Error::Internal(err)) => {
+                                                log::error!("Error: {:?}", err);
+
+                                                simple_response(
+                                                    hyper::StatusCode::INTERNAL_SERVER_ERROR,
+                                                    "Internal Server Error",
+                                                )
+                                            }
+                                            Err(Error::InternalStr(err)) => {
+                                                log::error!("Error: {}", err);
+
+                                                simple_response(
+                                                    hyper::StatusCode::INTERNAL_SERVER_ERROR,
+                                                    "Internal Server Error",
+                                                )
+                                            }
+                                            Err(Error::InternalStrStatic(err)) => {
+                                                log::error!("Error: {}", err);
+
+                                                simple_response(
+                                                    hyper::StatusCode::INTERNAL_SERVER_ERROR,
+                                                    "Internal Server Error",
+                                                )
+                                            }
+                                        })
+                                    }
+                                }))
+                            }
+                        },
+                    ));
+
+                    server.await.unwrap();
+                } else {
+                    async move {
+                        let (listen_client, mut listen_conn) =
+                            pg_config.connect(pg_tls_connector).await?;
+
+                        let handle = tokio::spawn({
+                            let stream = futures::stream::poll_fn(move |cx| {
+                                listen_conn.poll_message(cx).map_err(crate::Error::from)
+                            });
+                            stream.try_fold(worker_trigger, |worker_trigger, msg| async move {
+                                if let tokio_postgres::AsyncMessage::Notification(_) = msg {
+                                    match worker_trigger.clone().try_send(()) {
+                                        Ok(_)
+                                        | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
+                                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                            panic!("Worker channel closed");
+                                        }
+                                    }
+                                }
+
+                                Ok(worker_trigger)
+                            })
+                        });
+
+                        listen_client.execute("LISTEN new_task", &[]).await?;
+                        handle.await??;
+
+                        Ok::<(), crate::Error>(())
+                    }
+                    .await
+                    .unwrap();
+                }
+            }
+        }
+    );
 
     Ok(())
 }
