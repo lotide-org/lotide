@@ -1,9 +1,9 @@
 pub const MIGRATIONS: &[StaticMigration] = include!(concat!(env!("OUT_DIR"), "/migrations.rs"));
 
 pub struct StaticMigration {
-    tag: &'static str,
-    up: &'static str,
-    down: &'static str,
+    pub tag: &'static str,
+    pub up: &'static str,
+    pub down: &'static str,
 }
 
 pub fn run(config: crate::Config, matches: &clap::ArgMatches) {

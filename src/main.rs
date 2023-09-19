@@ -1362,6 +1362,18 @@ async fn run(config: Config, run_type: RunType) -> Result<(), Box<dyn std::error
         16,
     );
 
+    // ensure latest migrations have been applied
+    {
+        let tag = migrate::MIGRATIONS.last().unwrap().tag;
+        let db = db_pool.get().await?;
+        let row = db
+            .query_opt("SELECT 1 FROM __migrant_migrations WHERE tag=$1", &[&tag])
+            .await?;
+        if row.is_none() {
+            panic!("Unapplied migrations detected, run `lotide migrate`");
+        }
+    }
+
     let vapid_key: openssl::ec::EcKey<openssl::pkey::Private> = {
         let db = db_pool.get().await?;
         let row = db
