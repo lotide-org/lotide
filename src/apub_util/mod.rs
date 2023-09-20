@@ -1279,7 +1279,7 @@ pub fn post_to_ap(
                 Ok(activitystreams::base::AnyBase::from_arbitrary_json(
                     post_ap,
                 )?)
-            } else if ctx.break_stuff {
+            } else {
                 let mut attachment =
                     activitystreams::link::Link::<activitystreams::link::kind::LinkType>::new();
                 attachment.set_href(url::Url::try_from(href)?);
@@ -1290,29 +1290,6 @@ pub fn post_to_ap(
                     .set_summary(post.title)
                     .set_name(post.title)
                     .add_attachment(attachment.into_any_base()?);
-
-                let mut post_ap =
-                    make_extended_postlike(activitystreams::object::ApObject::new(post_ap));
-
-                apply_properties(
-                    &mut post_ap,
-                    post,
-                    community_ap_id,
-                    community_ap_outbox,
-                    community_ap_followers,
-                    &ctx,
-                )?;
-
-                Ok(activitystreams::base::AnyBase::from_arbitrary_json(
-                    post_ap,
-                )?)
-            } else {
-                let mut post_ap = activitystreams::object::Page::new();
-
-                post_ap
-                    .set_url(href.to_owned())
-                    .set_summary(post.title)
-                    .set_name(post.title);
 
                 let mut post_ap =
                     make_extended_postlike(activitystreams::object::ApObject::new(post_ap));
