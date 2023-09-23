@@ -16,7 +16,11 @@ pub mod local_object_ref;
 
 pub use local_object_ref::LocalObjectRef;
 
-pub const ACTIVITY_TYPE: &str = "application/activity+json";
+pub const ACTIVITY_TYPE: &str =
+    "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"";
+pub const ACTIVITY_TYPE_ALT: &str = "application/activity+json";
+
+pub const ACTIVITY_TYPE_HEADER_VALUE: &str = "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/activity+json";
 
 pub const SIGALG_RSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
 pub const SIGALG_RSA_SHA512: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512";
@@ -337,7 +341,7 @@ pub async fn fetch_ap_object_raw(
             ctx.http_client
                 .request(
                     hyper::Request::get(&current_id)
-                        .header(hyper::header::ACCEPT, ACTIVITY_TYPE)
+                        .header(hyper::header::ACCEPT, ACTIVITY_TYPE_HEADER_VALUE)
                         .body(Default::default())?,
                 )
                 .await?,
@@ -2152,7 +2156,8 @@ pub async fn fetch_url_from_webfinger(
         let mut found_uri = None;
         for entry in res.links {
             if entry.rel == "self"
-                && entry.type_.as_deref() == Some(crate::apub_util::ACTIVITY_TYPE)
+                && (entry.type_.as_deref() == Some(ACTIVITY_TYPE)
+                    || entry.type_.as_deref() == Some(ACTIVITY_TYPE_ALT))
             {
                 if let Some(href) = entry.href {
                     found_uri = Some(href.parse()?);
