@@ -1804,13 +1804,13 @@ dependencies = [
  "openssl",
  "pdcm-linkify",
  "percent-encoding",
+ "portpicker",
  "postgres-native-tls",
  "postgres-types",
  "pulldown-cmark",
  "rand 0.7.3",
  "regex",
  "reqwest",
- "rstest",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_s3",
@@ -2387,6 +2387,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "portpicker"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be97d76faf1bfab666e1375477b23fde79eccf0276e9b63b92a39d676a889ba9"
+dependencies = [
+ "rand 0.8.5",
+]
+
+[[package]]
 name = "postgres"
 version = "0.19.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2735,19 +2744,6 @@ dependencies = [
  "smallvec",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "rstest"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d912f35156a3f99a66ee3e11ac2e0b3f34ac85a07e05263d05a7e2c8810d616f"
-dependencies = [
- "cfg-if",
- "proc-macro2",
- "quote",
- "rustc_version",
- "syn 1.0.109",
 ]
 
 [[package]]
