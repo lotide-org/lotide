@@ -723,9 +723,11 @@ pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 's
     }));
 }
 
+const UGC_LINK_REL: &str = "ugc noopener";
+
 fn create_sanitizer_base() -> ammonia::Builder<'static> {
     let mut builder = ammonia::Builder::default();
-    builder.link_rel(Some("ugc noopener"));
+    builder.link_rel(Some(UGC_LINK_REL));
 
     builder
 }
@@ -798,14 +800,24 @@ pub fn clean_html(src: &str, image_handling: ImageHandling) -> String {
 
                             match src {
                                 Some(src) => {
-                                    let out_attrs = vec![html5ever::Attribute {
-                                        name: html5ever::QualName::new(
-                                            None,
-                                            html_ns!(),
-                                            html5ever::local_name!("href"),
-                                        ),
-                                        value: src.value.clone(),
-                                    }];
+                                    let out_attrs = vec![
+                                        html5ever::Attribute {
+                                            name: html5ever::QualName::new(
+                                                None,
+                                                html_ns!(),
+                                                html5ever::local_name!("href"),
+                                            ),
+                                            value: src.value.clone(),
+                                        },
+                                        html5ever::Attribute {
+                                            name: html5ever::QualName::new(
+                                                None,
+                                                html_ns!(),
+                                                html5ever::local_name!("rel"),
+                                            ),
+                                            value: UGC_LINK_REL.into(),
+                                        },
+                                    ];
 
                                     let text = match alt {
                                         Some(alt) if !alt.value.is_empty() => alt.value.clone(),
