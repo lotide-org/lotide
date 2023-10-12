@@ -1,11 +1,13 @@
 use futures::{Stream, StreamExt, TryStreamExt};
 pub use lotide_types as types;
+use markup5ever_rcdom as rcdom;
 use rand::Rng;
 use serde_derive::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::ops::Deref;
+use std::rc::Rc;
 use std::sync::Arc;
 
 mod apub_util;
@@ -19,7 +21,8 @@ mod worker;
 
 use self::config::Config;
 use self::types::{
-    CommentLocalID, CommunityLocalID, NotificationID, PollOptionLocalID, PostLocalID, UserLocalID,
+    CommentLocalID, CommunityLocalID, ImageHandling, NotificationID, PollOptionLocalID,
+    PostLocalID, UserLocalID,
 };
 
 pub use self::lang::Translator;
@@ -720,18 +723,155 @@ pub fn spawn_task<F: std::future::Future<Output = Result<(), Error>> + Send + 's
     }));
 }
 
+fn create_sanitizer_base() -> ammonia::Builder<'static> {
+    let mut builder = ammonia::Builder::default();
+    builder.link_rel(Some("ugc noopener"));
+
+    builder
+}
+
+macro_rules! html_ns {
+    () => {
+        html5ever::namespace_url!("")
+    };
+    ($ns:ident) => {{
+        use html5ever::namespace_url;
+
+        html5ever::ns!($ns)
+    }};
+}
+
 lazy_static::lazy_static! {
-    static ref SANITIZER: ammonia::Builder<'static> = {
-        let mut builder = ammonia::Builder::default();
-        builder.link_rel(Some("ugc noopener"));
+    static ref SANITIZER_BASE: ammonia::Builder<'static> = create_sanitizer_base();
+
+    static ref SANITIZER_REMOVE_IMAGES: ammonia::Builder<'static> = {
+        let mut builder = create_sanitizer_base();
         builder.rm_tags(&["img"]);
 
         builder
     };
+
+    static ref HTML_IMG_TAG: html5ever::QualName = html5ever::QualName::new(
+        None,
+        html_ns!(html),
+        html5ever::local_name!("img"),
+    );
+
+    static ref HTML_A_TAG: html5ever::QualName = html5ever::QualName::new(
+        None,
+        html_ns!(html),
+        html5ever::local_name!("a"),
+    );
 }
 
-pub fn clean_html(src: &str) -> String {
-    SANITIZER.clean(src).to_string()
+pub fn clean_html(src: &str, image_handling: ImageHandling) -> String {
+    match image_handling {
+        ImageHandling::Remove => SANITIZER_REMOVE_IMAGES.clean(src).to_string(),
+        ImageHandling::Preserve => SANITIZER_BASE.clean(src).to_string(),
+        ImageHandling::ConvertToLinks => {
+            use html5ever::tendril::TendrilSink;
+
+            let content = SANITIZER_BASE.clean(src).to_string();
+
+            let dom = html5ever::parse_fragment(
+                rcdom::RcDom::default(),
+                Default::default(),
+                // ???
+                html5ever::QualName::new(None, html_ns!(html), html5ever::local_name!("body")),
+                vec![],
+            )
+            .from_utf8()
+            .read_from(&mut content.as_bytes())
+            .unwrap();
+
+            fn process_node(node: Rc<rcdom::Node>) -> Option<Rc<rcdom::Node>> {
+                match &node.data {
+                    rcdom::NodeData::Element { name, attrs, .. } => {
+                        if name == &*HTML_IMG_TAG {
+                            let attrs = attrs.borrow();
+                            let alt = attrs
+                                .iter()
+                                .find(|x| x.name.local == html5ever::local_name!("alt"));
+                            let src = attrs
+                                .iter()
+                                .find(|x| x.name.local == html5ever::local_name!("src"));
+
+                            match src {
+                                Some(src) => {
+                                    let out_attrs = vec![html5ever::Attribute {
+                                        name: html5ever::QualName::new(
+                                            None,
+                                            html_ns!(),
+                                            html5ever::local_name!("href"),
+                                        ),
+                                        value: src.value.clone(),
+                                    }];
+
+                                    let text = match alt {
+                                        Some(alt) if !alt.value.is_empty() => alt.value.clone(),
+                                        Some(_) | None => "Image".into(),
+                                    };
+
+                                    let children = vec![rcdom::Node::new(rcdom::NodeData::Text {
+                                        contents: std::cell::RefCell::new(text),
+                                    })];
+
+                                    Some(Rc::new(rcdom::Node {
+                                        parent: std::cell::Cell::new(None),
+                                        children: std::cell::RefCell::new(children),
+                                        data: rcdom::NodeData::Element {
+                                            name: HTML_A_TAG.clone(),
+                                            attrs: std::cell::RefCell::new(out_attrs),
+                                            template_contents: std::cell::RefCell::new(None),
+                                            mathml_annotation_xml_integration_point: false,
+                                        },
+                                    }))
+                                }
+                                None => None, // may as well? shouldn't happen much anyway
+                            }
+                        } else {
+                            {
+                                let mut children = node.children.borrow_mut();
+
+                                let mut i = 0;
+                                while i < children.len() {
+                                    match process_node(children[i].clone()) {
+                                        None => {
+                                            children.remove(i);
+                                        }
+                                        Some(new_child) => {
+                                            children[i] = new_child;
+                                            i += 1;
+                                        }
+                                    }
+                                }
+                            }
+
+                            Some(node)
+                        }
+                    }
+                    _ => Some(node),
+                }
+            }
+
+            let output_root = process_node(dom.document.children.borrow()[0].clone());
+
+            match output_root {
+                None => "".to_owned(),
+                Some(output_root) => {
+                    let mut output = Vec::new();
+                    html5ever::serialize(
+                        &mut output,
+                        &rcdom::SerializableHandle::from(output_root),
+                        Default::default(),
+                    )
+                    .unwrap();
+
+                    String::from_utf8(output).unwrap()
+                }
+            }
+        }
+    }
 }
 
 pub fn on_add_post(

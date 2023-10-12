@@ -4,8 +4,8 @@ use super::{
 };
 use crate::lang;
 use crate::types::{
-    ActorLocalRef, CommentLocalID, CommunityLocalID, JustID, JustUser, MaybeIncludeYour,
-    PostLocalID, RespCommentInfo, RespMinimalPostInfo, UserLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, ImageHandling, JustID, JustUser, PostLocalID,
+    RespCommentInfo, RespMinimalPostInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -19,7 +19,16 @@ async fn route_unstable_comments_get(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     use futures::future::TryFutureExt;
 
-    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    #[derive(Deserialize)]
+    struct CommentsGetQuery {
+        #[serde(default)]
+        include_your: bool,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
+    }
+
+    let query: CommentsGetQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
     let (comment_id,) = params;
 
@@ -141,7 +150,7 @@ async fn route_unstable_comments_get(
                         content_text: row.get::<_, Option<&str>>(2).map(Cow::Borrowed),
                         content_html_safe: row
                             .get::<_, Option<&str>>(5)
-                            .map(|html| crate::clean_html(html)),
+                            .map(|html| crate::clean_html(html, query.image_handling)),
                         sensitive: row.get(22),
                     },
 
@@ -620,6 +629,9 @@ async fn route_unstable_comments_replies_list(
         #[serde(default = "super::default_comment_sort")]
         sort: super::SortType,
         page: Option<Cow<'a, str>>,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
     }
 
     let query: RepliesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -640,6 +652,7 @@ async fn route_unstable_comments_replies_list(
         query.limit,
         query.sort,
         query.page.as_deref(),
+        query.image_handling,
         &db,
         &ctx,
     )

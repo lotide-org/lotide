@@ -1,7 +1,7 @@
 use crate::lang;
 use crate::types::{
-    CommentLocalID, CommunityLocalID, FingerRequestQuery, FingerResponse, JustURL, PostLocalID,
-    RespAvatarInfo, RespList, RespLoginInfo, RespLoginPermissions, RespLoginUserInfo,
+    CommentLocalID, CommunityLocalID, FingerRequestQuery, FingerResponse, ImageHandling, JustURL,
+    PostLocalID, RespAvatarInfo, RespList, RespLoginInfo, RespLoginPermissions, RespLoginUserInfo,
     RespMinimalAuthorInfo, RespMinimalCommentInfo, RespMinimalCommunityInfo, RespMinimalPostInfo,
     RespPermissionInfo, RespPostCommentInfo, RespPostListPost, RespSiteModlogEvent,
     RespSiteModlogEventDetails, UserLocalID,
@@ -319,6 +319,10 @@ pub fn default_replies_limit() -> u8 {
 
 pub fn default_comment_sort() -> SortType {
     SortType::Hot
+}
+
+pub fn default_image_handling() -> ImageHandling {
+    ImageHandling::ConvertToLinks
 }
 
 pub fn route_api() -> crate::RouteNode<()> {
@@ -646,8 +650,16 @@ async fn route_unstable_nodeinfo_20_get(
 async fn route_unstable_instance_get(
     _: (),
     ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
+    req: hyper::Request<hyper::Body>,
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    #[derive(Deserialize)]
+    struct InstanceGetQuery {
+        #[serde(default = "default_image_handling")]
+        image_handling: ImageHandling,
+    }
+
+    let query: InstanceGetQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
     let db = ctx.db_pool.get().await?;
 
     let row = db
@@ -666,7 +678,7 @@ async fn route_unstable_instance_get(
         "description": crate::types::Content {
             content_text: description_text.map(Cow::Borrowed),
             content_markdown: description_markdown.map(Cow::Borrowed),
-            content_html_safe: description_html.map(|x| crate::clean_html(x)),
+            content_html_safe: description_html.map(|x| crate::clean_html(x, query.image_handling)),
         },
         "software": {
             "name": "lotide",
@@ -908,6 +920,7 @@ async fn apply_comments_replies<'a, T>(
     depth: u8,
     limit: u8,
     sort: SortType,
+    image_handling: ImageHandling,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> Result<(), crate::Error> {
@@ -916,9 +929,17 @@ async fn apply_comments_replies<'a, T>(
         .map(|(_, comment)| comment.base.id)
         .collect::<Vec<_>>();
     if depth > 0 {
-        let mut replies =
-            get_comments_replies_box(&ids, include_your_for, depth - 1, limit, sort, db, ctx)
-                .await?;
+        let mut replies = get_comments_replies_box(
+            &ids,
+            include_your_for,
+            depth - 1,
+            limit,
+            sort,
+            image_handling,
+            db,
+            ctx,
+        )
+        .await?;
 
         for (_, comment) in comments.iter_mut() {
             let list: RespList<RespPostCommentInfo> =
@@ -978,6 +999,7 @@ fn get_comments_replies_box<'a: 'b, 'b>(
     depth: u8,
     limit: u8,
     sort: SortType,
+    image_handling: ImageHandling,
     db: &'b tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> PinBoxFuture<'b, Result<HashMap<CommentLocalID, CommentsRepliesInfoInternal<'a>>, crate::Error>>
@@ -989,6 +1011,7 @@ fn get_comments_replies_box<'a: 'b, 'b>(
         limit,
         sort,
         None,
+        image_handling,
         db,
         ctx,
     ))
@@ -1003,6 +1026,7 @@ async fn get_comments_replies<'a>(
     limit: u8,
     sort: SortType,
     page: Option<&str>,
+    image_handling: ImageHandling,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> Result<HashMap<CommentLocalID, CommentsRepliesInfoInternal<'a>>, crate::Error> {
@@ -1121,7 +1145,8 @@ async fn get_comments_replies<'a>(
                         id,
                         remote_url: remote_url.map(Cow::Owned),
                         content_text: content_text.map(From::from),
-                        content_html_safe: content_html.map(|html| crate::clean_html(&html)),
+                        content_html_safe: content_html
+                            .map(|html| crate::clean_html(&html, image_handling)),
                         sensitive,
                     },
 
@@ -1151,7 +1176,17 @@ async fn get_comments_replies<'a>(
         .try_collect()
         .await?;
 
-    apply_comments_replies(&mut comments, include_your_for, depth, limit, sort, db, ctx).await?;
+    apply_comments_replies(
+        &mut comments,
+        include_your_for,
+        depth,
+        limit,
+        sort,
+        image_handling,
+        db,
+        ctx,
+    )
+    .await?;
 
     let mut result = HashMap::new();
     for (parent, comment) in comments {

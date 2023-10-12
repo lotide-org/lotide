@@ -1,6 +1,6 @@
 use crate::types::{
-    CommentLocalID, JustURL, PostLocalID, RespAvatarInfo, RespList, RespMinimalAuthorInfo,
-    RespMinimalCommentInfo, RespPostCommentInfo, UserLocalID,
+    CommentLocalID, ImageHandling, JustURL, PostLocalID, RespAvatarInfo, RespList,
+    RespMinimalAuthorInfo, RespMinimalCommentInfo, RespPostCommentInfo, UserLocalID,
 };
 use serde_derive::Deserialize;
 use std::borrow::Cow;
@@ -22,6 +22,9 @@ async fn route_unstable_posts_replies_list(
         #[serde(default = "crate::routes::api::default_comment_sort")]
         sort: crate::routes::api::SortType,
         page: Option<Cow<'a, str>>,
+
+        #[serde(default = "crate::routes::api::default_image_handling")]
+        image_handling: ImageHandling,
     }
 
     let query: RepliesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -41,6 +44,7 @@ async fn route_unstable_posts_replies_list(
         query.sort,
         query.limit,
         query.page.as_deref(),
+        query.image_handling,
         &db,
         &ctx,
     )
@@ -149,6 +153,7 @@ async fn get_post_comments<'a>(
     sort: crate::routes::api::SortType,
     limit: u8,
     page: Option<&'a str>,
+    image_handling: ImageHandling,
     db: &tokio_postgres::Client,
     ctx: &'a crate::BaseContext,
 ) -> Result<(Vec<RespPostCommentInfo<'a>>, Option<String>), crate::Error> {
@@ -260,7 +265,8 @@ async fn get_post_comments<'a>(
                         id,
                         remote_url: remote_url.map(Cow::Owned),
                         content_text: content_text.map(From::from),
-                        content_html_safe: content_html.map(|html| crate::clean_html(&html)),
+                        content_html_safe: content_html
+                            .map(|html| crate::clean_html(&html, image_handling)),
                         sensitive,
                     },
 
@@ -302,6 +308,7 @@ async fn get_post_comments<'a>(
         2,
         limit,
         sort,
+        image_handling,
         db,
         ctx,
     )

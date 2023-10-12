@@ -4,9 +4,9 @@ use super::{
 };
 use crate::lang;
 use crate::types::{
-    ActorLocalRef, CommunityLocalID, FlagLocalID, JustID, JustUser, PollLocalID, PollOptionLocalID,
-    PollVoteBody, PostLocalID, RespPollInfo, RespPollOption, RespPollYourVote, RespPostInfo,
-    UserLocalID,
+    ActorLocalRef, CommunityLocalID, FlagLocalID, ImageHandling, JustID, JustUser, PollLocalID,
+    PollOptionLocalID, PollVoteBody, PostLocalID, RespPollInfo, RespPollOption, RespPollYourVote,
+    RespPostInfo, UserLocalID,
 };
 use crate::BaseURL;
 use serde_derive::Deserialize;
@@ -116,6 +116,9 @@ async fn route_unstable_posts_list(
 
         #[serde(default)]
         sort_sticky: bool,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
     }
 
     let query: PostsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -373,7 +376,8 @@ async fn route_unstable_posts_list(
                 href: ctx.process_href_opt(href.map(Cow::Borrowed), id),
                 content_text: content_text.map(Cow::Borrowed),
                 content_markdown: content_markdown.map(Cow::Borrowed),
-                content_html_safe: content_html.map(|html| crate::clean_html(&html)),
+                content_html_safe: content_html
+                    .map(|html| crate::clean_html(&html, query.image_handling)),
                 author: author.map(Cow::Owned),
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Owned(community),
@@ -939,6 +943,9 @@ async fn route_unstable_posts_get(
     struct PostsGetQuery {
         #[serde(default)]
         include_your: bool,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
     }
 
     let query: PostsGetQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -1171,7 +1178,8 @@ async fn route_unstable_posts_get(
                 href: ctx.process_href_opt(href.map(Cow::Borrowed), post_id),
                 content_text: content_text.map(Cow::Borrowed),
                 content_markdown: content_markdown.map(Cow::Borrowed),
-                content_html_safe: content_html.map(|html| crate::clean_html(html)),
+                content_html_safe: content_html
+                    .map(|html| crate::clean_html(html, query.image_handling)),
                 author: author.map(Cow::Owned),
                 created: Cow::Owned(created.to_rfc3339()),
                 community: Cow::Owned(community),

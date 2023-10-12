@@ -1,8 +1,8 @@
 use crate::lang;
 use crate::types::{
-    CommunityLocalID, FlagLocalID, JustContentText, PostLocalID, RespAvatarInfo, RespFlagDetails,
-    RespFlagInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommunityInfo, RespPostListPost,
-    UserLocalID,
+    CommunityLocalID, FlagLocalID, ImageHandling, JustContentText, PostLocalID, RespAvatarInfo,
+    RespFlagDetails, RespFlagInfo, RespList, RespMinimalAuthorInfo, RespMinimalCommunityInfo,
+    RespPostListPost, UserLocalID,
 };
 use serde::Deserialize;
 use std::borrow::Cow;
@@ -20,6 +20,9 @@ async fn route_unstable_flags_list(
         to_this_site_admin: Option<bool>,
         to_community: Option<CommunityLocalID>,
         dismissed: Option<bool>,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
     }
 
     let query: FlagsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -178,7 +181,7 @@ async fn route_unstable_flags_list(
                             content_markdown: row.get::<_, Option<&str>>(15).map(Cow::Borrowed),
                             content_html_safe: row
                                 .get::<_, Option<&str>>(16)
-                                .map(|html| crate::clean_html(&html)),
+                                .map(|html| crate::clean_html(&html, query.image_handling)),
                             title: Cow::Borrowed(row.get(13)),
                             created: post_created.to_rfc3339().into(),
                             score: row.get(22),

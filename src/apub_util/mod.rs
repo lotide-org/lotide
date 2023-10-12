@@ -1,6 +1,7 @@
 use crate::types::{
     ActorLocalRef, CommentLocalID, CommunityLocalID, FingerRequestQuery, FingerResponse,
-    FlagLocalID, PollLocalID, PollOptionLocalID, PostLocalID, ThingLocalRef, UserLocalID,
+    FlagLocalID, ImageHandling, PollLocalID, PollOptionLocalID, PostLocalID, ThingLocalRef,
+    UserLocalID,
 };
 use crate::BaseURL;
 use activitystreams::prelude::*;
@@ -1172,7 +1173,7 @@ pub fn post_to_ap(
 
         if let Some(html) = post.content_html {
             props
-                .set_content(crate::clean_html(html))
+                .set_content(crate::clean_html(html, ImageHandling::Preserve))
                 .set_media_type(mime::TEXT_HTML);
 
             if let Some(md) = post.content_markdown {
@@ -1411,7 +1412,7 @@ pub fn local_comment_to_ap(
     let mut obj = activitystreams::object::ApObject::new(obj);
 
     if let Some(html) = &comment.content_html {
-        obj.set_content(crate::clean_html(html))
+        obj.set_content(crate::clean_html(html, ImageHandling::Preserve))
             .set_media_type(mime::TEXT_HTML);
 
         if let Some(md) = &comment.content_markdown {

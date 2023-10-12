@@ -491,3 +491,11 @@ pub struct RespInvitationInfo<'a> {
     pub created_at: String,
     pub used: bool,
 }
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageHandling {
+    Remove,
+    Preserve,
+    ConvertToLinks,
+}

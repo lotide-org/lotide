@@ -1,7 +1,7 @@
 use super::InvalidPage;
 use crate::lang;
 use crate::types::{
-    CommentLocalID, CommunityLocalID, JustContentText, JustID, JustURL, MaybeIncludeYour,
+    CommentLocalID, CommunityLocalID, ImageHandling, JustContentText, JustID, JustURL,
     NotificationSubscriptionCreateQuery, NotificationSubscriptionID, PostLocalID, RespAvatarInfo,
     RespList, RespLoginUserInfo, RespMinimalAuthorInfo, RespMinimalCommentInfo,
     RespMinimalCommunityInfo, RespMinimalPostInfo, RespNotification, RespNotificationInfo,
@@ -144,9 +144,13 @@ async fn route_unstable_users_list(
     struct UsersListQuery<'a> {
         local: Option<bool>,
         username: Option<Cow<'a, str>>,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
     }
 
     let query: UsersListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    let image_handling = query.image_handling;
 
     let username = match (query.local, query.username) {
         (Some(true), Some(username)) => username,
@@ -209,7 +213,8 @@ async fn route_unstable_users_list(
                                 description_text.map(Cow::Borrowed)
                             },
                             content_markdown: description_markdown.map(Cow::Borrowed),
-                            content_html_safe: description_html.map(|x| crate::clean_html(x)),
+                            content_html_safe: description_html
+                                .map(|x| crate::clean_html(x, image_handling)),
                         },
                         suspended: Some(row.get(4)),
                         your_note: None,
@@ -535,6 +540,15 @@ async fn route_unstable_users_notifications_list(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (user,) = params;
 
+    #[derive(Deserialize)]
+    struct UsersNotificationsListQuery {
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
+    }
+
+    let query: UsersNotificationsListQuery =
+        serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+
     let mut db = ctx.db_pool.get().await?;
 
     let user = user.require_me(&req, &db).await?;
@@ -676,7 +690,7 @@ async fn route_unstable_users_notifications_list(
                     content_markdown: row.get::<_, Option<_>>(17).map(Cow::Borrowed),
                     content_html_safe: row
                         .get::<_, Option<&str>>(18)
-                        .map(|html| crate::clean_html(&html)),
+                        .map(|html| crate::clean_html(&html, query.image_handling)),
                     community: Cow::Owned(RespMinimalCommunityInfo {
                         id: community_id,
                         name: Cow::Borrowed(row.get(56)),
@@ -751,7 +765,7 @@ async fn route_unstable_users_notifications_list(
                         content_text: row.get::<_, Option<_>>(3).map(Cow::Borrowed),
                         content_html_safe: row
                             .get::<_, Option<&str>>(4)
-                            .map(|html| crate::clean_html(&html)),
+                            .map(|html| crate::clean_html(&html, query.image_handling)),
                         remote_url: if reply_local {
                             Some(Cow::Owned(String::from(
                                 crate::apub_util::LocalObjectRef::Comment(reply_id)
@@ -833,7 +847,7 @@ async fn route_unstable_users_notifications_list(
                         content_text: row.get::<_, Option<_>>(6).map(Cow::Borrowed),
                         content_html_safe: row
                             .get::<_, Option<&str>>(7)
-                            .map(|html| crate::clean_html(&html)),
+                            .map(|html| crate::clean_html(&html, query.image_handling)),
                         remote_url: if parent_local {
                             Some(Cow::Owned(String::from(
                                 crate::apub_util::LocalObjectRef::Comment(parent_id)
@@ -1006,7 +1020,16 @@ async fn route_unstable_users_get(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (user_id,) = params;
 
-    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    #[derive(Deserialize)]
+    struct UsersGetQuery {
+        #[serde(default)]
+        include_your: bool,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
+    }
+
+    let query: UsersGetQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
@@ -1092,7 +1115,7 @@ async fn route_unstable_users_get(
                 description_text.map(Cow::Borrowed)
             },
             content_markdown: description_markdown.map(Cow::Borrowed),
-            content_html_safe: description_html.map(|x| crate::clean_html(x)),
+            content_html_safe: description_html.map(|x| crate::clean_html(x, query.image_handling)),
         },
         suspended: if local { Some(row.get(6)) } else { None },
         your_note,
@@ -1145,8 +1168,13 @@ async fn route_unstable_users_things_list(
         limit: u8,
 
         page: Option<Cow<'a, str>>,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
     }
+
     let query: UserThingsListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    let image_handling = query.image_handling;
 
     let limit_plus_1: i64 = (query.limit + 1).into();
 
@@ -1278,7 +1306,7 @@ async fn route_unstable_users_things_list(
                     score: row.get(9),
                     content_html_safe: row
                         .get::<_, Option<&str>>(14)
-                        .map(|html| crate::clean_html(&html)),
+                        .map(|html| crate::clean_html(&html, image_handling)),
                     content_text: row.get::<_, Option<&str>>(15).map(Cow::Borrowed),
                     content_markdown: row.get::<_, Option<&str>>(16).map(Cow::Borrowed),
                     sensitive: row.get(18),
@@ -1317,7 +1345,7 @@ async fn route_unstable_users_things_list(
                         content_text: row.get::<_, Option<_>>(2).map(Cow::Borrowed),
                         content_html_safe: row
                             .get::<_, Option<&str>>(3)
-                            .map(|html| crate::clean_html(html)),
+                            .map(|html| crate::clean_html(html, image_handling)),
                         sensitive: row.get(17),
                     },
                     created,

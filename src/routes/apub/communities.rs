@@ -1,4 +1,4 @@
-use crate::{CommentLocalID, CommunityLocalID, PostLocalID, UserLocalID};
+use crate::{CommentLocalID, CommunityLocalID, ImageHandling, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -194,7 +194,7 @@ async fn handler_communities_get(
                             }
                         });
                 let description = match row.get(4) {
-                    Some(description_html) => Some(crate::clean_html(description_html)),
+                    Some(description_html) => Some(crate::clean_html(description_html, ImageHandling::Preserve)),
                     None => row.get::<_, Option<&str>>(3).map(|x| v_htmlescape::escape(x).to_string()),
                 };
 

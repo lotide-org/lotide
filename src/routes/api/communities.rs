@@ -1,7 +1,7 @@
 use super::{format_number_58, parse_number_58, CommunitiesSortType, InvalidPage, ValueConsumer};
 use crate::lang;
 use crate::types::{
-    CommunityLocalID, MaybeIncludeYour, PostLocalID, RespAvatarInfo, RespCommunityFeeds,
+    CommunityLocalID, ImageHandling, PostLocalID, RespAvatarInfo, RespCommunityFeeds,
     RespCommunityFeedsType, RespCommunityInfo, RespCommunityModlogEvent,
     RespCommunityModlogEventDetails, RespList, RespMinimalAuthorInfo, RespMinimalCommunityInfo,
     RespMinimalPostInfo, RespModeratorInfo, RespYourFollowInfo, UserLocalID,
@@ -43,6 +43,7 @@ fn get_community_description_content<'a>(
     description_text: Option<&'a str>,
     description_markdown: Option<&'a str>,
     description_html: Option<&'a str>,
+    image_handling: ImageHandling,
 ) -> crate::types::Content<'a> {
     crate::types::Content {
         content_text: if description_text.is_none()
@@ -54,7 +55,7 @@ fn get_community_description_content<'a>(
             description_text.map(Cow::Borrowed)
         },
         content_markdown: description_markdown.map(Cow::Borrowed),
-        content_html_safe: description_html.map(|x| crate::clean_html(x)),
+        content_html_safe: description_html.map(|x| crate::clean_html(x, image_handling)),
     }
 }
 
@@ -94,6 +95,9 @@ async fn route_unstable_communities_list(
 
         #[serde(default = "default_sort")]
         sort: CommunitiesSortType,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
     }
 
     let query: CommunitiesListQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
@@ -298,6 +302,7 @@ async fn route_unstable_communities_list(
                         row.get(4),
                         row.get(6),
                         row.get(5),
+                        query.image_handling,
                     ),
 
                     feeds: RespCommunityFeeds {
@@ -521,7 +526,16 @@ async fn route_unstable_communities_get(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (community_id,) = params;
 
-    let query: MaybeIncludeYour = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
+    #[derive(Deserialize)]
+    struct CommunitiesGetQuery {
+        #[serde(default)]
+        include_your: bool,
+
+        #[serde(default = "super::default_image_handling")]
+        image_handling: ImageHandling,
+    }
+
+    let query: CommunitiesGetQuery = serde_urlencoded::from_str(req.uri().query().unwrap_or(""))?;
 
     let lang = crate::get_lang_for_req(&req);
     let db = ctx.db_pool.get().await?;
@@ -588,7 +602,12 @@ async fn route_unstable_communities_get(
             remote_url: community_remote_url,
             deleted: false, // already should have failed if deleted
         },
-        description: get_community_description_content(row.get(3), row.get(5), row.get(4)),
+        description: get_community_description_content(
+            row.get(3),
+            row.get(5),
+            row.get(4),
+            query.image_handling,
+        ),
         feeds: RespCommunityFeeds {
             atom: RespCommunityFeedsType {
                 new: format!(

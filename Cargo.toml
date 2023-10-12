@@ -73,6 +73,8 @@ postgres-native-tls = "0.5.0"
 native-tls = "0.2.11"
 regex = "1.8.4"
 serde_with = "3.1.0"
+html5ever = "0.26.0"
+markup5ever_rcdom = "0.2.0"
 
 [dev-dependencies]
 rand = "0.7.3"

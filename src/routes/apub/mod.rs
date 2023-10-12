@@ -1,4 +1,6 @@
-use crate::{CommentLocalID, CommunityLocalID, PollOptionLocalID, PostLocalID, UserLocalID};
+use crate::{
+    CommentLocalID, CommunityLocalID, ImageHandling, PollOptionLocalID, PostLocalID, UserLocalID,
+};
 use activitystreams::prelude::*;
 use std::borrow::Cow;
 use std::ops::Deref;
@@ -131,7 +133,7 @@ async fn handler_users_get(
                     });
 
             let description = match row.get(4) {
-                Some(description_html) => Some(crate::clean_html(description_html)),
+                Some(description_html) => Some(crate::clean_html(description_html, ImageHandling::Preserve)),
                 None => row.get::<_, Option<_>>(3).map(|x| v_htmlescape::escape(x).to_string()),
             };
 
