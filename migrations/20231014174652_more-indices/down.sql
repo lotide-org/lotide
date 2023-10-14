@@ -1,0 +1,11 @@
+DROP INDEX community_follow_follower_idx;
+DROP INDEX community_moderator_person_idx;
+DROP INDEX modlog_event_by_community_idx;
+DROP INDEX notification_main_idx;
+DROP INDEX post_author_idx;
+DROP INDEX post_community_idx;
+DROP INDEX post_local_idx;
+DROP INDEX reply_author_idx;
+DROP INDEX reply_local_idx;
+DROP INDEX reply_parent_idx;
+DROP INDEX reply_post_idx;

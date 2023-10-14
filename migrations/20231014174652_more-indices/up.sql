@@ -1,0 +1,11 @@
+CREATE INDEX community_follow_follower_idx ON community_follow (follower);
+CREATE INDEX community_moderator_person_idx ON community_moderator (person);
+CREATE INDEX modlog_event_by_community_idx ON modlog_event (by_community);
+CREATE INDEX notification_main_idx ON notification (to_user, created_at);
+CREATE INDEX post_author_idx ON post (author);
+CREATE INDEX post_community_idx ON post (community);
+CREATE INDEX post_local_idx ON post (local);
+CREATE INDEX reply_author_idx ON reply (author);
+CREATE INDEX reply_local_idx ON reply (local);
+CREATE INDEX reply_parent_idx ON reply (parent);
+CREATE INDEX reply_post_idx ON reply (post);
