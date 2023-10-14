@@ -53,8 +53,8 @@ async fn route_unstable_forgot_password_keys_create(
 
     let msg_body = lang
         .tr(&lang::email_content_forgot_password(
-            key.to_string(),
             username,
+            key.to_string(),
         ))
         .into_owned();
 
