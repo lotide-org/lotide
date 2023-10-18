@@ -5,6 +5,18 @@
 		"version": "dev"
 	},
 	"components": {
+		"parameters": {
+			"image_handling": {
+				"name": "image_handling",
+				"in": "query",
+				"required": false,
+				"description": "What to do with inline images in HTML content. Defaults to `convert_to_links`.",
+				"schema": {
+					"type": "string",
+					"enum": ["remove", "preserve", "convert_to_links"]
+				}
+			}
+		},
 		"schemas": {
 			"PathUserID": {
 				"oneOf": [
@@ -363,7 +375,8 @@
 						"in": "query",
 						"required": false,
 						"schema": {"type": "boolean"}
-					}
+					},
+					{"$ref": "#/components/parameters/image_handling"}
 				],
 				"responses": {
 					"200": {
@@ -449,6 +462,7 @@
 						"required": false,
 						"schema": {"type": "boolean"}
 					},
+					{"$ref": "#/components/parameters/image_handling"},
 					{
 						"name": "depth",
 						"in": "query",
@@ -650,6 +664,7 @@
 						"schema": {"type": "boolean"},
 						"description": "If true, will include `you_are_moderator` and `your_follow` in list. Requires login."
 					},
+					{"$ref": "#/components/parameters/image_handling"},
 					{
 						"name": "search",
 						"in": "query",
@@ -779,7 +794,8 @@
 						"in": "query",
 						"required": false,
 						"schema": {"type": "boolean"}
-					}
+					},
+					{"$ref": "#/components/parameters/image_handling"}
 				],
 				"responses": {
 					"200": {
@@ -1095,6 +1111,36 @@
 				"security": [{"bearer": []}]
 			}
 		},
+		"/api/unstable/debug/db": {
+			"get": {
+				"summary": "Get database connection status",
+				"responses": {
+					"200": {
+						"description": "",
+						"content": {
+							"application/json": {
+								"schema": {
+									"type": "object",
+									"required": ["pool"],
+									"properties": {
+										"pool": {
+											"type": "object",
+											"required": ["max", "size", "idle", "waiting"],
+											"properties": {
+												"max": {"type": "integer", "description": "Configured maximum pool size"},
+												"size": {"type": "integer", "description": "Current number of connections"},
+												"idle": {"type": "integer", "description": "Number of idle connections"},
+												"waiting": {"type": "integer", "description": "Number of connections currently in use"}
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		"/api/unstable/flags": {
 			"get": {
 				"summary": "List flags",
@@ -1117,7 +1163,8 @@
 						"required": false,
 						"schema": {"type": "boolean"},
 						"description": "Filter by whether the flag is dismissed for the target. Requires exactly one target filter."
-					}
+					},
+					{"$ref": "#/components/parameters/image_handling"}
 				],
 				"responses": {
 					"200": {
@@ -1282,6 +1329,9 @@
 		"/api/unstable/instance": {
 			"get": {
 				"summary": "Fetch information about the instance",
+				"parameters": [
+					{"$ref": "#/components/parameters/image_handling"}
+				],
 				"responses": {
 					"200": {
 						"description": "",
@@ -1679,6 +1729,7 @@
 						"required": false,
 						"schema": {"type": "boolean"}
 					},
+					{"$ref": "#/components/parameters/image_handling"},
 					{
 						"name": "sort",
 						"in": "query",
@@ -1853,7 +1904,8 @@
 						"in": "query",
 						"required": false,
 						"schema": {"type": "boolean"}
-					}
+					},
+					{"$ref": "#/components/parameters/image_handling"}
 				],
 				"responses": {
 					"200": {
@@ -2042,6 +2094,7 @@
 						"required": false,
 						"schema": {"type": "boolean"}
 					},
+					{"$ref": "#/components/parameters/image_handling"},
 					{
 						"name": "limit",
 						"in": "query",
@@ -2235,7 +2288,8 @@
 						"required": true,
 						"schema": {"type": "string"},
 						"description": "Filter by the user's name"
-					}
+					},
+					{"$ref": "#/components/parameters/image_handling"}
 				],
 				"responses": {
 					"200": {
@@ -2323,7 +2377,8 @@
 						"required": false,
 						"schema": {"type": "boolean"},
 						"description": "If true, will fetch your_note"
-					}
+					},
+					{"$ref": "#/components/parameters/image_handling"}
 				],
 				"responses": {
 					"200": {
@@ -2350,6 +2405,7 @@
 						"required": true,
 						"schema": {"$ref": "#/components/schemas/PathUserID"}
 					},
+					{"$ref": "#/components/parameters/image_handling"},
 					{
 						"name": "limit",
 						"in": "query",
@@ -2470,6 +2526,9 @@
 		"/api/unstable/users/~me/notifications": {
 			"get": {
 				"summary": "Fetch your notifications. Will also clear `has_unread_notifications`.",
+				"parameters": [
+					{"$ref": "#/components/parameters/image_handling"}
+				],
 				"responses": {
 					"200": {
 						"description": "",
