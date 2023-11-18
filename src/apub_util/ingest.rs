@@ -49,7 +49,19 @@ impl IngestResult {
 
 pub struct PostIngestResult {
     pub id: PostLocalID,
-    pub poll: Option<crate::PollInfoOwned>,
+    pub poll: Option<MaybeElided<crate::PollInfoOwned>>,
+}
+
+pub struct MaybeElided<T>(pub Option<T>);
+
+impl<T> MaybeElided<T> {
+    pub const ELIDED: Self = MaybeElided(None);
+}
+
+impl<T> From<T> for MaybeElided<T> {
+    fn from(src: T) -> MaybeElided<T> {
+        MaybeElided(Some(src))
+    }
 }
 
 const UTC_OFFSET: chrono::offset::FixedOffset = match chrono::offset::FixedOffset::east_opt(0) {
@@ -62,6 +74,84 @@ pub async fn ingest_object(
     found_from: FoundFrom,
     ctx: Arc<crate::BaseContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
+    // Detect local objects and skip ingestion (#217)
+    if let Some(id) = object.id() {
+        if let Some(obj_ref) = super::LocalObjectRef::try_from_uri(id, &ctx.host_url_apub) {
+            return match obj_ref {
+                super::LocalObjectRef::User(user_id) => {
+                    let person = match &object.0 {
+                        KnownObject::Person(person) => person,
+                        _ => unreachable!(),
+                    };
+
+                    let public_key = person
+                        .ext_one
+                        .public_key
+                        .as_ref()
+                        .map(|key| key.public_key_pem.as_bytes());
+                    let public_key_sigalg = person
+                        .ext_one
+                        .public_key
+                        .as_ref()
+                        .and_then(|key| key.signature_algorithm.as_deref());
+
+                    Ok(Some(IngestResult::Actor(super::ActorLocalInfo::User {
+                        id: user_id,
+                        public_key: public_key.map(|key| super::PubKeyInfo {
+                            algorithm: super::get_message_digest(public_key_sigalg),
+                            key: key.to_owned(),
+                        }),
+                        remote_url: id.clone(),
+                    })))
+                }
+                super::LocalObjectRef::Community(community_id) => {
+                    let group = match &object.0 {
+                        KnownObject::Group(group) => group,
+                        _ => unreachable!(),
+                    };
+
+                    let public_key = group
+                        .ext_one
+                        .public_key
+                        .as_ref()
+                        .map(|key| key.public_key_pem.as_bytes());
+                    let public_key_sigalg = group
+                        .ext_one
+                        .public_key
+                        .as_ref()
+                        .and_then(|key| key.signature_algorithm.as_deref());
+
+                    Ok(Some(IngestResult::Actor(
+                        super::ActorLocalInfo::Community {
+                            id: community_id,
+                            public_key: public_key.map(|key| super::PubKeyInfo {
+                                algorithm: super::get_message_digest(public_key_sigalg),
+                                key: key.to_owned(),
+                            }),
+                            ap_outbox: group.outbox_unchecked().cloned(),
+                        },
+                    )))
+                }
+                super::LocalObjectRef::Post(post_id) => {
+                    let has_poll = matches!(object.0, KnownObject::Question(_));
+
+                    Ok(Some(IngestResult::Post(PostIngestResult {
+                        id: post_id,
+                        poll: if has_poll {
+                            Some(MaybeElided::ELIDED)
+                        } else {
+                            None
+                        },
+                    })))
+                }
+                super::LocalObjectRef::Comment(comment_id) => Ok(Some(IngestResult::Other(
+                    ThingLocalRef::Comment(comment_id),
+                ))),
+                _ => Ok(None),
+            };
+        }
+    }
+
     let mut db = ctx.db_pool.get().await?;
     match object.into_inner() {
         KnownObject::Accept(activity) => {
@@ -1944,7 +2034,7 @@ async fn handle_recieved_post(
 
     Ok(PostIngestResult {
         id: post_local_id,
-        poll,
+        poll: poll.map(|x| x.into()),
     })
 }
 

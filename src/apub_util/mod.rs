@@ -117,6 +117,34 @@ pub enum KnownObject {
     Question(ExtendedPostlike<activitystreams::activity::Question>),
 }
 
+impl KnownObject {
+    pub fn id(&self) -> Option<&url::Url> {
+        match self {
+            KnownObject::Accept(obj) => obj.id_unchecked(),
+            KnownObject::Add(obj) => obj.id_unchecked(),
+            KnownObject::Announce(obj) => obj.id_unchecked(),
+            KnownObject::Create(obj) => obj.id_unchecked(),
+            KnownObject::Delete(obj) => obj.id_unchecked(),
+            KnownObject::Flag(obj) => obj.id_unchecked(),
+            KnownObject::Follow(obj) => obj.id_unchecked(),
+            KnownObject::Join(obj) => obj.id_unchecked(),
+            KnownObject::Leave(obj) => obj.id_unchecked(),
+            KnownObject::Like(obj) => obj.id_unchecked(),
+            KnownObject::Undo(obj) => obj.id_unchecked(),
+            KnownObject::Update(obj) => obj.id_unchecked(),
+            KnownObject::Person(obj) => obj.id_unchecked(),
+            KnownObject::Remove(obj) => obj.id_unchecked(),
+            KnownObject::Service(obj) => obj.id_unchecked(),
+            KnownObject::Group(obj) => obj.id_unchecked(),
+            KnownObject::Article(obj) => obj.id_unchecked(),
+            KnownObject::Image(obj) => obj.id_unchecked(),
+            KnownObject::Page(obj) => obj.id_unchecked(),
+            KnownObject::Note(obj) => obj.id_unchecked(),
+            KnownObject::Question(obj) => obj.id_unchecked(),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct JustMaybeAPID {
     id: Option<BaseURL>,

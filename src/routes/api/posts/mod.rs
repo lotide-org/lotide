@@ -1111,6 +1111,10 @@ async fn route_unstable_posts_get(
                         bool,
                         Option<chrono::DateTime<chrono::FixedOffset>>,
                     ) = if let Some(info) = &fetched_info {
+                        let info = info
+                            .0
+                            .as_ref()
+                            .ok_or(crate::Error::InternalStrStatic("tried to fetch local poll"))?;
                         (
                             info.options
                                 .iter()
