@@ -548,6 +548,7 @@ pub fn simple_response(
 ) -> hyper::Response<hyper::Body> {
     common_response_builder()
         .status(code)
+        .header(hyper::header::CONTENT_TYPE, "text/plain; charset=utf-8")
         .body(text.into())
         .unwrap()
 }
