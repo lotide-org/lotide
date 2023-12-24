@@ -1,0 +1,18 @@
+sources:
+  - https://git.sr.ht/~vpzom/lotide
+image: alpine/edge
+oauth: pages.sr.ht/PAGES:RW
+packages:
+  - hut
+  - npm
+environment:
+  site: apidocs.lotide.org
+tasks:
+  - setup: |
+      npm config set prefix $HOME/.local
+      npm install -g redoc-cli@^0.13
+  - build: |
+      ~/.local/bin/redoc-cli bundle -o index.html --options.sideNavStyle=path-only --options.pathInMiddlePanel=true --options.hideHostname=true --disableGoogleFont lotide/openapi/openapi.json
+  - deploy: |
+      tar -cvz index.html > site.tar.gz
+      hut pages publish -d $site site.tar.gz
