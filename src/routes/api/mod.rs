@@ -900,6 +900,7 @@ async fn route_unstable_objects_lookup(
                 obj,
                 crate::apub_util::ingest::FoundFrom::Other,
                 ctx,
+                false,
             )
             .await?
         }

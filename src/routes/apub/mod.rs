@@ -236,6 +236,7 @@ async fn inbox_common(
         object,
         crate::apub_util::ingest::FoundFrom::Other,
         ctx,
+        true,
     )
     .await?;
 
