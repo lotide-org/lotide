@@ -61,6 +61,7 @@ pub async fn ingest_object(
     object: Verified<KnownObject>,
     found_from: FoundFrom,
     ctx: Arc<crate::BaseContext>,
+    for_inbox: bool,
 ) -> Result<Option<IngestResult>, crate::Error> {
     let mut db = ctx.db_pool.get().await?;
     match object.into_inner() {
@@ -176,6 +177,7 @@ pub async fn ingest_object(
                                 community_ap_id,
                                 object.one().unwrap(),
                                 &ctx,
+                                for_inbox,
                             )
                             .await?;
 
@@ -187,6 +189,7 @@ pub async fn ingest_object(
                                     community_is_local,
                                 },
                                 ctx,
+                                for_inbox,
                             )
                             .await?;
                         }
@@ -237,6 +240,7 @@ pub async fn ingest_object(
                             community_ap_id,
                             object.one().unwrap(),
                             &ctx,
+                            for_inbox,
                         )
                         .await?;
 
@@ -248,6 +252,7 @@ pub async fn ingest_object(
                                 community_is_local,
                             },
                             ctx,
+                            for_inbox,
                         )
                         .await?;
                     }
@@ -259,7 +264,7 @@ pub async fn ingest_object(
             ingest_postlike(Verified(KnownObject::Article(obj)), found_from, ctx).await
         }
         KnownObject::Create(activity) => {
-            ingest_create(Verified(activity), found_from, ctx).await?;
+            ingest_create(Verified(activity), found_from, ctx, for_inbox).await?;
             Ok(None)
         }
         KnownObject::Delete(activity) => {
@@ -677,8 +682,9 @@ pub fn ingest_object_boxed(
     object: Verified<KnownObject>,
     found_from: FoundFrom,
     ctx: Arc<crate::BaseContext>,
+    for_inbox: bool,
 ) -> std::pin::Pin<Box<dyn Future<Output = Result<Option<IngestResult>, crate::Error>> + Send>> {
-    Box::pin(ingest_object(object, found_from, ctx))
+    Box::pin(ingest_object(object, found_from, ctx, for_inbox))
 }
 
 pub async fn ingest_like(
@@ -869,6 +875,7 @@ pub async fn ingest_create(
     activity: Verified<activitystreams::activity::Create>,
     found_from: FoundFrom,
     ctx: Arc<crate::BaseContext>,
+    for_inbox: bool,
 ) -> Result<(), crate::Error> {
     for req_obj in activity.object().iter() {
         let object_id = req_obj.id();
@@ -879,12 +886,20 @@ pub async fn ingest_create(
             } else {
                 false
             } {
-                Verified(serde_json::from_value(serde_json::to_value(&req_obj)?)?)
+                Verified(
+                    serde_json::from_value(serde_json::to_value(&req_obj)?).map_err(|err| {
+                        log::debug!("Failed to parse incoming message: {:?}", err);
+                        crate::Error::UserError(crate::simple_response(
+                            hyper::StatusCode::FORBIDDEN,
+                            "Invalid or unsupported data",
+                        ))
+                    })?,
+                )
             } else {
                 crate::apub_util::fetch_ap_object(object_id, &ctx).await?
             };
 
-            ingest_object_boxed(obj, found_from.clone(), ctx.clone()).await?;
+            ingest_object_boxed(obj, found_from.clone(), ctx.clone(), for_inbox).await?;
         }
     }
 

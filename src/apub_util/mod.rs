@@ -383,13 +383,26 @@ pub async fn fetch_or_verify(
     sender_ap_id: &url::Url,
     obj: activitystreams::base::AnyBase,
     ctx: &crate::BaseContext,
+    for_inbox: bool,
 ) -> Result<Verified<KnownObject>, crate::Error> {
     let object_id = obj
         .id()
         .ok_or(crate::Error::InternalStrStatic("Missing ID in object"))?;
     if is_contained(object_id, sender_ap_id) {
         if let Some(base) = obj.as_base() {
-            return Ok(serde_json::from_value(serde_json::to_value(base)?).map(Verified)?);
+            return Ok(serde_json::from_value(serde_json::to_value(base)?)
+                .map(Verified)
+                .map_err(|err| {
+                    if for_inbox {
+                        log::debug!("Failed to parse inner object: {:?}", for_inbox);
+                        crate::Error::UserError(crate::simple_response(
+                            hyper::StatusCode::BAD_REQUEST,
+                            "Invalid or unsupported data",
+                        ))
+                    } else {
+                        err.into()
+                    }
+                })?);
         }
     }
 
@@ -402,7 +415,7 @@ pub async fn fetch_and_ingest(
     ctx: Arc<crate::BaseContext>,
 ) -> Result<Option<ingest::IngestResult>, crate::Error> {
     let obj = fetch_ap_object(req_ap_id, &ctx).await?;
-    ingest::ingest_object_boxed(obj, found_from, ctx).await
+    ingest::ingest_object_boxed(obj, found_from, ctx, false).await
 }
 
 pub async fn fetch_actor(
@@ -2021,10 +2034,18 @@ pub async fn verify_incoming_object(
 
     match req.headers().get("signature") {
         None => {
-            let obj: JustMaybeAPID = serde_json::from_slice(&req_body)?;
-            let ap_id = obj.id.ok_or(crate::Error::InternalStrStatic(
-                "Missing id in received activity",
-            ))?;
+            let obj: JustMaybeAPID = serde_json::from_slice(&req_body).map_err(|_| {
+                crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Unable to parse request body",
+                ))
+            })?;
+            let ap_id = obj
+                .id
+                .ok_or(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
+                    "Missing id in received activity",
+                )))?;
 
             let res_body = fetch_ap_object(&ap_id, &ctx).await?;
 
@@ -2034,9 +2055,12 @@ pub async fn verify_incoming_object(
             let obj: JustActor = serde_json::from_slice(&req_body)?;
 
             let actor_ap_id = if let Some(actor) = obj.actor.as_one() {
-                actor.id().ok_or(crate::Error::InternalStrStatic(
-                    "No id found for actor, can't verify signature",
-                ))?
+                actor
+                    .id()
+                    .ok_or(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::BAD_REQUEST,
+                        "No id found for actor, can't verify signature",
+                    )))?
             } else {
                 return Err(crate::Error::InternalStrStatic(
                     "Found multiple actors for activity, can't verify signature",
@@ -2046,9 +2070,10 @@ pub async fn verify_incoming_object(
             let path_and_query = req
                 .uri()
                 .path_and_query()
-                .ok_or(crate::Error::InternalStrStatic(
+                .ok_or(crate::Error::UserError(crate::simple_response(
+                    hyper::StatusCode::BAD_REQUEST,
                     "Missing path, cannot verify signature",
-                ))?
+                )))?
                 .as_str();
 
             // path ends up wrong with our recommended proxy config
@@ -2085,7 +2110,15 @@ pub async fn verify_incoming_object(
                     "Received remote object: {}",
                     String::from_utf8_lossy(&req_body)
                 );
-                Ok(Verified(serde_json::from_slice(&req_body)?))
+                Ok(Verified(serde_json::from_slice(&req_body).map_err(
+                    |err| {
+                        log::debug!("Failed to parse incoming message: {:?}", err);
+                        crate::Error::UserError(crate::simple_response(
+                            hyper::StatusCode::FORBIDDEN,
+                            "Invalid or unsupported data",
+                        ))
+                    },
+                )?))
             } else {
                 Err(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::FORBIDDEN,
