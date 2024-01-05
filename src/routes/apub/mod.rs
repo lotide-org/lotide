@@ -232,12 +232,9 @@ async fn inbox_common(
 
     let object = crate::apub_util::verify_incoming_object(req, &db, &ctx).await?;
 
-    crate::apub_util::ingest::ingest_object(
-        object,
-        crate::apub_util::ingest::FoundFrom::Other,
-        ctx,
-        true,
-    )
+    ctx.enqueue_task(&crate::tasks::IngestObjectFromInbox {
+        object: serde_json::to_string(&object)?.into(),
+    })
     .await?;
 
     Ok(crate::simple_response(hyper::StatusCode::ACCEPTED, ""))

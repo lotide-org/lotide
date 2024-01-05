@@ -382,3 +382,28 @@ impl<'a> TaskDef for SendNotificationForSubscription<'a> {
         Ok(())
     }
 }
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct IngestObjectFromInbox<'a> {
+    pub object: Cow<'a, str>,
+}
+
+#[async_trait]
+impl<'a> TaskDef for IngestObjectFromInbox<'a> {
+    const KIND: &'static str = "ingest_object_from_inbox";
+
+    async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
+        // should already have been verified when creating the task
+        let object = crate::apub_util::Verified(serde_json::from_str(&self.object)?);
+
+        crate::apub_util::ingest::ingest_object(
+            object,
+            crate::apub_util::ingest::FoundFrom::Other,
+            ctx,
+            true,
+        )
+        .await?;
+
+        Ok(())
+    }
+}

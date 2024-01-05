@@ -96,6 +96,10 @@ async fn perform_task(
                 serde_json::from_value(params)?;
             def.perform(ctx).await?;
         }
+        crate::tasks::IngestObjectFromInbox::KIND => {
+            let def: crate::tasks::IngestObjectFromInbox = serde_json::from_value(params)?;
+            def.perform(ctx).await?;
+        }
         _ => {
             return Err(crate::Error::InternalStr(format!(
                 "Unrecognized task type: {}",
