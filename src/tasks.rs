@@ -75,15 +75,35 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
                 .insert(hyper::header::DATE, crate::apub_util::now_http_date());
 
             if let Some((privkey, key_id)) = signing_info {
-                let signature = hancock::Signature::create_legacy(
-                    key_id.as_str(),
-                    &hyper::Method::POST,
-                    &path_and_query,
-                    req.headers(),
-                    |src| crate::apub_util::do_sign(&privkey, &src),
-                )?;
+                if ctx.break_stuff {
+                    let signature = hancock::httpbis::HttpbisSignature::create_for_request(
+                        "signature",
+                        hancock::httpbis::SignatureParams {
+                            keyid: Some(key_id.as_str().into()),
+                            alg: Some("hmac-sha256".into()),
+                            ..hancock::httpbis::SignatureParams::new_now(5 * 60) // 5 minutes
+                        },
+                        hancock::httpbis::cover_all_components_for_request(&req),
+                        &req,
+                        |src| {
+                            log::debug!("signing: {:?}", std::str::from_utf8(src));
 
-                req.headers_mut().insert("Signature", signature.to_header());
+                            crate::apub_util::do_sign(&privkey, &src)
+                        },
+                    )?;
+
+                    signature.apply_headers(&mut req.headers_mut())?;
+                } else {
+                    let signature = hancock::richanna::RichannaSignature::create_legacy(
+                        key_id.as_str(),
+                        &hyper::Method::POST,
+                        &path_and_query,
+                        req.headers(),
+                        |src| crate::apub_util::do_sign(&privkey, &src),
+                    )?;
+
+                    req.headers_mut().insert("Signature", signature.to_header());
+                }
             }
         }
 

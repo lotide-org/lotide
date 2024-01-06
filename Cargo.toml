@@ -29,7 +29,7 @@ chrono = "0.4.11"
 url = { version = "2.1.1", features = ["serde"] }
 either = "1.5.3"
 openssl = "0.10.29"
-hancock = "0.1.0"
+hancock = { git = "https://git.sr.ht/~vpzom/hancock", branch = "httpbis" }
 serde_urlencoded = "0.6.1"
 mime = "0.3.16"
 thiserror = "1.0.20"

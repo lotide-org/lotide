@@ -8,7 +8,7 @@ use activitystreams::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -1947,10 +1947,7 @@ fn get_message_digest(src: Option<&str>) -> Option<openssl::hash::MessageDigest>
 }
 
 pub async fn check_signature_for_actor(
-    signature: &hyper::header::HeaderValue,
-    request_method: &hyper::Method,
-    request_path_and_query: &str,
-    headers: &hyper::header::HeaderMap,
+    request: &hyper::Request<hyper::Body>,
     actor_ap_id: &url::Url,
     db: &tokio_postgres::Client,
     ctx: &Arc<crate::BaseContext>,
@@ -1963,22 +1960,24 @@ pub async fn check_signature_for_actor(
             })
         }).transpose()?;
 
-    log::debug!("signature: {:?}", signature);
     log::debug!("found_key: {:?}", found_key.is_some());
 
-    let signature = hancock::Signature::parse(signature)?;
+    let signatures = hancock::HttpSignature::parse_from_request(request)?;
 
     if let Some((key, algorithm)) = found_key {
         let algorithm = algorithm.ok_or(crate::Error::InternalStrStatic(
             "Cannot verify signature, unknown algorithm",
         ))?;
-        if signature.verify(
-            request_method,
-            request_path_and_query,
-            headers,
-            |bytes, sig| do_verify(&key, algorithm, bytes, sig),
-        )? {
-            return Ok(true);
+
+        for signature in &signatures {
+            if signature.verify_request(&request, |bytes, sig| {
+                log::debug!("verifying: {:?} {:?}", std::str::from_utf8(bytes), sig);
+                do_verify(&key, algorithm, bytes, sig)
+            })? {
+                return Ok(true);
+            } else {
+                log::debug!("signature does not match");
+            }
         }
     }
 
@@ -1992,12 +1991,16 @@ pub async fn check_signature_for_actor(
         let algorithm = key_info.algorithm.ok_or(crate::Error::InternalStrStatic(
             "Cannot verify signature, unknown algorithm",
         ))?;
-        Ok(signature.verify(
-            request_method,
-            request_path_and_query,
-            headers,
-            |bytes, sig| do_verify(&key, algorithm, bytes, sig),
-        )?)
+
+        for signature in &signatures {
+            if signature.verify_request(&request, |bytes, sig| {
+                do_verify(&key, algorithm, bytes, sig)
+            })? {
+                return Ok(true);
+            }
+        }
+
+        return Ok(false);
     } else {
         Err(crate::Error::InternalStrStatic(
             "Cannot verify signature, no key found",
@@ -2061,100 +2064,99 @@ pub async fn verify_incoming_object(
 ) -> Result<Verified<KnownObject>, crate::Error> {
     let req_body = hyper::body::to_bytes(req.body_mut()).await?;
 
-    match req.headers().get("signature") {
-        None => {
-            let obj: JustMaybeAPID = serde_json::from_slice(&req_body).map_err(|_| {
-                crate::Error::UserError(crate::simple_response(
-                    hyper::StatusCode::BAD_REQUEST,
-                    "Unable to parse request body",
-                ))
-            })?;
-            let ap_id = obj
-                .id
+    if req.headers().contains_key(hancock::SIGNATURE_HEADER) {
+        let obj: JustActor = serde_json::from_slice(&req_body)?;
+
+        let actor_ap_id = if let Some(actor) = obj.actor.as_one() {
+            actor
+                .id()
                 .ok_or(crate::Error::UserError(crate::simple_response(
                     hyper::StatusCode::BAD_REQUEST,
-                    "Missing id in received activity",
-                )))?;
-
-            let res_body = fetch_ap_object(&ap_id, &ctx).await?;
-
-            Ok(res_body)
-        }
-        Some(signature) => {
-            let obj: JustActor = serde_json::from_slice(&req_body)?;
-
-            let actor_ap_id = if let Some(actor) = obj.actor.as_one() {
-                actor
-                    .id()
-                    .ok_or(crate::Error::UserError(crate::simple_response(
-                        hyper::StatusCode::BAD_REQUEST,
-                        "No id found for actor, can't verify signature",
-                    )))?
-            } else {
-                return Err(crate::Error::InternalStrStatic(
-                    "Found multiple actors for activity, can't verify signature",
-                ));
-            };
-
-            let path_and_query = req
-                .uri()
-                .path_and_query()
-                .ok_or(crate::Error::UserError(crate::simple_response(
-                    hyper::StatusCode::BAD_REQUEST,
-                    "Missing path, cannot verify signature",
+                    "No id found for actor, can't verify signature",
                 )))?
-                .as_str();
+        } else {
+            return Err(crate::Error::InternalStrStatic(
+                "Found multiple actors for activity, can't verify signature",
+            ));
+        };
 
-            // path ends up wrong with our recommended proxy config
-            let path_and_query = if ctx.apub_proxy_rewrites {
-                req.headers()
-                    .get("x-forwarded-path")
-                    .map(|x| x.to_str())
-                    .transpose()?
-            } else {
-                None
-            }
-            .unwrap_or(path_and_query);
-
-            if check_signature_for_actor(
-                signature,
-                req.method(),
-                path_and_query,
-                req.headers(),
-                actor_ap_id,
-                db,
-                ctx,
-            )
-            .await?
+        // path ends up wrong with our recommended proxy config
+        if ctx.apub_proxy_rewrites {
+            if let Some(path) = req
+                .headers()
+                .get("x-forwarded-path")
+                .map(|x| x.to_str())
+                .transpose()?
             {
-                if let Some(digest) = req.headers().get("digest") {
-                    if !check_digest(&req_body, digest) {
-                        return Err(crate::Error::UserError(crate::simple_response(
-                            hyper::StatusCode::FORBIDDEN,
-                            "Mismatched Digest header",
-                        )));
+                let mut path_and_query = path.to_owned();
+                let uri = req.uri_mut();
+
+                let mut tmp = http::Uri::default();
+
+                *uri = http::Uri::from_parts({
+                    {
+                        let query = uri.query();
+                        if let Some(query) = query {
+                            path_and_query.push('?');
+                            path_and_query.push_str(query);
+                        }
                     }
-                }
-                log::debug!(
-                    "Received remote object: {}",
-                    String::from_utf8_lossy(&req_body)
-                );
-                Ok(Verified(serde_json::from_slice(&req_body).map_err(
-                    |err| {
-                        log::debug!("Failed to parse incoming message: {:?}", err);
-                        crate::Error::UserError(crate::simple_response(
-                            hyper::StatusCode::FORBIDDEN,
-                            "Invalid or unsupported data",
-                        ))
-                    },
-                )?))
-            } else {
-                Err(crate::Error::UserError(crate::simple_response(
-                    hyper::StatusCode::FORBIDDEN,
-                    "Signature check failed",
-                )))
+
+                    std::mem::swap(uri, &mut tmp);
+
+                    let mut parts = tmp.into_parts();
+                    parts.path_and_query = Some(path_and_query.try_into().unwrap());
+
+                    parts
+                })?;
             }
         }
+
+        if check_signature_for_actor(&req, actor_ap_id, db, ctx).await? {
+            if let Some(digest) = req.headers().get("digest") {
+                if !check_digest(&req_body, digest) {
+                    return Err(crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        "Mismatched Digest header",
+                    )));
+                }
+            }
+            log::debug!(
+                "Received remote object: {}",
+                String::from_utf8_lossy(&req_body)
+            );
+            Ok(Verified(serde_json::from_slice(&req_body).map_err(
+                |err| {
+                    log::debug!("Failed to parse incoming message: {:?}", err);
+                    crate::Error::UserError(crate::simple_response(
+                        hyper::StatusCode::FORBIDDEN,
+                        "Invalid or unsupported data",
+                    ))
+                },
+            )?))
+        } else {
+            Err(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::FORBIDDEN,
+                "Signature check failed",
+            )))
+        }
+    } else {
+        let obj: JustMaybeAPID = serde_json::from_slice(&req_body).map_err(|_| {
+            crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Unable to parse request body",
+            ))
+        })?;
+        let ap_id = obj
+            .id
+            .ok_or(crate::Error::UserError(crate::simple_response(
+                hyper::StatusCode::BAD_REQUEST,
+                "Missing id in received activity",
+            )))?;
+
+        let res_body = fetch_ap_object(&ap_id, &ctx).await?;
+
+        Ok(res_body)
     }
 }
 
