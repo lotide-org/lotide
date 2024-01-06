@@ -50,6 +50,7 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
         let inbox_uri = self.inbox.as_str().parse::<hyper::Uri>()?;
 
         let mut req = hyper::Request::post(&inbox_uri)
+            .header(hyper::header::USER_AGENT, &ctx.user_agent)
             .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
             .header("Digest", digest_header)
             .body(self.object.into())?;

@@ -863,7 +863,11 @@ async fn route_unstable_objects_lookup(
             log::debug!("{}", uri);
             let res = ctx
                 .http_client
-                .request(hyper::Request::get(uri).body(Default::default())?)
+                .request(
+                    hyper::Request::get(uri)
+                        .header(hyper::header::USER_AGENT, &ctx.user_agent)
+                        .body(Default::default())?,
+                )
                 .await?;
 
             if res.status() == hyper::StatusCode::NOT_FOUND {
