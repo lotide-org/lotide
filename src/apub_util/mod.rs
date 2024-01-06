@@ -422,7 +422,7 @@ pub async fn fetch_or_verify(
                 .map(Verified)
                 .map_err(|err| {
                     if for_inbox {
-                        log::debug!("Failed to parse inner object: {:?}", for_inbox);
+                        log::debug!("Failed to parse inner object: {:?}", err);
                         crate::Error::UserError(crate::simple_response(
                             hyper::StatusCode::BAD_REQUEST,
                             "Invalid or unsupported data",
