@@ -370,6 +370,7 @@ pub async fn fetch_ap_object_raw(
             ctx.http_client
                 .request(
                     hyper::Request::get(&current_id)
+                        .header(hyper::header::USER_AGENT, &ctx.user_agent)
                         .header(hyper::header::ACCEPT, ACTIVITY_TYPE_HEADER_VALUE)
                         .body(Default::default())?,
                 )
@@ -2186,7 +2187,11 @@ pub async fn fetch_url_from_webfinger(
     log::debug!("{}", uri);
     let res = ctx
         .http_client
-        .request(hyper::Request::get(uri).body(Default::default())?)
+        .request(
+            hyper::Request::get(uri)
+                .header(hyper::header::USER_AGENT, &ctx.user_agent)
+                .body(Default::default())?,
+        )
         .await;
 
     let res = if ctx.dev_mode {
@@ -2198,7 +2203,11 @@ pub async fn fetch_url_from_webfinger(
                 let uri = format!("http://{}/.well-known/webfinger?{}", host, query,);
                 log::debug!("{}", uri);
                 ctx.http_client
-                    .request(hyper::Request::get(uri).body(Default::default())?)
+                    .request(
+                        hyper::Request::get(uri)
+                            .header(hyper::header::USER_AGENT, &ctx.user_agent)
+                            .body(Default::default())?,
+                    )
                     .await?
             }
         }
