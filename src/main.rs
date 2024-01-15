@@ -1438,6 +1438,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .short('c')
                 .value_name("FILE")
                 .help("Sets a path to a config file")
+                .allow_invalid_utf8(true)
                 .takes_value(true),
         )
         .subcommand(
