@@ -288,6 +288,8 @@ pub fn do_sign(
     key: &openssl::pkey::PKey<openssl::pkey::Private>,
     src: &[u8],
 ) -> Result<Vec<u8>, openssl::error::ErrorStack> {
+    log::debug!("signing: {:?}", std::str::from_utf8(src));
+
     let mut signer = openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), key)?;
     signer.update(src)?;
     signer.sign_to_vec()

@@ -85,11 +85,7 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
                         },
                         hancock::httpbis::cover_all_components_for_request(&req),
                         &req,
-                        |src| {
-                            log::debug!("signing: {:?}", std::str::from_utf8(src));
-
-                            crate::apub_util::do_sign(&privkey, &src)
-                        },
+                        |src| crate::apub_util::do_sign(&privkey, &src),
                     )?;
 
                     signature.apply_headers(&mut req.headers_mut())?;
