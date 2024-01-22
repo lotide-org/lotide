@@ -1872,10 +1872,12 @@ pub async fn enqueue_forward_to_community_followers(
     body: String,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    ctx.enqueue_task(&crate::tasks::DeliverToFollowers {
-        actor: ActorLocalRef::Community(community_id),
-        sign: false,
+    ctx.enqueue_task(&crate::tasks::DeliverToAudience {
+        sign_as: None,
         object: body,
+        audience: vec![crate::tasks::AudienceItem::Followers(
+            ActorLocalRef::Community(community_id),
+        )],
     })
     .await
 }
@@ -1914,10 +1916,12 @@ async fn enqueue_send_to_community_followers(
     activity: impl serde::Serialize,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    ctx.enqueue_task(&crate::tasks::DeliverToFollowers {
-        actor: ActorLocalRef::Community(community_id),
-        sign: true,
+    let actor = ActorLocalRef::Community(community_id);
+
+    ctx.enqueue_task(&crate::tasks::DeliverToAudience {
+        sign_as: Some(actor),
         object: serde_json::to_string(&activity)?,
+        audience: vec![crate::tasks::AudienceItem::Followers(actor)],
     })
     .await
 }

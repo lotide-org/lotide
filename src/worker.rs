@@ -75,8 +75,13 @@ async fn perform_task(
             let def: crate::tasks::DeliverToInbox = serde_json::from_value(params)?;
             def.perform(ctx).await?;
         }
+        #[allow(deprecated)]
         crate::tasks::DeliverToFollowers::KIND => {
             let def: crate::tasks::DeliverToFollowers = serde_json::from_value(params)?;
+            def.perform(ctx).await?;
+        }
+        crate::tasks::DeliverToAudience::KIND => {
+            let def: crate::tasks::DeliverToAudience = serde_json::from_value(params)?;
             def.perform(ctx).await?;
         }
         crate::tasks::FetchActor::KIND => {

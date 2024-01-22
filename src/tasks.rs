@@ -7,6 +7,7 @@ use crate::types::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::fmt::Write;
 use std::sync::Arc;
 
 #[async_trait]
@@ -111,29 +112,99 @@ impl<'a> TaskDef for DeliverToInbox<'a> {
     }
 }
 
+mod deprecated {
+    // workaround for https://github.com/serde-rs/serde/issues/2195
+    #![allow(deprecated)]
+
+    use super::*;
+
+    #[derive(Deserialize, Serialize, Debug)]
+    #[deprecated]
+    pub struct DeliverToFollowers {
+        pub actor: ActorLocalRef,
+        pub sign: bool,
+        pub object: String,
+    }
+
+    #[async_trait]
+    #[allow(deprecated)]
+    impl TaskDef for DeliverToFollowers {
+        const KIND: &'static str = "deliver_to_followers";
+
+        async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
+            DeliverToAudience {
+                sign_as: if self.sign { Some(self.actor) } else { None },
+                object: self.object,
+                audience: vec![AudienceItem::Followers(self.actor)],
+            }
+            .perform(ctx)
+            .await
+        }
+    }
+}
+
+pub use deprecated::*;
+
 #[derive(Deserialize, Serialize, Debug)]
-pub struct DeliverToFollowers {
-    pub actor: ActorLocalRef,
-    pub sign: bool,
+pub enum AudienceItem {
+    Followers(ActorLocalRef),
+    Single(ActorLocalRef),
+}
+
+#[derive(Deserialize, Serialize, Debug)]
+pub struct DeliverToAudience {
+    pub sign_as: Option<ActorLocalRef>,
     pub object: String,
+    pub audience: Vec<AudienceItem>,
 }
 
 #[async_trait]
-impl TaskDef for DeliverToFollowers {
-    const KIND: &'static str = "deliver_to_followers";
+impl TaskDef for DeliverToAudience {
+    const KIND: &'static str = "deliver_to_audience";
 
     async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
-        let community_id = match self.actor {
-            ActorLocalRef::Community(id) => id,
-            ActorLocalRef::Person(_) => return Ok(()), // We don't have user followers at this point
-        };
-
         let db = ctx.db_pool.get().await?;
 
-        db.execute(
-            "INSERT INTO task (kind, params, max_attempts, created_at) SELECT $1, json_build_object('sign_as', $2::JSON, 'object', $3::TEXT, 'inbox', inbox), $4, current_timestamp FROM (SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) AS inbox FROM community_follow, person WHERE person.id = community_follow.follower AND person.local = FALSE AND community = $5) AS result",
-            &[&DeliverToInbox::KIND, &postgres_types::Json(&if self.sign { Some(self.actor) } else { None }), &self.object, &DeliverToInbox::MAX_ATTEMPTS, &community_id],
-        ).await?;
+        let sign_as_value = postgres_types::Json(&self.sign_as);
+
+        let mut values: Vec<&(dyn postgres_types::ToSql + Sync)> = vec![
+            &DeliverToInbox::KIND,
+            &sign_as_value,
+            &self.object,
+            &DeliverToInbox::MAX_ATTEMPTS,
+        ];
+        let mut sql = "INSERT INTO task (kind, params, max_attempts, created_at) SELECT $1, json_build_object('sign_as', $2::JSON, 'object', $3::TEXT, 'inbox', inbox), $4, current_timestamp FROM (SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) AS inbox FROM person WHERE local=FALSE AND (FALSE".to_owned();
+
+        for item in &self.audience {
+            match item {
+                AudienceItem::Followers(actor) => {
+                    match actor {
+                        ActorLocalRef::Person(_) => {
+                            // do nothing, user followers don't currently exist
+                        }
+                        ActorLocalRef::Community(community_id) => {
+                            values.push(community_id);
+                            write!(sql, " OR id IN (SELECT follower FROM community_follow WHERE community=${})", values.len()).unwrap();
+                        }
+                    }
+                }
+                AudienceItem::Single(actor) => match actor {
+                    ActorLocalRef::Person(user_id) => {
+                        values.push(user_id);
+                        write!(sql, " OR id=${}", values.len()).unwrap();
+                    }
+                    ActorLocalRef::Community(_) => {
+                        return Err(crate::Error::InternalStrStatic(
+                            "Including communities as single audience is not implemented",
+                        ));
+                    }
+                },
+            }
+        }
+
+        sql += ")) AS result";
+
+        db.execute(&sql, &values).await?;
 
         Ok(())
     }
