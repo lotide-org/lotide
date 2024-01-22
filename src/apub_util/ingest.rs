@@ -1386,6 +1386,7 @@ async fn ingest_postlike(
                             .map(|href| href.as_str());
 
                         Ok(handle_recieved_reply(
+                            Verified(KnownObject::Note(obj.clone())),
                             object_id,
                             content.unwrap_or(""),
                             media_type,
@@ -1483,6 +1484,7 @@ async fn ingest_postlike(
                     let sensitive = obj.ext_two.sensitive;
 
                     let id = handle_recieved_reply(
+                        Verified(KnownObject::Note(obj.clone())),
                         obj_id,
                         content.unwrap_or(""),
                         media_type,
@@ -1643,6 +1645,7 @@ async fn ingest_personlike<
 }
 
 async fn handle_recieved_reply(
+    obj: Verified<KnownObject>,
     object_id: &url::Url,
     content: &str,
     media_type: Option<&mime::Mime>,
@@ -1769,7 +1772,27 @@ async fn handle_recieved_reply(
                         mentions: Cow::Owned(mentions),
                     };
 
-                    crate::on_post_add_comment(info, ctx);
+                    crate::on_post_add_comment(info, ctx.clone());
+
+                    crate::spawn_task(async move {
+                        // if this is in a local community, we need to forward it to followers
+
+                        let row = db.query_opt(
+                            "SELECT id FROM community WHERE local AND id = (SELECT community FROM post WHERE id=$1)",
+                            &[&post],
+                        ).await?;
+
+                        if let Some(row) = row {
+                            crate::apub_util::enqueue_forward_to_community_followers(
+                                CommunityLocalID(row.get(0)),
+                                serde_json::to_string(&obj)?,
+                                ctx.clone(),
+                            )
+                            .await?;
+                        }
+
+                        Ok(())
+                    });
 
                     Ok(Some(id))
                 } else {

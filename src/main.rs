@@ -956,20 +956,6 @@ pub fn on_local_community_add_post(
     crate::apub_util::spawn_announce_community_post(community, post_local_id, post_ap_id, ctx);
 }
 
-pub fn on_local_community_add_comment(
-    community: CommunityLocalID,
-    comment_local_id: CommentLocalID,
-    comment_ap_id: url::Url,
-    ctx: Arc<crate::RouteContext>,
-) {
-    crate::apub_util::spawn_announce_community_comment(
-        community,
-        comment_local_id,
-        comment_ap_id,
-        ctx,
-    );
-}
-
 pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteContext>) {
     use futures::future::TryFutureExt;
 
@@ -1019,13 +1005,6 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                     .get::<_, Option<&str>>(5)
                     .map(std::str::FromStr::from_str)
                     .transpose()?
-            };
-
-            let comment_ap_id = match &comment.ap_id {
-                crate::APIDOrLocal::APID(apid) => apid.clone(),
-                crate::APIDOrLocal::Local => crate::apub_util::LocalObjectRef::Comment(comment.id)
-                    .to_local_uri(&ctx.host_url_apub)
-                    .into(),
             };
 
             let (
@@ -1145,18 +1124,19 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
             // should always be Some
             if let Some(post_ap_id) = post_ap_id {
                 let community_id = CommunityLocalID(post_row.get(0));
-                if community_local {
-                    crate::on_local_community_add_comment(
-                        community_id,
-                        comment.id,
-                        comment_ap_id,
-                        ctx.clone(),
-                    );
-                }
                 if comment.ap_id == APIDOrLocal::Local {
                     let mut inboxes = HashSet::new();
 
-                    if !community_local {
+                    if community_local {
+                        crate::apub_util::spawn_enqueue_forward_local_comment_to_community_followers(
+                            comment.clone(),
+                            community_id,
+                            &post_ap_id,
+                            parent_ap_id.map(|x| x.deref().clone()),
+                            post_or_parent_author_ap_id.as_ref().map(|x| x.deref().clone().into()),
+                            ctx.clone(),
+                        );
+                    } else {
                         let community_inbox = std::str::FromStr::from_str(post_row.get(3))?;
                         inboxes.insert(community_inbox);
                     }

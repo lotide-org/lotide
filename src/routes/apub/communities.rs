@@ -1,4 +1,4 @@
-use crate::{CommentLocalID, CommunityLocalID, ImageHandling, PostLocalID, UserLocalID};
+use crate::{CommunityLocalID, ImageHandling, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -17,18 +17,6 @@ pub fn route_communities() -> crate::RouteNode<()> {
     crate::RouteNode::new().with_child_parse::<CommunityLocalID, _>(
         crate::RouteNode::new()
             .with_handler_async(hyper::Method::GET, handler_communities_get)
-            .with_child(
-                "comments",
-                crate::RouteNode::new().with_child_parse::<CommentLocalID, _>(
-                    crate::RouteNode::new().with_child(
-                        "announce",
-                        crate::RouteNode::new().with_handler_async(
-                            hyper::Method::GET,
-                            handler_communities_comments_announce_get,
-                        ),
-                    ),
-                ),
-            )
             .with_child(
                 "delete",
                 crate::RouteNode::new()
@@ -259,51 +247,6 @@ async fn handler_communities_get(
 
                 Ok(resp)
             }
-        }
-    }
-}
-
-async fn handler_communities_comments_announce_get(
-    params: (CommunityLocalID, CommentLocalID),
-    ctx: Arc<crate::RouteContext>,
-    _req: hyper::Request<hyper::Body>,
-) -> Result<hyper::Response<hyper::Body>, crate::Error> {
-    let (community_id, comment_id) = params;
-    let db = ctx.db_pool.get().await?;
-
-    match db
-        .query_opt(
-            "SELECT reply.id, reply.local, reply.ap_id, community.local FROM reply, post, community WHERE reply.post = post.id AND post.community = community.id AND reply.id = $1 AND community.id = $2",
-            &[&comment_id, &community_id],
-        )
-        .await?
-    {
-        None => Ok(crate::simple_response(
-            hyper::StatusCode::NOT_FOUND,
-            "No such publish",
-        )),
-        Some(row) => {
-            let community_local: bool = row.get(3);
-            if !community_local {
-                return Err(crate::Error::UserError(crate::simple_response(
-                    hyper::StatusCode::BAD_REQUEST,
-                    "Requested community is not owned by this instance",
-                )));
-            }
-
-            let comment_local_id = CommentLocalID(row.get(0));
-            let comment_ap_id = if row.get(1) {
-                crate::apub_util::LocalObjectRef::Comment(comment_local_id).to_local_uri(&ctx.host_url_apub)
-            } else {
-                std::str::FromStr::from_str(row.get(2))?
-            };
-
-            let body = crate::apub_util::local_community_comment_announce_ap(community_id, comment_local_id, comment_ap_id.into(), &ctx.host_url_apub)?;
-            let body = serde_json::to_vec(&body)?;
-
-            Ok(hyper::Response::builder()
-               .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
-               .body(body.into())?)
         }
     }
 }

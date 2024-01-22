@@ -885,34 +885,6 @@ pub fn local_community_post_announce_undo_ap(
     Ok(undo)
 }
 
-pub fn local_community_comment_announce_ap(
-    community_id: CommunityLocalID,
-    comment_local_id: CommentLocalID,
-    comment_ap_id: url::Url,
-    host_url_apub: &BaseURL,
-) -> Result<activitystreams::activity::Announce, crate::Error> {
-    let community_ap_id = LocalObjectRef::Community(community_id).to_local_uri(host_url_apub);
-
-    let mut announce =
-        activitystreams::activity::Announce::new(community_ap_id.deref().clone(), comment_ap_id);
-
-    announce
-        .set_context(activitystreams::context())
-        .set_id({
-            let mut res = community_ap_id;
-            res.path_segments_mut().extend(&[
-                "comments",
-                &comment_local_id.to_string(),
-                "announce",
-            ]);
-            res.into()
-        })
-        .set_to(LocalObjectRef::CommunityFollowers(community_id).to_local_uri(host_url_apub))
-        .set_cc(activitystreams::public());
-
-    Ok(announce)
-}
-
 pub fn spawn_announce_community_post(
     community: CommunityLocalID,
     post_local_id: PostLocalID,
@@ -979,25 +951,6 @@ pub fn spawn_enqueue_send_community_post_announce_undo(
         )?;
 
         enqueue_send_to_community_followers(community, undo, ctx).await
-    });
-}
-
-pub fn spawn_announce_community_comment(
-    community: CommunityLocalID,
-    comment_local_id: CommentLocalID,
-    comment_ap_id: url::Url,
-    ctx: Arc<crate::RouteContext>,
-) {
-    let announce = local_community_comment_announce_ap(
-        community,
-        comment_local_id,
-        comment_ap_id,
-        &ctx.host_url_apub,
-    );
-
-    crate::spawn_task(async move {
-        let announce = announce?;
-        enqueue_send_to_community_followers(community, announce, ctx).await
     });
 }
 
@@ -1925,6 +1878,35 @@ pub async fn enqueue_forward_to_community_followers(
         object: body,
     })
     .await
+}
+
+pub fn spawn_enqueue_forward_local_comment_to_community_followers(
+    comment: crate::CommentInfo,
+    community_id: CommunityLocalID,
+    post_ap_id: &url::Url,
+    parent_ap_id: Option<url::Url>,
+    post_or_parent_author_ap_id: Option<url::Url>,
+    ctx: Arc<crate::RouteContext>,
+) {
+    let community_ap_id = LocalObjectRef::Community(community_id).to_local_uri(&ctx.host_url_apub);
+
+    let res = local_comment_to_create_ap(
+        &comment,
+        &post_ap_id,
+        parent_ap_id,
+        post_or_parent_author_ap_id,
+        community_ap_id.into(),
+        &ctx,
+    );
+
+    crate::spawn_task(async move {
+        let create = res?;
+
+        let body = serde_json::to_string(&create)?;
+
+        enqueue_forward_to_community_followers(community_id, body, ctx).await?;
+        Ok(())
+    });
 }
 
 async fn enqueue_send_to_community_followers(
