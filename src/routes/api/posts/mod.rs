@@ -915,6 +915,7 @@ async fn route_unstable_posts_create(
         id,
         ap_id: crate::APIDOrLocal::Local,
         author: Some(user),
+        author_ap_id: Some(crate::APIDOrLocal::Local),
         content_text,
         content_markdown,
         content_html,

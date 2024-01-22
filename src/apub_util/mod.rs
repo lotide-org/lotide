@@ -340,6 +340,20 @@ impl ActorLocalInfo {
     }
 }
 
+pub struct CommunityPostInfo {
+    pub local: bool,
+    pub ap_id: Option<url::Url>,
+    pub approved: bool,
+    pub community_local: bool,
+    pub author: Option<CommunityPostAuthorInfo>,
+}
+
+pub struct CommunityPostAuthorInfo {
+    pub id: UserLocalID,
+    pub local: bool,
+    pub ap_id: Option<url::Url>,
+}
+
 #[derive(Clone, Debug, thiserror::Error)]
 #[error("Incoming object failed containment check")]
 pub struct NotContained;
@@ -759,6 +773,7 @@ pub fn local_community_post_announce_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
     post_ap_id: url::Url,
+    post_author_ap_id: Option<url::Url>,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Announce, crate::Error> {
     let community_ap_id = LocalObjectRef::Community(community_id).to_local_uri(host_url_apub);
@@ -774,12 +789,16 @@ pub fn local_community_post_announce_ap(
                 .extend(&["posts", &post_local_id.to_string(), "announce"]);
             res.into()
         })
-        .set_to({
+        .add_to({
             let mut res = community_ap_id;
             res.path_segments_mut().push("followers");
             res
         })
         .set_cc(activitystreams::public());
+
+    if let Some(author) = post_author_ap_id {
+        announce.add_to(author);
+    }
 
     Ok(announce)
 }
@@ -788,6 +807,7 @@ pub fn local_community_post_add_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
     post_ap_id: url::Url,
+    post_author_ap_id: Option<url::Url>,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Add, crate::Error> {
     let community_ap_id = LocalObjectRef::Community(community_id).to_local_uri(host_url_apub);
@@ -802,12 +822,16 @@ pub fn local_community_post_add_ap(
             res.into()
         })
         .set_target(LocalObjectRef::CommunityOutbox(community_id).to_local_uri(host_url_apub))
-        .set_to({
+        .add_to({
             let mut res = community_ap_id;
             res.path_segments_mut().push("followers");
             res
         })
         .set_cc(activitystreams::public());
+
+    if let Some(author) = post_author_ap_id {
+        add.add_to(author);
+    }
 
     Ok(add)
 }
@@ -816,12 +840,19 @@ pub fn local_community_post_add_undo_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
     post_ap_id: url::Url,
+    post_author_ap_id: Option<url::Url>,
     uuid: &uuid::Uuid,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let community_ap_id = LocalObjectRef::Community(community_id).to_local_uri(host_url_apub);
 
-    let add = local_community_post_add_ap(community_id, post_local_id, post_ap_id, host_url_apub)?;
+    let add = local_community_post_add_ap(
+        community_id,
+        post_local_id,
+        post_ap_id,
+        post_author_ap_id,
+        host_url_apub,
+    )?;
 
     let mut undo =
         activitystreams::activity::Undo::new(community_ap_id.clone(), add.into_any_base()?);
@@ -852,13 +883,19 @@ pub fn local_community_post_announce_undo_ap(
     community_id: CommunityLocalID,
     post_local_id: PostLocalID,
     post_ap_id: url::Url,
+    post_author_ap_id: Option<url::Url>,
     uuid: &uuid::Uuid,
     host_url_apub: &BaseURL,
 ) -> Result<activitystreams::activity::Undo, crate::Error> {
     let community_ap_id = LocalObjectRef::Community(community_id).to_local_uri(host_url_apub);
 
-    let announce =
-        local_community_post_announce_ap(community_id, post_local_id, post_ap_id, host_url_apub)?;
+    let announce = local_community_post_announce_ap(
+        community_id,
+        post_local_id,
+        post_ap_id,
+        post_author_ap_id,
+        host_url_apub,
+    )?;
 
     let mut undo =
         activitystreams::activity::Undo::new(community_ap_id.clone(), announce.into_any_base()?);
@@ -889,31 +926,56 @@ pub fn spawn_announce_community_post(
     community: CommunityLocalID,
     post_local_id: PostLocalID,
     post_ap_id: url::Url,
+    post_author: Option<UserLocalID>,
+    post_author_ap_id: Option<url::Url>,
     ctx: Arc<crate::RouteContext>,
 ) {
+    let mut audience = vec![crate::tasks::AudienceItem::Followers(
+        ActorLocalRef::Community(community),
+    )];
+
+    if let Some(post_author) = post_author {
+        audience.push(crate::tasks::AudienceItem::Single(ActorLocalRef::Person(
+            post_author,
+        )));
+    }
+
     match local_community_post_announce_ap(
         community,
         post_local_id,
         post_ap_id.clone(),
+        post_author_ap_id.clone(),
         &ctx.host_url_apub,
     ) {
         Err(err) => {
             log::error!("Failed to create Announce: {:?}", err);
         }
         Ok(announce) => {
-            crate::spawn_task(enqueue_send_to_community_followers(
-                community,
+            crate::spawn_task(enqueue_send_to_audience(
+                Some(ActorLocalRef::Community(community)),
                 announce,
+                audience.clone(),
                 ctx.clone(),
             ));
         }
     }
-    match local_community_post_add_ap(community, post_local_id, post_ap_id, &ctx.host_url_apub) {
+    match local_community_post_add_ap(
+        community,
+        post_local_id,
+        post_ap_id,
+        post_author_ap_id,
+        &ctx.host_url_apub,
+    ) {
         Err(err) => {
             log::error!("Failed to create Add: {:?}", err);
         }
         Ok(add) => {
-            crate::spawn_task(enqueue_send_to_community_followers(community, add, ctx));
+            crate::spawn_task(enqueue_send_to_audience(
+                Some(ActorLocalRef::Community(community)),
+                add,
+                audience,
+                ctx.clone(),
+            ));
         }
     }
 }
@@ -922,17 +984,20 @@ pub fn spawn_enqueue_send_community_post_announce_undo(
     community: CommunityLocalID,
     post: PostLocalID,
     post_ap_id: url::Url,
+    post_author_ap_id: Option<url::Url>,
     ctx: Arc<crate::RouteContext>,
 ) {
     {
         let ctx = ctx.clone();
         let post_ap_id = post_ap_id.clone();
+        let post_author_ap_id = post_author_ap_id.clone();
 
         crate::spawn_task(async move {
             let undo = local_community_post_announce_undo_ap(
                 community,
                 post,
                 post_ap_id,
+                post_author_ap_id,
                 &uuid::Uuid::new_v4(),
                 &ctx.host_url_apub,
             )?;
@@ -946,6 +1011,7 @@ pub fn spawn_enqueue_send_community_post_announce_undo(
             community,
             post,
             post_ap_id,
+            post_author_ap_id,
             &uuid::Uuid::new_v4(),
             &ctx.host_url_apub,
         )?;
@@ -1875,9 +1941,9 @@ pub async fn enqueue_forward_to_community_followers(
     ctx.enqueue_task(&crate::tasks::DeliverToAudience {
         sign_as: None,
         object: body,
-        audience: vec![crate::tasks::AudienceItem::Followers(
+        audience: Cow::Borrowed(&[crate::tasks::AudienceItem::Followers(
             ActorLocalRef::Community(community_id),
-        )],
+        )]),
     })
     .await
 }
@@ -1918,10 +1984,25 @@ async fn enqueue_send_to_community_followers(
 ) -> Result<(), crate::Error> {
     let actor = ActorLocalRef::Community(community_id);
 
+    enqueue_send_to_audience(
+        Some(actor),
+        activity,
+        vec![crate::tasks::AudienceItem::Followers(actor)],
+        ctx,
+    )
+    .await
+}
+
+async fn enqueue_send_to_audience(
+    sign_as: Option<ActorLocalRef>,
+    activity: impl serde::Serialize,
+    audience: impl Into<Cow<'_, [crate::tasks::AudienceItem]>>,
+    ctx: Arc<crate::RouteContext>,
+) -> Result<(), crate::Error> {
     ctx.enqueue_task(&crate::tasks::DeliverToAudience {
-        sign_as: Some(actor),
+        sign_as,
         object: serde_json::to_string(&activity)?,
-        audience: vec![crate::tasks::AudienceItem::Followers(actor)],
+        audience: audience.into(),
     })
     .await
 }

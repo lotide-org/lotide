@@ -376,6 +376,7 @@ pub struct PostInfoOwned {
     id: PostLocalID,
     ap_id: APIDOrLocal,
     author: Option<UserLocalID>,
+    author_ap_id: Option<APIDOrLocal>,
     href: Option<String>,
     content_text: Option<String>,
     content_markdown: Option<String>,
@@ -907,6 +908,16 @@ pub fn on_add_post(
                         .into(),
                     crate::APIDOrLocal::APID(url) => url,
                 },
+                author,
+                match post.author_ap_id {
+                    Some(crate::APIDOrLocal::Local) => Some(
+                        crate::apub_util::LocalObjectRef::User(post.author.unwrap())
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into(),
+                    ),
+                    Some(crate::APIDOrLocal::APID(url)) => Some(url),
+                    None => None,
+                },
                 ctx.clone(),
             );
         } else if let APIDOrLocal::Local = post.ap_id {
@@ -950,10 +961,19 @@ pub fn on_local_community_add_post(
     community: CommunityLocalID,
     post_local_id: PostLocalID,
     post_ap_id: url::Url,
+    post_author: Option<UserLocalID>,
+    post_author_ap_id: Option<url::Url>,
     ctx: Arc<crate::RouteContext>,
 ) {
     log::debug!("on_community_add_post");
-    crate::apub_util::spawn_announce_community_post(community, post_local_id, post_ap_id, ctx);
+    crate::apub_util::spawn_announce_community_post(
+        community,
+        post_local_id,
+        post_ap_id,
+        post_author,
+        post_author_ap_id,
+        ctx,
+    );
 }
 
 pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteContext>) {

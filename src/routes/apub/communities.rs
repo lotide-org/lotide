@@ -1,6 +1,8 @@
+use crate::apub_util::{CommunityPostAuthorInfo, CommunityPostInfo};
 use crate::{CommunityLocalID, ImageHandling, PostLocalID, UserLocalID};
 use activitystreams::prelude::*;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 
 lazy_static::lazy_static! {
@@ -319,8 +321,6 @@ async fn handler_communities_featured_list(
     let items: Result<Vec<_>, _> = rows
         .into_iter()
         .map(|row| {
-            use std::str::FromStr;
-
             if row.get(1) {
                 Ok(
                     crate::apub_util::LocalObjectRef::Post(PostLocalID(row.get(0)))
@@ -651,7 +651,7 @@ async fn handler_communities_outbox_page_get(
         }
     };
 
-    let sql: &str = &format!("SELECT post.id, post.local, post.ap_id, post.created FROM post WHERE community=$1{} ORDER BY created DESC LIMIT $2", extra_condition);
+    let sql: &str = &format!("SELECT post.id, post.local, post.ap_id, post.created, author.id, author.local, author.ap_id FROM post LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE community=$1{} ORDER BY created DESC LIMIT $2", extra_condition);
 
     let rows = db.query(sql, &values[..]).await?;
 
@@ -669,18 +669,32 @@ async fn handler_communities_outbox_page_get(
             } else {
                 std::str::FromStr::from_str(row.get(2))?
             };
+            let post_author_ap_id: Option<url::Url> = match row.get(5) {
+                Some(true) => Some(
+                    crate::apub_util::LocalObjectRef::User(UserLocalID(row.get(4)))
+                        .to_local_uri(&ctx.host_url_apub)
+                        .into(),
+                ),
+                Some(false) => row
+                    .get::<_, Option<_>>(6)
+                    .map(url::Url::from_str)
+                    .transpose()?,
+                None => None,
+            };
 
             Ok(vec![
                 serde_json::to_value(crate::apub_util::local_community_post_announce_ap(
                     community_id,
                     post_id,
                     post_ap_id.clone().into(),
+                    post_author_ap_id.clone(),
                     &ctx.host_url_apub,
                 )?)?,
                 serde_json::to_value(crate::apub_util::local_community_post_add_ap(
                     community_id,
                     post_id,
                     post_ap_id.into(),
+                    post_author_ap_id,
                     &ctx.host_url_apub,
                 )?)?,
             ])
@@ -720,49 +734,57 @@ async fn handler_communities_posts_announce_get(
     let (community_id, post_id) = params;
     let db = ctx.db_pool.get().await?;
 
-    match db.query_opt(
-        "SELECT post.id, post.local, post.ap_id, community.local FROM post, community WHERE post.community = community.id AND post.id=$1 AND post.community=$2 AND post.approved",
-        &[&post_id, &community_id],
-    ).await? {
-        None => {
-            Ok(crate::simple_response(
-                    hyper::StatusCode::NOT_FOUND,
-                    "No such publish",
-            ))
-        },
-        Some(row) => {
-            let community_local: Option<bool> = row.get(3);
-            match community_local {
-                None => Ok(crate::simple_response(
-                        hyper::StatusCode::NOT_FOUND,
-                        "No such community",
-                        )),
-                Some(false) => Ok(crate::simple_response(
-                        hyper::StatusCode::BAD_REQUEST,
-                        "Requested community is not owned by this instance",
-                    )),
-                Some(true) => {
-                    let post_local_id = PostLocalID(row.get(0));
-                    let post_ap_id = if row.get(1) {
-                        crate::apub_util::LocalObjectRef::Post(post_local_id).to_local_uri(&ctx.host_url_apub)
+    let info = fetch_community_post_info(&db, community_id, post_id).await?;
+    match info {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such publish",
+        )),
+        Some(info) if !info.approved => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such publish",
+        )),
+        Some(info) if !info.community_local => Ok(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "Requested community is not owned by this instance",
+        )),
+        Some(info) => {
+            let post_ap_id = if info.local {
+                crate::apub_util::LocalObjectRef::Post(post_id)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into()
+            } else {
+                info.ap_id
+                    .ok_or(crate::Error::InternalStrStatic("Missing ap_id"))?
+            };
+            let post_author_ap_id = match info.author {
+                None => None,
+                Some(author) => {
+                    if author.local {
+                        Some(
+                            crate::apub_util::LocalObjectRef::User(author.id)
+                                .to_local_uri(&ctx.host_url_apub)
+                                .into(),
+                        )
                     } else {
-                        std::str::FromStr::from_str(row.get(2))?
-                    };
-
-                    let body = crate::apub_util::local_community_post_announce_ap(
-                        community_id,
-                        post_local_id,
-                        post_ap_id.into(),
-                        &ctx.host_url_apub,
-                    )?;
-                    let body = serde_json::to_vec(&body)?;
-
-                    Ok(hyper::Response::builder()
-                       .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
-                       .body(body.into())?)
+                        author.ap_id
+                    }
                 }
-            }
-        },
+            };
+
+            let body = crate::apub_util::local_community_post_announce_ap(
+                community_id,
+                post_id,
+                post_ap_id,
+                post_author_ap_id,
+                &ctx.host_url_apub,
+            )?;
+            let body = serde_json::to_vec(&body)?;
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                .body(body.into())?)
+        }
     }
 }
 
@@ -774,37 +796,61 @@ async fn handler_communities_posts_announce_undos_get(
     let (community_id, post_id, undo_id) = params;
     let db = ctx.db_pool.get().await?;
 
-    match db.query_opt(
-        "SELECT post.local, post.ap_id, community.local FROM post, community WHERE post.community = community.id AND post.id = $1 AND community.id = $2 AND NOT post.approved",
-        &[&post_id, &community_id],
-    ).await? {
-        None => {
+    let info = fetch_community_post_info(&db, community_id, post_id).await?;
+    match info {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such undo",
+        )),
+        Some(info) if info.approved => {
+            // approved, so not undone
             Ok(crate::simple_response(
-                    hyper::StatusCode::NOT_FOUND,
-                    "No such undo",
+                hyper::StatusCode::NOT_FOUND,
+                "No such undo",
             ))
-        },
-        Some(row) => {
-            let community_local = row.get(2);
-            if community_local {
-                let post_ap_id = if row.get(0) {
-                    crate::apub_util::LocalObjectRef::Post(post_id).to_local_uri(&ctx.host_url_apub).into()
-                } else {
-                    std::str::FromStr::from_str(row.get(1))?
-                };
-                let body = crate::apub_util::local_community_post_announce_undo_ap(community_id, post_id, post_ap_id, &undo_id, &ctx.host_url_apub)?;
-                let body = serde_json::to_vec(&body)?;
-
-                Ok(hyper::Response::builder()
-                   .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
-                   .body(body.into())?)
-            } else {
-                Ok(crate::simple_response(
-                    hyper::StatusCode::BAD_REQUEST,
-                    "Requested community is not owned by this instance",
-                ))
-            }
         }
+        Some(info) if info.community_local => {
+            let post_ap_id = if info.local {
+                crate::apub_util::LocalObjectRef::Post(post_id)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into()
+            } else {
+                info.ap_id
+                    .ok_or(crate::Error::InternalStrStatic("Missing ap_id"))?
+            };
+            let post_author_ap_id = match info.author {
+                None => None,
+                Some(author) => {
+                    if author.local {
+                        Some(
+                            crate::apub_util::LocalObjectRef::User(author.id)
+                                .to_local_uri(&ctx.host_url_apub)
+                                .into(),
+                        )
+                    } else {
+                        author.ap_id
+                    }
+                }
+            };
+
+            let body = crate::apub_util::local_community_post_announce_undo_ap(
+                community_id,
+                post_id,
+                post_ap_id,
+                post_author_ap_id,
+                &undo_id,
+                &ctx.host_url_apub,
+            )?;
+            let body = serde_json::to_vec(&body)?;
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                .body(body.into())?)
+        }
+        _ => Ok(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "Requested community is not owned by this instance",
+        )),
     }
 }
 
@@ -816,49 +862,57 @@ async fn handler_communities_posts_add_get(
     let (community_id, post_id) = params;
     let db = ctx.db_pool.get().await?;
 
-    match db.query_opt(
-        "SELECT post.id, post.local, post.ap_id, community.local FROM post, community WHERE post.community = community.id AND post.id=$1 AND post.community=$2 AND post.approved",
-        &[&post_id, &community_id],
-    ).await? {
-        None => {
-            Ok(crate::simple_response(
-                    hyper::StatusCode::NOT_FOUND,
-                    "No such publish",
-            ))
-        },
-        Some(row) => {
-            let community_local: Option<bool> = row.get(3);
-            match community_local {
-                None => Ok(crate::simple_response(
-                        hyper::StatusCode::NOT_FOUND,
-                        "No such community",
-                        )),
-                Some(false) => Ok(crate::simple_response(
-                        hyper::StatusCode::BAD_REQUEST,
-                        "Requested community is not owned by this instance",
-                    )),
-                Some(true) => {
-                    let post_local_id = PostLocalID(row.get(0));
-                    let post_ap_id = if row.get(1) {
-                        crate::apub_util::LocalObjectRef::Post(post_local_id).to_local_uri(&ctx.host_url_apub)
+    let info = fetch_community_post_info(&db, community_id, post_id).await?;
+    match info {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such publish",
+        )),
+        Some(info) if !info.approved => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such publish",
+        )),
+        Some(info) if !info.community_local => Ok(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "Requested community is not owned by this instance",
+        )),
+        Some(info) => {
+            let post_ap_id = if info.local {
+                crate::apub_util::LocalObjectRef::Post(post_id)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into()
+            } else {
+                info.ap_id
+                    .ok_or(crate::Error::InternalStrStatic("Missing ap_id"))?
+            };
+            let post_author_ap_id = match info.author {
+                None => None,
+                Some(author) => {
+                    if author.local {
+                        Some(
+                            crate::apub_util::LocalObjectRef::User(author.id)
+                                .to_local_uri(&ctx.host_url_apub)
+                                .into(),
+                        )
                     } else {
-                        std::str::FromStr::from_str(row.get(2))?
-                    };
-
-                    let body = crate::apub_util::local_community_post_add_ap(
-                        community_id,
-                        post_local_id,
-                        post_ap_id.into(),
-                        &ctx.host_url_apub,
-                    )?;
-                    let body = serde_json::to_vec(&body)?;
-
-                    Ok(hyper::Response::builder()
-                       .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
-                       .body(body.into())?)
+                        author.ap_id
+                    }
                 }
-            }
-        },
+            };
+
+            let body = crate::apub_util::local_community_post_add_ap(
+                community_id,
+                post_id,
+                post_ap_id,
+                post_author_ap_id,
+                &ctx.host_url_apub,
+            )?;
+            let body = serde_json::to_vec(&body)?;
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                .body(body.into())?)
+        }
     }
 }
 
@@ -870,37 +924,61 @@ async fn handler_communities_posts_add_undos_get(
     let (community_id, post_id, undo_id) = params;
     let db = ctx.db_pool.get().await?;
 
-    match db.query_opt(
-        "SELECT post.local, post.ap_id, community.local FROM post, community WHERE post.community = community.id AND post.id = $1 AND community.id = $2 AND NOT post.approved",
-        &[&post_id, &community_id],
-    ).await? {
-        None => {
+    let info = fetch_community_post_info(&db, community_id, post_id).await?;
+    match info {
+        None => Ok(crate::simple_response(
+            hyper::StatusCode::NOT_FOUND,
+            "No such undo",
+        )),
+        Some(info) if info.approved => {
+            // approved, so not undone
             Ok(crate::simple_response(
-                    hyper::StatusCode::NOT_FOUND,
-                    "No such undo",
+                hyper::StatusCode::NOT_FOUND,
+                "No such undo",
             ))
-        },
-        Some(row) => {
-            let community_local = row.get(2);
-            if community_local {
-                let post_ap_id = if row.get(0) {
-                    crate::apub_util::LocalObjectRef::Post(post_id).to_local_uri(&ctx.host_url_apub).into()
-                } else {
-                    std::str::FromStr::from_str(row.get(1))?
-                };
-                let body = crate::apub_util::local_community_post_add_undo_ap(community_id, post_id, post_ap_id, &undo_id, &ctx.host_url_apub)?;
-                let body = serde_json::to_vec(&body)?;
-
-                Ok(hyper::Response::builder()
-                   .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
-                   .body(body.into())?)
-            } else {
-                Ok(crate::simple_response(
-                    hyper::StatusCode::BAD_REQUEST,
-                    "Requested community is not owned by this instance",
-                ))
-            }
         }
+        Some(info) if info.community_local => {
+            let post_ap_id = if info.local {
+                crate::apub_util::LocalObjectRef::Post(post_id)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into()
+            } else {
+                info.ap_id
+                    .ok_or(crate::Error::InternalStrStatic("Missing ap_id"))?
+            };
+            let post_author_ap_id = match info.author {
+                None => None,
+                Some(author) => {
+                    if author.local {
+                        Some(
+                            crate::apub_util::LocalObjectRef::User(author.id)
+                                .to_local_uri(&ctx.host_url_apub)
+                                .into(),
+                        )
+                    } else {
+                        author.ap_id
+                    }
+                }
+            };
+
+            let body = crate::apub_util::local_community_post_add_undo_ap(
+                community_id,
+                post_id,
+                post_ap_id,
+                post_author_ap_id,
+                &undo_id,
+                &ctx.host_url_apub,
+            )?;
+            let body = serde_json::to_vec(&body)?;
+
+            Ok(hyper::Response::builder()
+                .header(hyper::header::CONTENT_TYPE, crate::apub_util::ACTIVITY_TYPE)
+                .body(body.into())?)
+        }
+        _ => Ok(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            "Requested community is not owned by this instance",
+        )),
     }
 }
 
@@ -941,4 +1019,37 @@ async fn handler_communities_updates_get(
             }
         }
     }
+}
+
+async fn fetch_community_post_info(
+    db: &tokio_postgres::Client,
+    community_id: CommunityLocalID,
+    post_id: PostLocalID,
+) -> Result<Option<CommunityPostInfo>, crate::Error> {
+    Ok(match db.query_opt(
+        "SELECT post.local, post.ap_id, post.approved, community.local, author.id, author.local, author.ap_id FROM post INNER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE post.id = $1 AND community.id = $2",
+        &[&post_id, &community_id],
+    ).await? {
+        None => None,
+        Some(row) => {
+            Some(CommunityPostInfo {
+                local: row.get(0),
+                ap_id: row.get::<_, Option<_>>(1).map(url::Url::from_str).transpose()?,
+                approved: row.get(2),
+                community_local: row.get(3),
+                author: match row.get(5) {
+                    None => None,
+                    Some(local) => {
+                        let id = UserLocalID(row.get(4));
+
+                        Some(CommunityPostAuthorInfo {
+                            id,
+                            local,
+                            ap_id: row.get::<_, Option<_>>(6).map(url::Url::from_str).transpose()?,
+                        })
+                    }
+                },
+            })
+        }
+    })
 }

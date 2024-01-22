@@ -11,6 +11,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 
 async fn require_community_exists(
@@ -1189,7 +1190,7 @@ async fn route_unstable_communities_posts_patch(
 
     let old_row = db
         .query_opt(
-            "SELECT community, approved, local, ap_id, sticky FROM post WHERE id=$1",
+            "SELECT community, approved, local, ap_id, sticky, author.id, author.local, author.ap_id FROM post LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE id=$1",
             &[&post_id],
         )
         .await?
@@ -1216,6 +1217,32 @@ async fn route_unstable_communities_posts_patch(
             .into()
     } else {
         std::str::FromStr::from_str(old_row.get(3))?
+    };
+
+    let (post_author_ap_id, post_author) = match old_row.get(6) {
+        None => (None, None),
+        Some(local) => {
+            let id = UserLocalID(old_row.get(5));
+
+            if local {
+                (
+                    Some(
+                        crate::apub_util::LocalObjectRef::User(id)
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into(),
+                    ),
+                    Some(id),
+                )
+            } else {
+                (
+                    old_row
+                        .get::<_, Option<_>>(7)
+                        .map(url::Url::from_str)
+                        .transpose()?,
+                    Some(id),
+                )
+            }
+        }
     };
 
     let mut sql = "UPDATE post SET ".to_owned();
@@ -1270,6 +1297,8 @@ async fn route_unstable_communities_posts_patch(
                         community_id,
                         post_id,
                         post_ap_id,
+                        post_author,
+                        post_author_ap_id,
                         ctx.clone(),
                     );
                 } else {
@@ -1277,6 +1306,7 @@ async fn route_unstable_communities_posts_patch(
                         community_id,
                         post_id,
                         post_ap_id,
+                        post_author_ap_id,
                         ctx.clone(),
                     );
                 }

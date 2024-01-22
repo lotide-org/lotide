@@ -1421,7 +1421,7 @@ async fn ingest_postlike(
                                 content,
                                 media_type,
                                 created.as_ref(),
-                                author,
+                                author.cloned(),
                                 community_local_id,
                                 community_is_local,
                                 found_from.as_announce(),
@@ -1857,7 +1857,7 @@ async fn handle_received_page_for_community<Kind: Clone + std::fmt::Debug>(
                 content,
                 media_type,
                 created.as_ref(),
-                author,
+                author.cloned(),
                 community_local_id,
                 community_is_local,
                 is_announce,
@@ -1880,7 +1880,7 @@ async fn handle_recieved_post(
     content: Option<&str>,
     media_type: Option<&mime::Mime>,
     created: Option<&chrono::DateTime<chrono::FixedOffset>>,
-    author: Option<&url::Url>,
+    author_ap_id: Option<url::Url>,
     community_local_id: CommunityLocalID,
     community_is_local: bool,
     is_announce: Option<&url::Url>,
@@ -1890,8 +1890,8 @@ async fn handle_recieved_post(
     ctx: Arc<crate::RouteContext>,
 ) -> Result<PostIngestResult, crate::Error> {
     let mut db = ctx.db_pool.get().await?;
-    let author = match author {
-        Some(author) => Some(super::get_or_fetch_user_local_id(author, &db, &ctx).await?),
+    let author = match &author_ap_id {
+        Some(author) => Some(super::get_or_fetch_user_local_id(&author, &db, &ctx).await?),
         None => None,
     };
 
@@ -2055,6 +2055,7 @@ async fn handle_recieved_post(
     let post = crate::PostInfoOwned {
         id: post_local_id,
         ap_id: crate::APIDOrLocal::APID(object_id),
+        author_ap_id: author_ap_id.map(crate::APIDOrLocal::APID),
         author,
         href: href.map(|x| x.to_owned()),
         content_text: content_text.map(|x| x.to_owned()),

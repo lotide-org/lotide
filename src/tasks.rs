@@ -135,7 +135,7 @@ mod deprecated {
             DeliverToAudience {
                 sign_as: if self.sign { Some(self.actor) } else { None },
                 object: self.object,
-                audience: vec![AudienceItem::Followers(self.actor)],
+                audience: (&[AudienceItem::Followers(self.actor)][..]).into(),
             }
             .perform(ctx)
             .await
@@ -145,21 +145,21 @@ mod deprecated {
 
 pub use deprecated::*;
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
 pub enum AudienceItem {
     Followers(ActorLocalRef),
     Single(ActorLocalRef),
 }
 
 #[derive(Deserialize, Serialize, Debug)]
-pub struct DeliverToAudience {
+pub struct DeliverToAudience<'a> {
     pub sign_as: Option<ActorLocalRef>,
     pub object: String,
-    pub audience: Vec<AudienceItem>,
+    pub audience: Cow<'a, [AudienceItem]>,
 }
 
 #[async_trait]
-impl TaskDef for DeliverToAudience {
+impl<'a> TaskDef for DeliverToAudience<'a> {
     const KIND: &'static str = "deliver_to_audience";
 
     async fn perform(self, ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
@@ -175,7 +175,7 @@ impl TaskDef for DeliverToAudience {
         ];
         let mut sql = "INSERT INTO task (kind, params, max_attempts, created_at) SELECT $1, json_build_object('sign_as', $2::JSON, 'object', $3::TEXT, 'inbox', inbox), $4, current_timestamp FROM (SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) AS inbox FROM person WHERE local=FALSE AND (FALSE".to_owned();
 
-        for item in &self.audience {
+        for item in self.audience.iter() {
             match item {
                 AudienceItem::Followers(actor) => {
                     match actor {
