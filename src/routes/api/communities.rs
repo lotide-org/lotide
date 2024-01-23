@@ -1190,7 +1190,7 @@ async fn route_unstable_communities_posts_patch(
 
     let old_row = db
         .query_opt(
-            "SELECT community, approved, local, ap_id, sticky, author.id, author.local, author.ap_id FROM post LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE id=$1",
+            "SELECT post.community, post.approved, post.local, post.ap_id, post.sticky, author.id, author.local, author.ap_id FROM post LEFT OUTER JOIN person AS author ON (author.id = post.author) WHERE post.id=$1",
             &[&post_id],
         )
         .await?
@@ -1306,6 +1306,7 @@ async fn route_unstable_communities_posts_patch(
                         community_id,
                         post_id,
                         post_ap_id,
+                        post_author,
                         post_author_ap_id,
                         ctx.clone(),
                     );

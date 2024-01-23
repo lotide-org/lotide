@@ -850,7 +850,7 @@ pub fn local_community_post_add_undo_ap(
         community_id,
         post_local_id,
         post_ap_id,
-        post_author_ap_id,
+        post_author_ap_id.clone(),
         host_url_apub,
     )?;
 
@@ -869,12 +869,16 @@ pub fn local_community_post_add_undo_ap(
             ]);
             res.into()
         })
-        .set_to({
+        .add_to({
             let mut res = community_ap_id;
             res.path_segments_mut().push("followers");
             res
         })
         .set_cc(activitystreams::public());
+
+    if let Some(author) = post_author_ap_id {
+        undo.add_to(author);
+    }
 
     Ok(undo)
 }
@@ -893,7 +897,7 @@ pub fn local_community_post_announce_undo_ap(
         community_id,
         post_local_id,
         post_ap_id,
-        post_author_ap_id,
+        post_author_ap_id.clone(),
         host_url_apub,
     )?;
 
@@ -912,12 +916,16 @@ pub fn local_community_post_announce_undo_ap(
             ]);
             res.into()
         })
-        .set_to({
+        .add_to({
             let mut res = community_ap_id;
             res.path_segments_mut().push("followers");
             res
         })
         .set_cc(activitystreams::public());
+
+    if let Some(author) = post_author_ap_id {
+        undo.add_to(author);
+    }
 
     Ok(undo)
 }
@@ -984,13 +992,25 @@ pub fn spawn_enqueue_send_community_post_announce_undo(
     community: CommunityLocalID,
     post: PostLocalID,
     post_ap_id: url::Url,
+    post_author: Option<UserLocalID>,
     post_author_ap_id: Option<url::Url>,
     ctx: Arc<crate::RouteContext>,
 ) {
+    let mut audience = vec![crate::tasks::AudienceItem::Followers(
+        ActorLocalRef::Community(community),
+    )];
+
+    if let Some(post_author) = post_author {
+        audience.push(crate::tasks::AudienceItem::Single(ActorLocalRef::Person(
+            post_author,
+        )));
+    }
+
     {
         let ctx = ctx.clone();
         let post_ap_id = post_ap_id.clone();
         let post_author_ap_id = post_author_ap_id.clone();
+        let audience = audience.clone();
 
         crate::spawn_task(async move {
             let undo = local_community_post_announce_undo_ap(
@@ -1002,7 +1022,13 @@ pub fn spawn_enqueue_send_community_post_announce_undo(
                 &ctx.host_url_apub,
             )?;
 
-            enqueue_send_to_community_followers(community, undo, ctx).await
+            enqueue_send_to_audience(
+                Some(ActorLocalRef::Community(community)),
+                undo,
+                audience,
+                ctx,
+            )
+            .await
         });
     }
 
@@ -1016,7 +1042,13 @@ pub fn spawn_enqueue_send_community_post_announce_undo(
             &ctx.host_url_apub,
         )?;
 
-        enqueue_send_to_community_followers(community, undo, ctx).await
+        enqueue_send_to_audience(
+            Some(ActorLocalRef::Community(community)),
+            undo,
+            audience,
+            ctx,
+        )
+        .await
     });
 }
 
