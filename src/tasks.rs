@@ -145,7 +145,7 @@ mod deprecated {
 
 pub use deprecated::*;
 
-#[derive(Deserialize, Serialize, Debug, Clone, Copy)]
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AudienceItem {
     Followers(ActorLocalRef),
     Single(ActorLocalRef),
@@ -173,7 +173,8 @@ impl<'a> TaskDef for DeliverToAudience<'a> {
             &self.object,
             &DeliverToInbox::MAX_ATTEMPTS,
         ];
-        let mut sql = "INSERT INTO task (kind, params, max_attempts, created_at) SELECT $1, json_build_object('sign_as', $2::JSON, 'object', $3::TEXT, 'inbox', inbox), $4, current_timestamp FROM (SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) AS inbox FROM person WHERE local=FALSE AND (FALSE".to_owned();
+        let mut sql1 = "INSERT INTO task (kind, params, max_attempts, created_at) SELECT $1, json_build_object('sign_as', $2::JSON, 'object', $3::TEXT, 'inbox', inbox), $4, current_timestamp FROM ((SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) AS inbox FROM person WHERE local=FALSE AND (FALSE".to_owned();
+        let mut sql2 = ")) UNION (SELECT DISTINCT COALESCE(ap_shared_inbox, ap_inbox) AS inbox FROM community WHERE local=FALSE AND (FALSE".to_owned();
 
         for item in self.audience.iter() {
             match item {
@@ -184,25 +185,24 @@ impl<'a> TaskDef for DeliverToAudience<'a> {
                         }
                         ActorLocalRef::Community(community_id) => {
                             values.push(community_id);
-                            write!(sql, " OR id IN (SELECT follower FROM community_follow WHERE community=${})", values.len()).unwrap();
+                            write!(sql1, " OR id IN (SELECT follower FROM community_follow WHERE community=${})", values.len()).unwrap();
                         }
                     }
                 }
                 AudienceItem::Single(actor) => match actor {
                     ActorLocalRef::Person(user_id) => {
                         values.push(user_id);
-                        write!(sql, " OR id=${}", values.len()).unwrap();
+                        write!(sql1, " OR id=${}", values.len()).unwrap();
                     }
-                    ActorLocalRef::Community(_) => {
-                        return Err(crate::Error::InternalStrStatic(
-                            "Including communities as single audience is not implemented",
-                        ));
+                    ActorLocalRef::Community(community_id) => {
+                        values.push(community_id);
+                        write!(sql2, " OR id=${}", values.len()).unwrap();
                     }
                 },
             }
         }
 
-        sql += ")) AS result";
+        let sql = format!("{}{}))) AS result", sql1, sql2);
 
         db.execute(&sql, &values).await?;
 

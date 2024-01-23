@@ -21,8 +21,8 @@ mod worker;
 
 use self::config::Config;
 use self::types::{
-    CommentLocalID, CommunityLocalID, ImageHandling, NotificationID, PollOptionLocalID,
-    PostLocalID, UserLocalID,
+    ActorLocalRef, CommentLocalID, CommunityLocalID, ImageHandling, NotificationID,
+    PollOptionLocalID, PostLocalID, UserLocalID,
 };
 
 pub use self::lang::Translator;
@@ -896,6 +896,10 @@ pub fn on_add_post(
     is_new: bool, // TODO if not, is this really an "add"?
     ctx: Arc<crate::RouteContext>,
 ) {
+    if let APIDOrLocal::Local = post.ap_id {
+        apub_util::spawn_enqueue_send_local_post(post.clone(), ctx.clone());
+    }
+
     crate::spawn_task(async move {
         let author = post.author;
         if community_local {
@@ -920,8 +924,6 @@ pub fn on_add_post(
                 },
                 ctx.clone(),
             );
-        } else if let APIDOrLocal::Local = post.ap_id {
-            apub_util::spawn_enqueue_send_local_post_to_community(post.clone(), ctx.clone());
         }
 
         if is_new {
@@ -1145,7 +1147,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
             if let Some(post_ap_id) = post_ap_id {
                 let community_id = CommunityLocalID(post_row.get(0));
                 if comment.ap_id == APIDOrLocal::Local {
-                    let mut inboxes = HashSet::new();
+                    let mut audiences = HashSet::new();
 
                     if community_local {
                         crate::apub_util::spawn_enqueue_forward_local_comment_to_community_followers(
@@ -1157,18 +1159,28 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             ctx.clone(),
                         );
                     } else {
-                        let community_inbox = std::str::FromStr::from_str(post_row.get(3))?;
-                        inboxes.insert(community_inbox);
+                        audiences.insert(crate::tasks::AudienceItem::Single(
+                            ActorLocalRef::Community(community_id),
+                        ));
                     }
 
                     if post_or_parent_author_local == Some(false) {
-                        if let Some(post_or_parent_author_ap_inbox) = post_or_parent_author_ap_inbox
-                        {
-                            inboxes.insert(post_or_parent_author_ap_inbox.into_owned());
+                        if let Some(user) = post_or_parent_author_local_id {
+                            audiences.insert(crate::tasks::AudienceItem::Single(
+                                ActorLocalRef::Person(user),
+                            ));
                         }
                     }
 
-                    if !inboxes.is_empty() {
+                    for mention in &comment.mentions[..] {
+                        if mention.ap_id != APIDOrLocal::Local {
+                            audiences.insert(crate::tasks::AudienceItem::Single(
+                                ActorLocalRef::Person(mention.person),
+                            ));
+                        }
+                    }
+
+                    if !audiences.is_empty() {
                         let community_ap_id = if community_local {
                             apub_util::LocalObjectRef::Community(community_id)
                                 .to_local_uri(&ctx.host_url_apub)
@@ -1178,7 +1190,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                         };
 
                         crate::apub_util::spawn_enqueue_send_comment(
-                            inboxes,
+                            audiences,
                             comment.clone(),
                             community_ap_id,
                             post_ap_id.into(),

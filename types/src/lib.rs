@@ -394,7 +394,7 @@ pub struct RespFlagInfo<'a> {
     pub details: RespFlagDetails<'a>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum ActorLocalRef {
     Person(UserLocalID),
     Community(CommunityLocalID),

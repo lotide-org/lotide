@@ -1264,6 +1264,15 @@ pub fn post_to_ap(
             ));
         }
 
+        for mention in post.mentions {
+            props.add_cc(match &mention.ap_id {
+                crate::APIDOrLocal::Local => LocalObjectRef::User(mention.person)
+                    .to_local_uri(&ctx.host_url_apub)
+                    .into(),
+                crate::APIDOrLocal::APID(ap_id) => ap_id.clone(),
+            });
+        }
+
         props.ext_two.sensitive = Some(post.sensitive);
 
         if let Some(html) = post.content_html {
@@ -1457,7 +1466,16 @@ pub fn local_post_to_create_ap(
         res.into()
     });
     create.set_to(community_ap_id);
-    create.set_cc(activitystreams::public());
+    create.add_cc(activitystreams::public());
+
+    for mention in post.mentions {
+        create.add_cc(match &mention.ap_id {
+            crate::APIDOrLocal::Local => LocalObjectRef::User(mention.person)
+                .to_local_uri(&ctx.host_url_apub)
+                .into(),
+            crate::APIDOrLocal::APID(ap_id) => ap_id.clone(),
+        });
+    }
 
     if let Some(community_ap_followers) = community_ap_followers {
         create.add_to(community_ap_followers);
@@ -1556,46 +1574,52 @@ pub fn local_comment_to_ap(
     ))
 }
 
-pub fn spawn_enqueue_send_local_post_to_community(
-    post: crate::PostInfoOwned,
-    ctx: Arc<crate::RouteContext>,
-) {
+pub fn spawn_enqueue_send_local_post(post: crate::PostInfoOwned, ctx: Arc<crate::RouteContext>) {
     crate::spawn_task(async move {
         let db = ctx.db_pool.get().await?;
 
-        let (community_ap_id, community_inbox, community_outbox, community_followers): (
-            url::Url,
+        let (community_local, community_ap_id, community_outbox, community_followers): (
+            bool,
             url::Url,
             Option<url::Url>,
             Option<url::Url>,
         ) = {
             let row = db
                 .query_one(
-                    "SELECT local, ap_id, COALESCE(ap_shared_inbox, ap_inbox), ap_outbox, ap_followers FROM community WHERE id=$1",
+                    "SELECT local, ap_id, ap_outbox, ap_followers FROM community WHERE id=$1",
                     &[&post.community],
                 )
                 .await?;
             let local = row.get(0);
             if local {
-                // no need to send posts for local communities
-                return Ok(());
+                (
+                    true,
+                    LocalObjectRef::Community(post.community)
+                        .to_local_uri(&ctx.host_url_apub)
+                        .into(),
+                    Some(
+                        LocalObjectRef::CommunityOutbox(post.community)
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into(),
+                    ),
+                    Some(
+                        LocalObjectRef::CommunityFollowers(post.community)
+                            .to_local_uri(&ctx.host_url_apub)
+                            .into(),
+                    ),
+                )
             } else {
                 let ap_id: Option<&str> = row.get(1);
-                let ap_inbox: Option<&str> = row.get(2);
-                let ap_outbox: Option<&str> = row.get(3);
-                let ap_followers: Option<&str> = row.get(4);
+                let ap_outbox: Option<&str> = row.get(2);
+                let ap_followers: Option<&str> = row.get(3);
 
                 (if let Some(ap_id) = ap_id {
-                    if let Some(ap_inbox) = ap_inbox {
-                        Some((
-                            ap_id.parse()?,
-                            ap_inbox.parse()?,
-                            ap_outbox.and_then(|x| x.parse().ok()),
-                            ap_followers.and_then(|x| x.parse().ok()),
-                        ))
-                    } else {
-                        None
-                    }
+                    Some((
+                        false,
+                        ap_id.parse()?,
+                        ap_outbox.and_then(|x| x.parse().ok()),
+                        ap_followers.and_then(|x| x.parse().ok()),
+                    ))
                 } else {
                     None
                 })
@@ -1616,10 +1640,28 @@ pub fn spawn_enqueue_send_local_post_to_community(
             &ctx,
         )?;
 
-        ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-            inbox: Cow::Owned(community_inbox),
+        let mut audience = vec![];
+
+        if !community_local {
+            audience.push(crate::tasks::AudienceItem::Single(
+                ActorLocalRef::Community(post.community),
+            ));
+        }
+
+        for mention in post.mentions {
+            if mention.ap_id != crate::APIDOrLocal::Local {
+                audience.push(crate::tasks::AudienceItem::Single(ActorLocalRef::Person(
+                    mention.person,
+                )));
+            }
+        }
+
+        log::debug!("audience of post is {:?}", audience);
+
+        ctx.enqueue_task(&crate::tasks::DeliverToAudience {
             sign_as: Some(ActorLocalRef::Person(post.author.unwrap())),
             object: serde_json::to_string(&create)?,
+            audience: audience.into(),
         })
         .await?;
 
@@ -1710,6 +1752,15 @@ pub fn local_comment_to_create_ap(
         create
             .set_to(community_ap_id)
             .set_cc(activitystreams::public());
+    }
+
+    for mention in &comment.mentions[..] {
+        create.add_cc(match &mention.ap_id {
+            crate::APIDOrLocal::Local => LocalObjectRef::User(mention.person)
+                .to_local_uri(&ctx.host_url_apub)
+                .into(),
+            crate::APIDOrLocal::APID(ap_id) => ap_id.clone(),
+        });
     }
 
     Ok(create)
@@ -1925,7 +1976,7 @@ pub fn local_poll_vote_undo_to_ap(
 }
 
 pub fn spawn_enqueue_send_comment(
-    inboxes: HashSet<url::Url>,
+    audiences: HashSet<crate::tasks::AudienceItem>,
     comment: crate::CommentInfo,
     community_ap_id: url::Url,
     post_ap_id: url::Url,
@@ -1933,7 +1984,7 @@ pub fn spawn_enqueue_send_comment(
     post_or_parent_author_ap_id: Option<url::Url>,
     ctx: Arc<crate::RouteContext>,
 ) {
-    if inboxes.is_empty() {
+    if audiences.is_empty() {
         return;
     }
 
@@ -1951,15 +2002,12 @@ pub fn spawn_enqueue_send_comment(
     crate::spawn_task(async move {
         let create = create?;
 
-        // TODO maybe insert these at the same time
-        for inbox in inboxes {
-            ctx.enqueue_task(&crate::tasks::DeliverToInbox {
-                inbox: Cow::Owned(inbox),
-                sign_as: Some(ActorLocalRef::Person(author)),
-                object: serde_json::to_string(&create)?,
-            })
-            .await?;
-        }
+        ctx.enqueue_task(&crate::tasks::DeliverToAudience {
+            audience: Cow::Owned(audiences.into_iter().collect()),
+            sign_as: Some(ActorLocalRef::Person(author)),
+            object: serde_json::to_string(&create)?,
+        })
+        .await?;
 
         Ok(())
     });

@@ -43,6 +43,11 @@ lazy_static::lazy_static! {
                                     )
                             )
                             .with_child(
+                                "inbox",
+                                RefRouteNode::new()
+                                    .with_handler((), |(community,), _, _| LocalObjectRef::CommunityInbox(community))
+                            )
+                            .with_child(
                                 "outbox",
                                 RefRouteNode::new()
                                     .with_handler((), |(community,), _, _| LocalObjectRef::CommunityOutbox(community))
@@ -89,6 +94,7 @@ pub enum LocalObjectRef {
     CommunityFollowers(CommunityLocalID),
     CommunityFollow(CommunityLocalID, UserLocalID),
     CommunityFollowJoin(CommunityLocalID, UserLocalID),
+    CommunityInbox(CommunityLocalID),
     CommunityOutbox(CommunityLocalID),
     CommunityOutboxPage(CommunityLocalID, crate::TimestampOrLatest),
     PollVote(PollLocalID, UserLocalID, PollOptionLocalID),
@@ -161,6 +167,11 @@ impl LocalObjectRef {
                 let mut res = LocalObjectRef::CommunityFollow(community, follower)
                     .to_local_uri(host_url_apub);
                 res.path_segments_mut().push("join");
+                res
+            }
+            LocalObjectRef::CommunityInbox(community) => {
+                let mut res = LocalObjectRef::Community(community).to_local_uri(host_url_apub);
+                res.path_segments_mut().push("inbox");
                 res
             }
             LocalObjectRef::CommunityOutbox(community) => {
