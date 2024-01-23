@@ -250,6 +250,20 @@ async fn route_unstable_users_create(
 
     let body: UsersCreateBody<'_> = serde_json::from_slice(&body)?;
 
+    if body.username.is_empty() {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            lang.tr(&lang::user_name_empty()).into_owned(),
+        )));
+    }
+
+    if body.password.is_empty() {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            lang.tr(&lang::password_empty()).into_owned(),
+        )));
+    }
+
     for ch in body.username.chars() {
         if !super::USERNAME_ALLOWED_CHARS.contains(&ch) {
             return Err(crate::Error::UserError(crate::simple_response(
