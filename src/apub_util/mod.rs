@@ -23,6 +23,8 @@ pub const ACTIVITY_TYPE_ALT: &str = "application/activity+json";
 
 pub const ACTIVITY_TYPE_HEADER_VALUE: &str = "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\", application/activity+json";
 
+pub const ALLOWED_ACTIVITY_CONTENT_TYPES: &[&str] = &[ACTIVITY_TYPE_ALT, "application/ld+json"];
+
 pub const SIGALG_RSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256";
 pub const SIGALG_RSA_SHA512: &str = "http://www.w3.org/2001/04/xmldsig-more#rsa-sha512";
 
@@ -393,6 +395,26 @@ pub async fn fetch_ap_object_raw(
                 .await?,
         )
         .await?;
+
+        let content_type = res.headers().get(hyper::header::CONTENT_TYPE);
+        let content_type_ok = match content_type {
+            None => false,
+            Some(value) => match value.to_str() {
+                Err(_) => false,
+                Ok(value) => match value.parse::<mime::Mime>() {
+                    Err(_) => false,
+                    Ok(content_type) => {
+                        ALLOWED_ACTIVITY_CONTENT_TYPES.contains(&content_type.essence_str())
+                    }
+                },
+            },
+        };
+
+        if !content_type_ok {
+            return Err(crate::Error::InternalStrStatic(
+                "Unknown content type found for activity",
+            ));
+        }
 
         let body = hyper::body::to_bytes(res.into_body()).await?;
         let body: serde_json::Value = serde_json::from_slice(&body)?;
