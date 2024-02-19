@@ -1009,7 +1009,9 @@ async fn ingest_postlike(
     found_from: FoundFrom,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    let (ext, to, in_reply_to, obj_id, poll_info, tag, maybe_url, attachment) = match obj.deref() {
+    let (ext, to, in_reply_to, obj_id, poll_info, tag, maybe_url, attachment, cc) = match obj
+        .deref()
+    {
         KnownObject::Page(obj) => (
             Some(&obj.ext_one),
             obj.to(),
@@ -1019,6 +1021,7 @@ async fn ingest_postlike(
             obj.tag(),
             obj.url(),
             obj.attachment(),
+            obj.cc(),
         ),
         KnownObject::Image(obj) => (
             Some(&obj.ext_one),
@@ -1029,6 +1032,7 @@ async fn ingest_postlike(
             obj.tag(),
             None,
             obj.attachment(),
+            obj.cc(),
         ),
         KnownObject::Article(obj) => (
             Some(&obj.ext_one),
@@ -1039,6 +1043,7 @@ async fn ingest_postlike(
             obj.tag(),
             None,
             obj.attachment(),
+            obj.cc(),
         ),
         KnownObject::Note(obj) => (
             Some(&obj.ext_one),
@@ -1049,6 +1054,7 @@ async fn ingest_postlike(
             obj.tag(),
             None,
             obj.attachment(),
+            obj.cc(),
         ),
         KnownObject::Question(obj) => (
             None,
@@ -1105,10 +1111,28 @@ async fn ingest_postlike(
             obj.tag(),
             None,
             obj.attachment(),
+            obj.cc(),
         ),
         _ => return Ok(None), // shouldn't happen?
     };
     let target = ext.as_ref().and_then(|x| x.target.as_ref());
+
+    let public = to
+        .iter()
+        .flat_map(|x| x.iter())
+        .chain(cc.iter().flat_map(|x| x.iter()))
+        .any(|x| match x.as_xsd_any_uri() {
+            Some(uri) => uri == &activitystreams::public(),
+            None => false,
+        });
+
+    if !public {
+        log::debug!(
+            "refusing to ingest non-public object {:?}",
+            obj_id.map(|x| x.as_str())
+        );
+        return Ok(None);
+    }
 
     let mentions = {
         let tag = match tag {
