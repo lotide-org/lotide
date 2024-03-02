@@ -1,8 +1,18 @@
+use futures::FutureExt;
 use std::sync::Arc;
 
 const TASK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub async fn run_worker(
+    ctx: Arc<crate::BaseContext>,
+    recv: tokio::sync::mpsc::Receiver<()>,
+) -> Result<(), crate::Error> {
+    futures::try_join!(run_task_runner(ctx.clone(), recv), run_schedule(ctx),)?;
+
+    Ok(())
+}
+
+async fn run_task_runner(
     ctx: Arc<crate::BaseContext>,
     mut recv: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<(), crate::Error> {
@@ -61,6 +71,39 @@ pub async fn run_worker(
             }
         }
     }
+}
+
+async fn run_schedule(ctx: Arc<crate::BaseContext>) -> Result<(), crate::Error> {
+    let scheduler = tokio_cron_scheduler::JobScheduler::new().await?;
+
+    scheduler.add(
+        tokio_cron_scheduler::Job::new_async("22 23 22 * * *", {
+            let ctx = ctx.clone();
+            move |_, _| {
+                let ctx = ctx.clone();
+                Box::pin(async move {
+                    let db = ctx.db_pool.get().await?;
+
+                    let res = db.execute(
+                        "DELETE FROM task WHERE (state='completed' AND completed_at < current_timestamp - INTERVAL '1 MONTH') OR (state='failed' AND attempted_at < current_timestamp - INTERVAL '3 MONTHS')",
+                        &[],
+                    ).await?;
+
+                    if res > 0 {
+                        log::debug!("Cleaned up {} old tasks", res);
+                    }
+
+                    Result::<_, crate::Error>::Ok(())
+                }.map(|res| {
+                    if let Err(err) = res {
+                        log::error!("Failed to clean up old tasks: {:?}", err);
+                    }
+                }))
+            }
+        })?,
+    ).await?;
+
+    Ok(scheduler.start().await?)
 }
 
 async fn perform_task(
