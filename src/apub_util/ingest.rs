@@ -75,8 +75,10 @@ pub async fn ingest_object(
     ctx: Arc<crate::BaseContext>,
     for_inbox: bool,
 ) -> Result<Option<IngestResult>, crate::Error> {
-    // Detect local objects and skip ingestion (#217)
+    let mut db = ctx.db_pool.get().await?;
+
     if let Some(id) = object.id() {
+        // Detect local objects and skip ingestion (#217)
         if let Some(obj_ref) = super::LocalObjectRef::try_from_uri(id, &ctx.host_url_apub) {
             return match obj_ref {
                 super::LocalObjectRef::User(user_id) => {
@@ -150,10 +152,21 @@ pub async fn ingest_object(
                 ))),
                 _ => Ok(None),
             };
+        } else {
+            // check blocked objects
+
+            let row = db
+                .query_opt(
+                    "SELECT 1 FROM blocked_ap_id WHERE ap_id=$1",
+                    &[&id.as_str()],
+                )
+                .await?;
+            if row.is_some() {
+                return Err(crate::Error::InternalStrStatic("Blocked by admin"));
+            }
         }
     }
 
-    let mut db = ctx.db_pool.get().await?;
     match object.into_inner() {
         KnownObject::Accept(activity) => {
             let activity_id = activity

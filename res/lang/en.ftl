@@ -1,3 +1,4 @@
+cannot_block_local = Cannot block local objects
 comment_content_conflict = Exactly one of content_markdown and content_text must be specified
 comment_empty = Comment may not be empty
 comment_not_yours = That's not your comment

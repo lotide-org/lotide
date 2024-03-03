@@ -364,6 +364,15 @@ pub fn route_api() -> crate::RouteNode<()> {
                         .with_handler_async(hyper::Method::GET, route_unstable_nodeinfo_20_get),
                 )
                 .with_child(
+                    "objects:blocks",
+                    crate::RouteNode::new().with_child_str(
+                        crate::RouteNode::new().with_handler_async(
+                            hyper::Method::PUT,
+                            route_unstable_objects_blocks_add,
+                        ),
+                    ),
+                )
+                .with_child(
                     "objects:lookup",
                     crate::RouteNode::new().with_child_str(
                         crate::RouteNode::new()
@@ -837,6 +846,72 @@ async fn route_unstable_instance_patch(
             lang.tr(&lang::not_admin()).into_owned(),
         ))
     }
+}
+
+async fn route_unstable_objects_blocks_add(
+    params: (String,),
+    ctx: Arc<crate::RouteContext>,
+    req: hyper::Request<hyper::Body>,
+) -> Result<hyper::Response<hyper::Body>, crate::Error> {
+    let (ap_id,) = params;
+
+    let lang = crate::get_lang_for_req(&req);
+
+    let mut db = ctx.db_pool.get().await?;
+
+    let user = crate::require_login(&req, &db).await?;
+    let is_site_admin = crate::is_site_admin(&db, user).await?;
+
+    if !is_site_admin {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::FORBIDDEN,
+            lang.tr(&lang::not_admin()).into_owned(),
+        )));
+    }
+
+    if crate::apub_util::try_strip_host(&ap_id, &ctx.host_url_apub).is_some() {
+        return Err(crate::Error::UserError(crate::simple_response(
+            hyper::StatusCode::BAD_REQUEST,
+            lang.tr(&lang::cannot_block_local()).into_owned(),
+        )));
+    }
+
+    {
+        let trans = db.transaction().await?;
+
+        trans
+            .execute("INSERT INTO blocked_ap_id (ap_id) VALUES ($1)", &[&ap_id])
+            .await?;
+
+        trans
+            .execute("DELETE FROM community WHERE ap_id=$1", &[&ap_id])
+            .await?;
+        trans
+            .execute("DELETE FROM community_follow WHERE ap_id=$1", &[&ap_id])
+            .await?;
+        trans
+            .execute("DELETE FROM flag WHERE ap_id=$1", &[&ap_id])
+            .await?;
+        trans
+            .execute("DELETE FROM person WHERE ap_id=$1", &[&ap_id])
+            .await?;
+        trans
+            .execute("DELETE FROM post WHERE ap_id=$1", &[&ap_id])
+            .await?;
+        trans
+            .execute("DELETE FROM post_like WHERE ap_id=$1", &[&ap_id])
+            .await?;
+        trans
+            .execute("DELETE FROM reply WHERE ap_id=$1", &[&ap_id])
+            .await?;
+        trans
+            .execute("DELETE FROM reply_like WHERE ap_id=$1", &[&ap_id])
+            .await?;
+
+        trans.commit().await?;
+    }
+
+    Ok(crate::empty_response())
 }
 
 async fn route_unstable_objects_lookup(
