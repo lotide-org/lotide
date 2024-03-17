@@ -987,7 +987,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
 
         let res = futures::future::try_join(
             db.query_opt(
-                "SELECT community.id, community.local, community.ap_id, community.ap_inbox, post.local, post.ap_id, person.id, person.ap_id, COALESCE(person.ap_shared_inbox, person.ap_inbox) FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.id = $1 AND post.community = community.id",
+                "SELECT community.id, community.local, community.ap_id, person.ap_id, post.local, post.ap_id, person.id FROM community, post LEFT OUTER JOIN person ON (person.id = post.author) WHERE post.id = $1 AND post.community = community.id",
                 &[&comment.post.raw()],
             )
             .map_err(crate::Error::from),
@@ -995,17 +995,16 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                 match comment.parent {
                     Some(parent) => {
                         let row = db.query_one(
-                            "SELECT reply.local, reply.ap_id, person.id, person.ap_id, COALESCE(person.ap_shared_inbox, person.ap_inbox) FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE reply.id=$1",
+                            "SELECT reply.local, reply.ap_id, person.id, person.ap_id FROM reply LEFT OUTER JOIN person ON (person.id = reply.author) WHERE reply.id=$1",
                             &[&parent],
                         ).await?;
 
                         let author_local_id = row.get::<_, Option<_>>(2).map(UserLocalID);
 
                         if row.get(0) {
-                            Ok(Some((crate::apub_util::LocalObjectRef::Comment(parent).to_local_uri(&ctx.host_url_apub), Some(crate::apub_util::LocalObjectRef::User(author_local_id.unwrap()).to_local_uri(&ctx.host_url_apub)), true, author_local_id, None)))
+                            Ok(Some((crate::apub_util::LocalObjectRef::Comment(parent).to_local_uri(&ctx.host_url_apub), Some(crate::apub_util::LocalObjectRef::User(author_local_id.unwrap()).to_local_uri(&ctx.host_url_apub)), true, author_local_id)))
                         } else {
-                            let author_ap_inbox: Option<url::Url> = row.get::<_, Option<_>>(4).map(|x: &str| std::str::FromStr::from_str(x)).transpose()?;
-                            row.get::<_, Option<&str>>(1).map(|x: &str| -> Result<(BaseURL, Option<BaseURL>, bool, Option<UserLocalID>, Option<url::Url>), crate::Error> { Ok((x.parse()?, row.get::<_, Option<&str>>(3).map(std::str::FromStr::from_str).transpose()?, false, author_local_id, author_ap_inbox)) }).transpose()
+                            row.get::<_, Option<&str>>(1).map(|x: &str| -> Result<(BaseURL, Option<BaseURL>, bool, Option<UserLocalID>), crate::Error> { Ok((x.parse()?, row.get::<_, Option<&str>>(3).map(std::str::FromStr::from_str).transpose()?, false, author_local_id)) }).transpose()
                         }
                     },
                     None => Ok(None),
@@ -1034,7 +1033,6 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                 post_or_parent_author_local_id,
                 post_or_parent_author_local,
                 post_or_parent_author_ap_id,
-                post_or_parent_author_ap_inbox,
             ) = match comment.parent {
                 None => {
                     let author_id = UserLocalID(post_row.get(6));
@@ -1047,7 +1045,6 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                                 crate::apub_util::LocalObjectRef::User(author_id)
                                     .to_local_uri(&ctx.host_url_apub),
                             )),
-                            None,
                         )
                     } else {
                         (
@@ -1055,12 +1052,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                             Some(author_id),
                             Some(false),
                             post_row
-                                .get::<_, Option<_>>(7)
-                                .map(std::str::FromStr::from_str)
-                                .transpose()?
-                                .map(Cow::Owned),
-                            post_row
-                                .get::<_, Option<_>>(8)
+                                .get::<_, Option<_>>(3)
                                 .map(std::str::FromStr::from_str)
                                 .transpose()?
                                 .map(Cow::Owned),
@@ -1068,19 +1060,17 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
                     }
                 }
                 Some(_) => match &res.1 {
-                    None => (None, None, None, None, None),
+                    None => (None, None, None, None),
                     Some((
                         parent_ap_id,
                         parent_author_ap_id,
                         parent_local,
                         parent_author_local_id,
-                        parent_author_ap_inbox,
                     )) => (
                         Some(parent_ap_id),
                         *parent_author_local_id,
                         Some(*parent_local),
                         parent_author_ap_id.as_ref().map(Cow::Borrowed),
-                        parent_author_ap_inbox.as_ref().map(Cow::Borrowed),
                     ),
                 },
             };
@@ -1090,7 +1080,7 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
             // Generate notifications
             match comment.parent {
                 Some(parent_id) => {
-                    if let Some((_, _, parent_local, parent_author_id, _)) = res.1 {
+                    if let Some((_, _, parent_local, parent_author_id)) = res.1 {
                         if parent_local && parent_author_id != comment.author {
                             if let Some(parent_author_id) = parent_author_id {
                                 let ctx = ctx.clone();

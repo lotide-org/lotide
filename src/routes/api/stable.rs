@@ -166,7 +166,7 @@ async fn route_stable_communities_feed_get(
 
             let mut entry_builder = atom_syndication::EntryBuilder::default();
             entry_builder.title(title);
-            entry_builder.id(post_ap_id.clone());
+            entry_builder.id(post_ap_id);
             entry_builder.updated(created);
             entry_builder.author(atom_syndication::Person {
                 name: author_username,
