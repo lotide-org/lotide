@@ -51,3 +51,6 @@ invitations_not_allowed = Vi ne rajtas krei invitojn
 no_such_invitation = Neniu tia invito
 permission_missing_create_community = Vi ne rajtas krei komunumojn
 signup_not_allowed = Uzanto-registriĝo estas malebligita sur ĉi tiu servilo
+cannot_block_local = Lokaj objektoj ne blokeblas
+password_empty = Pasvorto ne devas esti malplena
+user_name_empty = Uzantnomo ne devas esti malplena
