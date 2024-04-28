@@ -437,6 +437,13 @@ async fn route_unstable_communities_create(
             )
             .await?;
 
+        trans
+            .execute(
+                "INSERT INTO community_follow (community, follower, local, accepted) VALUES ($1, $2, TRUE, TRUE)",
+                &[&community_id, &user],
+            )
+            .await?;
+
         trans.commit().await?;
 
         community_id
