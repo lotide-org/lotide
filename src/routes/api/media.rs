@@ -44,7 +44,7 @@ async fn route_unstable_media_create(
         let id = crate::Pineapple::generate();
 
         db.execute(
-            "INSERT INTO media (id, path, person, mime) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO media (id, path, person, mime, created) VALUES ($1, $2, $3, $4, current_timestamp)",
             &[&id.as_int(), &path, &user, &content_type.as_ref()],
         )
         .await?;
