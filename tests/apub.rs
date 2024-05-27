@@ -1,6 +1,10 @@
 use serde_derive::Deserialize;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::ops::Deref;
+
+pub const ACTIVITY_TYPE: &str =
+    "application/ld+json; profile=\"https://www.w3.org/ns/activitystreams\"";
 
 struct TestServer {
     ap_host_url: String,
@@ -43,9 +47,14 @@ impl std::ops::Drop for TestServer {
     }
 }
 
+struct FileInfo {
+    content_type: &'static str,
+    content: String,
+}
+
 struct FileServer {
     url: String,
-    file_map: std::sync::Arc<std::sync::RwLock<HashMap<String, String>>>,
+    file_map: std::sync::Arc<std::sync::RwLock<HashMap<String, FileInfo>>>,
     stop_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -54,7 +63,7 @@ impl FileServer {
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
 
         let file_map =
-            std::sync::Arc::new(std::sync::RwLock::new(HashMap::<String, String>::new()));
+            std::sync::Arc::new(std::sync::RwLock::new(HashMap::<String, FileInfo>::new()));
 
         let listener = std::net::TcpListener::bind(std::net::SocketAddrV4::new(
             std::net::Ipv4Addr::LOCALHOST,
@@ -75,12 +84,16 @@ impl FileServer {
                                 let file_map = file_map.clone();
                                 async move {
                                     let file_map = file_map.read().unwrap();
-                                    if let Some(content) = file_map.get(req.uri().path()) {
-                                        Result::<_, std::convert::Infallible>::Ok(
-                                            hyper::Response::new(hyper::Body::from(
-                                                content.clone(),
-                                            )),
-                                        )
+                                    if let Some(info) = file_map.get(req.uri().path()) {
+                                        let mut res = hyper::Response::new(hyper::Body::from(
+                                            info.content.clone(),
+                                        ));
+                                        res.headers_mut().insert(
+                                            hyper::header::CONTENT_TYPE,
+                                            info.content_type.try_into().unwrap(),
+                                        );
+
+                                        Result::<_, std::convert::Infallible>::Ok(res)
                                     } else {
                                         let mut res =
                                             hyper::Response::new(hyper::Body::from("not found"));
@@ -110,9 +123,15 @@ impl FileServer {
         }
     }
 
-    pub fn add_file(&self, path: String, content: String) {
+    pub fn add_file(&self, path: String, content_type: &'static str, content: String) {
         let file_map = &mut self.file_map.write().unwrap();
-        file_map.insert(path, content);
+        file_map.insert(
+            path,
+            FileInfo {
+                content_type,
+                content,
+            },
+        );
     }
 }
 
@@ -225,7 +244,7 @@ async fn community_fetch() {
     })
     .to_string();
 
-    remote_server.add_file(path, content);
+    remote_server.add_file(path, ACTIVITY_TYPE, content);
 
     let community_remote_id = lookup_community(&client, &server, &ap_id).await;
 
