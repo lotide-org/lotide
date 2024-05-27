@@ -1228,6 +1228,15 @@ pub fn on_post_add_comment(comment: CommentInfo<'static>, ctx: Arc<crate::RouteC
     });
 }
 
+pub async fn recalculate_cached_post_likes(
+    trans: &mut tokio_postgres::Transaction<'_>,
+    post: PostLocalID,
+) -> Result<(), crate::Error> {
+    trans.execute("UPDATE post SET cached_likes_for_sort=(SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author) WHERE id=$1", &[&post]).await?;
+
+    Ok(())
+}
+
 pub enum MediaStorage {
     Local(std::path::PathBuf),
     S3 {

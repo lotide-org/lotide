@@ -1310,16 +1310,29 @@ async fn route_unstable_posts_like(
 ) -> Result<hyper::Response<hyper::Body>, crate::Error> {
     let (post_id,) = params;
 
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let user = crate::require_login(&req, &db).await?;
 
-    let row_count = db.execute(
-        "INSERT INTO post_like (post, person, local) VALUES ($1, $2, TRUE) ON CONFLICT (post, person) DO NOTHING",
-        &[&post_id, &user],
-    ).await?;
+    let is_new = {
+        let mut trans = db.transaction().await?;
+        let row_count = trans.execute(
+            "INSERT INTO post_like (post, person, local) VALUES ($1, $2, TRUE) ON CONFLICT (post, person) DO NOTHING",
+            &[&post_id, &user],
+        ).await?;
 
-    if row_count > 0 {
+        let is_new = row_count > 0;
+
+        if is_new {
+            crate::recalculate_cached_post_likes(&mut trans, post_id).await?;
+        }
+
+        trans.commit().await?;
+
+        is_new
+    };
+
+    if is_new {
         crate::spawn_task(async move {
             let row = db.query_opt(
                 "SELECT post.local, post.ap_id, community.id, community.local, community.ap_id, COALESCE(community.ap_shared_inbox, community.ap_inbox), COALESCE(post_author.ap_shared_inbox, post_author.ap_inbox), post_author.id, post_author.ap_id FROM post LEFT OUTER JOIN community ON (post.community = community.id) LEFT OUTER JOIN person AS post_author ON (post_author.id = post.author) WHERE post.id = $1",
@@ -1526,7 +1539,7 @@ async fn route_unstable_posts_unlike(
     let user = crate::require_login(&req, &db).await?;
 
     let new_undo = {
-        let trans = db.transaction().await?;
+        let mut trans = db.transaction().await?;
 
         let row_count = trans
             .execute(
@@ -1535,7 +1548,11 @@ async fn route_unstable_posts_unlike(
             )
             .await?;
 
-        let new_undo = if row_count > 0 {
+        let is_new = row_count > 0;
+
+        let new_undo = if is_new {
+            crate::recalculate_cached_post_likes(&mut trans, post_id).await?;
+
             let id = uuid::Uuid::new_v4();
             trans
                 .execute(

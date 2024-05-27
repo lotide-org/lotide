@@ -89,9 +89,9 @@ pub enum SortType {
 impl SortType {
     pub fn post_sort_sql(&self) -> &'static str {
         match self {
-            SortType::Hot => "hot_rank((SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author), post.created) DESC",
+            SortType::Hot => "hot_rank(post.cached_likes_for_sort, post.created) DESC",
             SortType::New => "post.created DESC, post.id DESC",
-            SortType::Top => "(SELECT COUNT(*) FROM post_like WHERE post = post.id AND person != post.author) DESC, post.id DESC",
+            SortType::Top => "post.cached_likes_for_sort DESC, post.id DESC",
         }
     }
 

@@ -794,7 +794,7 @@ pub async fn ingest_like(
     activity: Verified<activitystreams::activity::Like>,
     ctx: Arc<crate::RouteContext>,
 ) -> Result<(), crate::Error> {
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
     let activity_id = activity
         .id_unchecked()
@@ -831,12 +831,26 @@ pub async fn ingest_like(
 
             match thing_local_ref {
                 Some(ThingLocalRef::Post(post_local_id)) => {
-                    let row_count = db.execute(
-                        "INSERT INTO post_like (post, person, local, ap_id) VALUES ($1, $2, FALSE, $3) ON CONFLICT (post, person) DO NOTHING",
-                        &[&post_local_id, &actor_local_id, &activity_id.as_str()],
-                    ).await?;
+                    let is_new = {
+                        let mut trans = db.transaction().await?;
 
-                    if row_count > 0 {
+                        let row_count = trans.execute(
+                            "INSERT INTO post_like (post, person, local, ap_id) VALUES ($1, $2, FALSE, $3) ON CONFLICT (post, person) DO NOTHING",
+                            &[&post_local_id, &actor_local_id, &activity_id.as_str()],
+                        ).await?;
+
+                        let is_new = row_count > 0;
+
+                        if is_new {
+                            crate::recalculate_cached_post_likes(&mut trans, post_local_id).await?;
+                        }
+
+                        trans.commit().await?;
+
+                        is_new
+                    };
+
+                    if is_new {
                         let row = db.query_opt("SELECT post.community, community.local FROM post, community WHERE post.community = community.id AND post.id=$1", &[&post_local_id]).await?;
                         if let Some(row) = row {
                             let community_local = row.get(1);
@@ -957,19 +971,37 @@ pub async fn ingest_undo(
 
     let object_id = object_id.as_str();
 
-    let db = ctx.db_pool.get().await?;
+    let mut db = ctx.db_pool.get().await?;
 
-    db.execute("DELETE FROM post_like WHERE ap_id=$1", &[&object_id])
+    let mut trans = db.transaction().await?;
+
+    {
+        let result = trans
+            .query_opt(
+                "DELETE FROM post_like WHERE ap_id=$1 RETURNING post",
+                &[&object_id],
+            )
+            .await?;
+
+        if let Some(row) = result {
+            let post_id = PostLocalID(row.get(0));
+
+            crate::recalculate_cached_post_likes(&mut trans, post_id).await?;
+        }
+    }
+    trans
+        .execute("DELETE FROM reply_like WHERE ap_id=$1", &[&object_id])
         .await?;
-    db.execute("DELETE FROM reply_like WHERE ap_id=$1", &[&object_id])
+    trans
+        .execute("DELETE FROM community_follow WHERE ap_id=$1", &[&object_id])
         .await?;
-    db.execute("DELETE FROM community_follow WHERE ap_id=$1", &[&object_id])
-        .await?;
-    db.execute(
+    trans.execute(
         "UPDATE post SET approved=FALSE, approved_ap_id=NULL, rejected=TRUE, rejected_ap_id=$2 WHERE approved_ap_id=$1",
         &[&object_id, &activity_id.as_str()],
     )
     .await?;
+
+    trans.commit().await?;
 
     Ok(())
 }
