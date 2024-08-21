@@ -3,6 +3,8 @@ A federated forum / link aggregator using ActivityPub.
 
 See [hitide](https://git.sr.ht/~vpzom/hitide) for the frontend code.
 
+**Note: lotide is [no longer actively developed](https://dev.narwhal.city/posts/15944)**
+
 ## Try
 You can set up your own instance of lotide, or check it out on one of the [existing instances](https://fedidb.org/software/lotide)
 
